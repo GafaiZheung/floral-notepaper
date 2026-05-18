@@ -1348,8 +1348,10 @@ mod tests {
             external_file_auto_save: true,
             ai_enabled: false,
             ai_api_key: String::new(),
-            ai_api_endpoint: "https://api.deepseek.com/beta".into(),
+            ai_api_endpoint: "https://api.deepseek.com".into(),
             ai_model: "deepseek-v4-pro".into(),
+            ai_fim_endpoint: "https://api.deepseek.com/beta".into(),
+            ai_title_model: "deepseek-v4-flash".into(),
         };
         let next = AppConfig {
             notes_dir: "D:\\other-notes".into(),
@@ -1367,8 +1369,10 @@ mod tests {
             external_file_auto_save: true,
             ai_enabled: false,
             ai_api_key: String::new(),
-            ai_api_endpoint: "https://api.deepseek.com/beta".into(),
+            ai_api_endpoint: "https://api.deepseek.com".into(),
             ai_model: "deepseek-v4-pro".into(),
+            ai_fim_endpoint: "https://api.deepseek.com/beta".into(),
+            ai_title_model: "deepseek-v4-flash".into(),
         };
 
         assert_eq!(

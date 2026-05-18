@@ -22,4 +22,6 @@ export interface AppConfig {
   aiApiKey: string;
   aiApiEndpoint: string;
   aiModel: string;
+  aiFimEndpoint: string;
+  aiTitleModel: string;
 }

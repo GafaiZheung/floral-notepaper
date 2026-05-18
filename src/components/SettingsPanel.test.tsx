@@ -18,8 +18,10 @@ const config = {
   externalFileAutoSave: true,
   aiEnabled: false,
   aiApiKey: "",
-  aiApiEndpoint: "https://api.deepseek.com/beta",
+  aiApiEndpoint: "https://api.deepseek.com",
   aiModel: "deepseek-v4-pro",
+  aiFimEndpoint: "https://api.deepseek.com/beta",
+  aiTitleModel: "deepseek-v4-flash",
 };
 
 describe("SettingsPanel", () => {

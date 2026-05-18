@@ -85,6 +85,57 @@ fn build_client() -> Result<reqwest::Client, AppError> {
         })
 }
 
+async fn send_chat_request(
+    client: &reqwest::Client,
+    endpoint: &str,
+    api_key: &str,
+    model: &str,
+    messages: Vec<ChatMessage>,
+) -> Result<String, AppError> {
+    let body = AiChatRequest {
+        model: model.into(),
+        messages,
+        max_tokens: 4096,
+        temperature: 0.7,
+        stop: None,
+        stream: false,
+    };
+
+    let response = client
+        .post(endpoint)
+        .header("Authorization", format!("Bearer {}", api_key))
+        .json(&body)
+        .send()
+        .await
+        .map_err(|e| AppError {
+            code: "aiHttp".into(),
+            message: format!("AI 请求失败: {e}"),
+        })?;
+
+    if !response.status().is_success() {
+        let status = response.status().as_u16();
+        let error_body = response.text().await.unwrap_or_default();
+        return Err(AppError {
+            code: "aiApi".into(),
+            message: format!("AI API 错误 {status}: {error_body}"),
+        });
+    }
+
+    let data: AiChatResponse = response.json().await.map_err(|e| AppError {
+        code: "aiJson".into(),
+        message: format!("解析 AI 响应失败: {e}"),
+    })?;
+
+    data.choices
+        .into_iter()
+        .next()
+        .map(|choice| choice.message.content)
+        .ok_or_else(|| AppError {
+            code: "aiEmpty".into(),
+            message: "AI 返回空响应".into(),
+        })
+}
+
 #[tauri::command]
 pub async fn ai_chat(prompt: String, context: Option<String>) -> Result<String, AppError> {
     let config = load_ai_config()?;
@@ -108,114 +159,35 @@ pub async fn ai_chat(prompt: String, context: Option<String>) -> Result<String, 
         prefix: None,
     });
 
-    let body = AiChatRequest {
-        model: config.ai_model.clone(),
-        messages,
-        max_tokens: 4096,
-        temperature: 0.7,
-        stop: None,
-        stream: false,
-    };
-
     let endpoint = format!("{}/chat/completions", config.ai_api_endpoint.trim_end_matches('/'));
-
-    let response = client
-        .post(&endpoint)
-        .header("Authorization", format!("Bearer {}", config.ai_api_key.trim()))
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| AppError {
-            code: "aiHttp".into(),
-            message: format!("AI 请求失败: {e}"),
-        })?;
-
-    if !response.status().is_success() {
-        let status = response.status().as_u16();
-        let error_body = response.text().await.unwrap_or_default();
-        return Err(AppError {
-            code: "aiApi".into(),
-            message: format!("AI API 错误 {status}: {error_body}"),
-        });
-    }
-
-    let data: AiChatResponse = response.json().await.map_err(|e| AppError {
-        code: "aiJson".into(),
-        message: format!("解析 AI 响应失败: {e}"),
-    })?;
-
-    data.choices
-        .into_iter()
-        .next()
-        .map(|choice| choice.message.content)
-        .ok_or_else(|| AppError {
-            code: "aiEmpty".into(),
-            message: "AI 返回空响应".into(),
-        })
+    send_chat_request(&client, &endpoint, config.ai_api_key.trim(), &config.ai_model, messages).await
 }
 
 #[tauri::command]
-pub async fn ai_prefix_completion(prefix: String, prompt: String) -> Result<String, AppError> {
+pub async fn ai_prefix_completion(prefix: String, prompt: Option<String>) -> Result<String, AppError> {
     let config = load_ai_config()?;
     let client = build_client()?;
 
-    let messages = vec![
-        ChatMessage {
-            role: "user".into(),
-            content: prompt,
-            prefix: None,
-        },
-        ChatMessage {
-            role: "assistant".into(),
-            content: prefix,
-            prefix: Some(true),
-        },
-    ];
+    let mut messages = Vec::new();
 
-    let body = AiChatRequest {
-        model: config.ai_model.clone(),
-        messages,
-        max_tokens: 4096,
-        temperature: 0.7,
-        stop: None,
-        stream: false,
-    };
-
-    let endpoint = format!("{}/chat/completions", config.ai_api_endpoint.trim_end_matches('/'));
-
-    let response = client
-        .post(&endpoint)
-        .header("Authorization", format!("Bearer {}", config.ai_api_key.trim()))
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| AppError {
-            code: "aiHttp".into(),
-            message: format!("AI 请求失败: {e}"),
-        })?;
-
-    if !response.status().is_success() {
-        let status = response.status().as_u16();
-        let error_body = response.text().await.unwrap_or_default();
-        return Err(AppError {
-            code: "aiApi".into(),
-            message: format!("AI API 错误 {status}: {error_body}"),
-        });
+    if let Some(p) = prompt {
+        if !p.trim().is_empty() {
+            messages.push(ChatMessage {
+                role: "system".into(),
+                content: format!("请续写以下文本，从给定的前缀开始：\n\n{p}"),
+                prefix: None,
+            });
+        }
     }
 
-    let data: AiChatResponse = response.json().await.map_err(|e| AppError {
-        code: "aiJson".into(),
-        message: format!("解析 AI 响应失败: {e}"),
-    })?;
+    messages.push(ChatMessage {
+        role: "assistant".into(),
+        content: prefix,
+        prefix: Some(true),
+    });
 
-    data.choices
-        .into_iter()
-        .next()
-        .map(|choice| choice.message.content)
-        .ok_or_else(|| AppError {
-            code: "aiEmpty".into(),
-            message: "AI 返回空响应".into(),
-        })
+    let endpoint = format!("{}/chat/completions", config.ai_api_endpoint.trim_end_matches('/'));
+    send_chat_request(&client, &endpoint, config.ai_api_key.trim(), &config.ai_model, messages).await
 }
 
 #[tauri::command]
@@ -233,7 +205,7 @@ pub async fn ai_fim_completion(prefix: String, suffix: String) -> Result<String,
         stream: false,
     };
 
-    let endpoint = format!("{}/completions", config.ai_api_endpoint.trim_end_matches('/'));
+    let endpoint = format!("{}/completions", config.ai_fim_endpoint.trim_end_matches('/'));
 
     let response = client
         .post(&endpoint)
@@ -268,6 +240,24 @@ pub async fn ai_fim_completion(prefix: String, suffix: String) -> Result<String,
             code: "aiEmpty".into(),
             message: "AI 返回空响应".into(),
         })
+}
+
+#[tauri::command]
+pub async fn ai_generate_title(content: String) -> Result<String, AppError> {
+    let config = load_ai_config()?;
+    let client = build_client()?;
+
+    let messages = vec![ChatMessage {
+        role: "user".into(),
+        content: format!(
+            "为以下内容生成一个简洁的标题（不超过20个字，只返回标题文本，不要引号或额外说明）：\n\n{content}"
+        ),
+        prefix: None,
+    }];
+
+    let endpoint = format!("{}/chat/completions", config.ai_api_endpoint.trim_end_matches('/'));
+    let result = send_chat_request(&client, &endpoint, config.ai_api_key.trim(), &config.ai_title_model, messages).await?;
+    Ok(result.trim().trim_matches('"').trim_matches('"').trim_matches('「').trim_matches('」').trim().to_string())
 }
 
 #[cfg(test)]

@@ -190,6 +190,21 @@ export function SettingsPanel({
                   onChange={(event) =>
                     setConfigValue("aiApiEndpoint", event.target.value)
                   }
+                  placeholder="https://api.deepseek.com"
+                  spellCheck={false}
+                  className="w-full h-8 px-2.5 rounded-lg bg-paper-warm/70 border border-paper-deep/40 text-[12px] font-mono text-ink-soft outline-none placeholder:text-ink-ghost/50"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="block text-[11px] font-body text-ink-faint">
+                  FIM Endpoint
+                </label>
+                <input
+                  type="text"
+                  value={config.aiFimEndpoint}
+                  onChange={(event) =>
+                    setConfigValue("aiFimEndpoint", event.target.value)
+                  }
                   placeholder="https://api.deepseek.com/beta"
                   spellCheck={false}
                   className="w-full h-8 px-2.5 rounded-lg bg-paper-warm/70 border border-paper-deep/40 text-[12px] font-mono text-ink-soft outline-none placeholder:text-ink-ghost/50"
@@ -197,7 +212,7 @@ export function SettingsPanel({
               </div>
               <div className="space-y-1.5">
                 <label className="block text-[11px] font-body text-ink-faint">
-                  Model
+                  Generate Model
                 </label>
                 <input
                   type="text"
@@ -206,6 +221,21 @@ export function SettingsPanel({
                     setConfigValue("aiModel", event.target.value)
                   }
                   placeholder="deepseek-v4-pro"
+                  spellCheck={false}
+                  className="w-full h-8 px-2.5 rounded-lg bg-paper-warm/70 border border-paper-deep/40 text-[12px] font-mono text-ink-soft outline-none placeholder:text-ink-ghost/50"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="block text-[11px] font-body text-ink-faint">
+                  Title Model
+                </label>
+                <input
+                  type="text"
+                  value={config.aiTitleModel}
+                  onChange={(event) =>
+                    setConfigValue("aiTitleModel", event.target.value)
+                  }
+                  placeholder="deepseek-v4-flash"
                   spellCheck={false}
                   className="w-full h-8 px-2.5 rounded-lg bg-paper-warm/70 border border-paper-deep/40 text-[12px] font-mono text-ink-soft outline-none placeholder:text-ink-ghost/50"
                 />

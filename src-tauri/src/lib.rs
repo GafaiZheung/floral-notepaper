@@ -1,7 +1,7 @@
 pub mod desktop;
 pub mod services;
 
-use services::ai::{ai_chat, ai_fim_completion, ai_prefix_completion};
+use services::ai::{ai_chat, ai_fim_completion, ai_generate_title, ai_prefix_completion};
 use services::notes::{default_store, AppConfig, AppError, Note, NoteMetadata, SaveNoteRequest};
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter};
@@ -230,7 +230,8 @@ pub fn run() {
             open_note_in_editor,
             ai_chat,
             ai_prefix_completion,
-            ai_fim_completion
+            ai_fim_completion,
+            ai_generate_title
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

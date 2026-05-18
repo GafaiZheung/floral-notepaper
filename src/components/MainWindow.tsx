@@ -276,12 +276,14 @@ export function MainWindow({
   const [renameCategoryValue, setRenameCategoryValue] = useState("");
   const [dragOverCategory, setDragOverCategory] = useState<string | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(280);
-  const [aiOpen, setAiOpen] = useState(false);
   const [aiPrompt, setAiPrompt] = useState("");
-  const [aiMode, setAiMode] = useState<"chat" | "prefix" | "fim">("chat");
+  const [aiGenOpen, setAiGenOpen] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
+  const [aiLoadingAction, setAiLoadingAction] = useState<"" | "gen" | "pref" | "fim">("");
   const [aiError, setAiError] = useState<string | null>(null);
+  const [fimSuggestion, setFimSuggestion] = useState<string | null>(null);
   const aiInputRef = useRef<HTMLTextAreaElement>(null);
+  const [aiTitlePending, setAiTitlePending] = useState(false);
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
   const [categoryMenu, setCategoryMenu] = useState<CategoryMenuState | null>(null);
   const [categoryMenuClosing, setCategoryMenuClosing] = useState(false);
@@ -932,80 +934,111 @@ export function MainWindow({
     }
   };
 
-  const handleAiSubmit = useCallback(async () => {
+  const insertAtCursor = useCallback((text: string) => {
     const textarea = contentRef.current;
-    if (!textarea || !aiPrompt.trim()) return;
+    if (!textarea) return;
+    const before = textarea.value.slice(0, textarea.selectionStart);
+    const after = textarea.value.slice(textarea.selectionEnd);
+    const newContent = before + text + after;
+    setContent(newContent);
+    markDirty();
+    requestAnimationFrame(() => {
+      textarea.focus();
+      const cursor = before.length + text.length;
+      textarea.setSelectionRange(cursor, cursor);
+    });
+  }, [setContent, markDirty]);
 
+  const handleAiGenerate = useCallback(async () => {
+    if (!aiPrompt.trim()) return;
     setAiError(null);
     setAiLoading(true);
-
+    setAiLoadingAction("gen");
     try {
-      let response: string;
-      const before = textarea.value.slice(0, textarea.selectionStart);
-      const after = textarea.value.slice(textarea.selectionEnd);
-
-      if (aiMode === "fim") {
-        response = await invoke<string>("ai_fim_completion", {
-          prefix: before,
-          suffix: after || "",
-        });
-      } else if (aiMode === "prefix") {
-        const prefix =
-          textarea.value.slice(
-            textarea.selectionStart,
-            textarea.selectionEnd,
-          ) || before.slice(-200);
-        response = await invoke<string>("ai_prefix_completion", {
-          prefix,
-          prompt: aiPrompt,
-        });
-      } else {
-        const selectedText = textarea.value.slice(
-          textarea.selectionStart,
-          textarea.selectionEnd,
-        );
-        response = await invoke<string>("ai_chat", {
-          prompt: aiPrompt,
-          context: selectedText || null,
-        });
-      }
-
-      const insertBefore = textarea.value.slice(0, textarea.selectionStart);
-      const insertAfter = textarea.value.slice(textarea.selectionEnd);
-      const newContent = insertBefore + response + insertAfter;
-      setContent(newContent);
-      markDirty();
-
-      requestAnimationFrame(() => {
-        textarea.focus();
-        const cursor = insertBefore.length + response.length;
-        textarea.setSelectionRange(cursor, cursor);
-      });
-
-      setAiOpen(false);
+      const textarea = contentRef.current;
+      const selectedText = textarea?.value.slice(textarea.selectionStart, textarea.selectionEnd) || null;
+      const response = await invoke<string>("ai_chat", { prompt: aiPrompt, context: selectedText });
+      insertAtCursor(response);
+      setAiGenOpen(false);
       setAiPrompt("");
-      setAiError(null);
     } catch (e) {
       setAiError(typeof e === "string" ? e : (e as Error).message || String(e));
     } finally {
       setAiLoading(false);
+      setAiLoadingAction("");
     }
-  }, [aiPrompt, aiMode, setContent, markDirty]);
+  }, [aiPrompt, insertAtCursor]);
 
-  const handleAiKeyDown = useCallback(
-    (e: React.KeyboardEvent) => {
-      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-        e.preventDefault();
-        handleAiSubmit();
-      } else if (e.key === "Escape") {
-        setAiOpen(false);
-        setAiPrompt("");
-        setAiError(null);
-        contentRef.current?.focus();
-      }
-    },
-    [handleAiSubmit],
-  );
+  const handleAiContinue = useCallback(async () => {
+    const textarea = contentRef.current;
+    if (!textarea) return;
+    const selected = textarea.value.slice(textarea.selectionStart, textarea.selectionEnd);
+    if (!selected.trim()) return;
+    setAiError(null);
+    setAiLoading(true);
+    setAiLoadingAction("pref");
+    try {
+      const response = await invoke<string>("ai_prefix_completion", { prefix: selected, prompt: null });
+      insertAtCursor(response);
+    } catch (e) {
+      setAiError(typeof e === "string" ? e : (e as Error).message || String(e));
+    } finally {
+      setAiLoading(false);
+      setAiLoadingAction("");
+    }
+  }, [insertAtCursor]);
+
+  const handleAiFim = useCallback(async () => {
+    const textarea = contentRef.current;
+    if (!textarea) return;
+    const before = textarea.value.slice(0, textarea.selectionStart);
+    const after = textarea.value.slice(textarea.selectionEnd);
+    setAiError(null);
+    setAiLoading(true);
+    setAiLoadingAction("fim");
+    setFimSuggestion(null);
+    try {
+      const response = await invoke<string>("ai_fim_completion", { prefix: before, suffix: after || "" });
+      setFimSuggestion(response);
+    } catch (e) {
+      setAiError(typeof e === "string" ? e : (e as Error).message || String(e));
+    } finally {
+      setAiLoading(false);
+      setAiLoadingAction("");
+    }
+  }, []);
+
+  const acceptFimSuggestion = useCallback(() => {
+    if (!fimSuggestion) return;
+    insertAtCursor(fimSuggestion);
+    setFimSuggestion(null);
+  }, [fimSuggestion, insertAtCursor]);
+
+  const hasSelection = useCallback(() => {
+    const textarea = contentRef.current;
+    if (!textarea) return false;
+    return textarea.selectionStart !== textarea.selectionEnd;
+  }, []);
+
+  // Auto-title generation
+  useEffect(() => {
+    if (!title.trim() && content.trim().length > 20 && !aiTitlePending && !isLoading) {
+      const timer = setTimeout(async () => {
+        setAiTitlePending(true);
+        try {
+          const generated = await invoke<string>("ai_generate_title", { content });
+          if (generated && !title.trim()) {
+            setTitle(generated);
+          }
+        } catch {
+          // silently ignore title generation errors
+        } finally {
+          setAiTitlePending(false);
+        }
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [content]);
 
   const handleOpenNotepad = async () => {
     setErrorMessage(null);
@@ -1878,77 +1911,95 @@ export function MainWindow({
                           </button>
                         ))}
                         <div className="w-px h-4 bg-paper-deep/30 mx-1" />
-                        <button
-                          type="button"
-                          title="AI Agent"
-                          onMouseDown={(e) => e.preventDefault()}
+                        <AIButton
+                          label="生成"
+                          title="AI 生成内容 (输入提示词)"
+                          active={aiGenOpen}
+                          loading={aiLoadingAction === "gen"}
                           onClick={() => {
-                            setAiOpen(!aiOpen);
+                            setAiGenOpen(!aiGenOpen);
                             setAiError(null);
-                            if (!aiOpen) {
-                              setTimeout(() => aiInputRef.current?.focus(), 50);
-                            }
+                            setFimSuggestion(null);
+                            if (!aiGenOpen) setTimeout(() => aiInputRef.current?.focus(), 50);
                           }}
-                          className={`w-6 h-6 flex items-center justify-center rounded text-[11px] transition-all cursor-pointer ${
-                            aiOpen
-                              ? "text-bamboo bg-bamboo-mist/30"
-                              : "text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/20"
-                          }`}
-                        >
-                          {aiLoading ? (
-                            <span className="inline-block w-2.5 h-2.5 border-2 border-bamboo/40 border-t-bamboo rounded-full animate-spin" />
-                          ) : (
-                            "✦"
-                          )}
-                        </button>
+                        />
+                        <AIButton
+                          label="续写"
+                          title="续写选中文本"
+                          active={false}
+                          loading={aiLoadingAction === "pref"}
+                          disabled={!hasSelection()}
+                          onClick={handleAiContinue}
+                        />
+                        <AIButton
+                          label="补全"
+                          title="FIM 补全 (Tab 接受)"
+                          active={false}
+                          loading={aiLoadingAction === "fim"}
+                          onClick={handleAiFim}
+                        />
                       </div>
-                      {aiOpen && (
-                        <div className="px-4 pb-2 shrink-0 space-y-2">
-                          <div className="flex items-center gap-1.5">
-                            {(["chat", "prefix", "fim"] as const).map((mode) => (
-                              <button
-                                key={mode}
-                                type="button"
-                                onClick={() => setAiMode(mode)}
-                                className={`px-2 py-0.5 rounded text-[10px] transition-colors cursor-pointer ${
-                                  aiMode === mode
-                                    ? "bg-bamboo/15 text-bamboo font-medium"
-                                    : "text-ink-ghost hover:text-ink-faint"
-                                }`}
-                              >
-                                {mode === "chat" ? "对话" : mode === "prefix" ? "续写" : "FIM 补全"}
-                              </button>
-                            ))}
-                          </div>
+                      {aiGenOpen && (
+                        <div className="px-4 pb-2 shrink-0 space-y-1.5">
                           <textarea
                             ref={aiInputRef}
                             value={aiPrompt}
                             onChange={(e) => setAiPrompt(e.target.value)}
-                            onKeyDown={handleAiKeyDown}
-                            placeholder={
-                              aiMode === "fim"
-                                ? "插入点前文本作 prefix，后文作 suffix..."
-                                : aiMode === "prefix"
-                                  ? "选中文本作续写起点..."
-                                  : "输入提示词，Ctrl+Enter 发送..."
-                            }
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                                e.preventDefault();
+                                handleAiGenerate();
+                              } else if (e.key === "Escape") {
+                                setAiGenOpen(false);
+                                setAiPrompt("");
+                                setAiError(null);
+                                contentRef.current?.focus();
+                              }
+                            }}
+                            placeholder="输入提示词，Ctrl+Enter 发送..."
                             rows={2}
                             className="w-full bg-paper-warm/50 border border-paper-deep/30 rounded-lg px-2.5 py-1.5 text-[12px] text-ink-soft placeholder:text-ink-ghost/50 outline-none focus:border-bamboo/50 resize-none"
                           />
-                          {aiError && (
-                            <div className="text-[10px] text-red-400 px-1">{aiError}</div>
-                          )}
                           <div className="flex items-center justify-between">
                             <span className="text-[9px] text-ink-ghost/60">
                               Ctrl+Enter 发送 · Esc 取消
                             </span>
                             <button
                               type="button"
-                              onClick={handleAiSubmit}
+                              onClick={handleAiGenerate}
                               disabled={aiLoading || !aiPrompt.trim()}
                               className="px-3 py-1 rounded text-[11px] bg-bamboo text-white hover:bg-bamboo/90 disabled:opacity-40 transition-colors cursor-pointer"
                             >
-                              {aiLoading ? "生成中..." : "发送"}
+                              {aiLoadingAction === "gen" ? "生成中..." : "发送"}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                      {aiError && (
+                        <div className="px-4 pb-1 shrink-0">
+                          <div className="text-[10px] text-red-400">{aiError}</div>
+                        </div>
+                      )}
+                      {fimSuggestion && (
+                        <div className="px-4 pb-1.5 shrink-0">
+                          <div className="flex items-center gap-2 bg-bamboo-mist/20 border border-bamboo/25 rounded-lg px-2.5 py-1.5">
+                            <span className="text-[9px] text-bamboo/70 font-medium shrink-0">补全建议</span>
+                            <span className="text-[11px] text-ink-soft font-mono truncate flex-1">
+                              {fimSuggestion.slice(0, 80)}{fimSuggestion.length > 80 ? "…" : ""}
+                            </span>
+                            <button
+                              type="button"
+                              onClick={acceptFimSuggestion}
+                              className="px-2 py-0.5 rounded text-[10px] bg-bamboo text-white hover:bg-bamboo/90 transition-colors cursor-pointer shrink-0"
+                            >
+                              Tab
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setFimSuggestion(null)}
+                              className="text-[10px] text-ink-ghost hover:text-ink-faint transition-colors cursor-pointer shrink-0"
+                            >
+                              ✕
                             </button>
                           </div>
                         </div>
@@ -1961,6 +2012,12 @@ export function MainWindow({
                           onChange={(event) => {
                             setContent(event.target.value);
                             markDirty();
+                          }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Tab" && fimSuggestion) {
+                              e.preventDefault();
+                              acceptFimSuggestion();
+                            }
                           }}
                           className="w-full h-full leading-[1.9] text-ink-soft font-mono placeholder:text-ink-ghost/40"
                           style={{ fontSize: `${settingsConfig?.fontSize ?? 14}px` }}
@@ -2138,5 +2195,42 @@ export function MainWindow({
         </div>
       )}
     </div>
+  );
+}
+
+function AIButton({
+  label,
+  title,
+  active,
+  loading,
+  disabled,
+  onClick,
+}: {
+  label: string;
+  title: string;
+  active: boolean;
+  loading: boolean;
+  disabled?: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      title={title}
+      disabled={disabled}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={onClick}
+      className={`h-6 px-1.5 flex items-center justify-center rounded text-[10px] transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed ${
+        active
+          ? "text-bamboo bg-bamboo-mist/30"
+          : "text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/20"
+      }`}
+    >
+      {loading ? (
+        <span className="inline-block w-2.5 h-2.5 border-2 border-bamboo/40 border-t-bamboo rounded-full animate-spin" />
+      ) : (
+        label
+      )}
+    </button>
   );
 }
