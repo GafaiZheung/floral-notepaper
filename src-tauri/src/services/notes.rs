@@ -30,6 +30,14 @@ pub struct AppConfig {
     pub surface_font_size: u32,
     #[serde(default = "default_external_file_auto_save")]
     pub external_file_auto_save: bool,
+    #[serde(default = "default_ai_enabled")]
+    pub ai_enabled: bool,
+    #[serde(default)]
+    pub ai_api_key: String,
+    #[serde(default = "default_ai_api_endpoint")]
+    pub ai_api_endpoint: String,
+    #[serde(default = "default_ai_model")]
+    pub ai_model: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -491,6 +499,10 @@ impl NoteStore {
             font_size: default_font_size(),
             surface_font_size: default_surface_font_size(),
             external_file_auto_save: default_external_file_auto_save(),
+            ai_enabled: default_ai_enabled(),
+            ai_api_key: String::new(),
+            ai_api_endpoint: default_ai_api_endpoint(),
+            ai_model: default_ai_model(),
         }
     }
 
@@ -767,6 +779,18 @@ fn default_external_file_auto_save() -> bool {
     true
 }
 
+fn default_ai_enabled() -> bool {
+    false
+}
+
+fn default_ai_api_endpoint() -> String {
+    "https://api.deepseek.com/beta".into()
+}
+
+fn default_ai_model() -> String {
+    "deepseek-v4-pro".into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -882,6 +906,10 @@ mod tests {
         assert_eq!(default_config.tile_color_mode, "system");
         assert_eq!(default_config.theme, "system");
         assert!(default_config.notes_dir.ends_with("notes"));
+        assert!(!default_config.ai_enabled);
+        assert_eq!(default_config.ai_api_key, "");
+        assert_eq!(default_config.ai_api_endpoint, "https://api.deepseek.com/beta");
+        assert_eq!(default_config.ai_model, "deepseek-v4-pro");
 
         let custom_notes_dir = store.base_dir().join("custom-notes");
         let saved = AppConfig {
@@ -898,6 +926,10 @@ mod tests {
             font_size: 16,
             surface_font_size: 16,
             external_file_auto_save: true,
+            ai_enabled: true,
+            ai_api_key: "sk-test".into(),
+            ai_api_endpoint: "https://api.deepseek.com/beta".into(),
+            ai_model: "deepseek-v4-flash".into(),
         };
 
         store.save_config(saved.clone()).expect("save config");

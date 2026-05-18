@@ -21,6 +21,10 @@ describe("MainWindow settings", () => {
           fontSize: 14,
           surfaceFontSize: 14,
           externalFileAutoSave: true,
+          aiEnabled: false,
+          aiApiKey: "",
+          aiApiEndpoint: "https://api.deepseek.com/beta",
+          aiModel: "deepseek-v4-pro",
         }}
       />,
     );

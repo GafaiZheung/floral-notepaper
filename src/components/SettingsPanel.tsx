@@ -158,6 +158,63 @@ export function SettingsPanel({
         </section>
 
         <section className="space-y-2">
+          <ToggleRow
+            label="启用 AI Agent"
+            checked={config.aiEnabled}
+            onChange={(checked) => setConfigValue("aiEnabled", checked)}
+          />
+          {config.aiEnabled && (
+            <>
+              <div className="space-y-1.5">
+                <label className="block text-[11px] font-body text-ink-faint">
+                  API Key
+                </label>
+                <input
+                  type="password"
+                  value={config.aiApiKey}
+                  onChange={(event) =>
+                    setConfigValue("aiApiKey", event.target.value)
+                  }
+                  placeholder="sk-..."
+                  spellCheck={false}
+                  className="w-full h-8 px-2.5 rounded-lg bg-paper-warm/70 border border-paper-deep/40 text-[12px] font-mono text-ink-soft outline-none placeholder:text-ink-ghost/50"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="block text-[11px] font-body text-ink-faint">
+                  API Endpoint
+                </label>
+                <input
+                  type="text"
+                  value={config.aiApiEndpoint}
+                  onChange={(event) =>
+                    setConfigValue("aiApiEndpoint", event.target.value)
+                  }
+                  placeholder="https://api.deepseek.com/beta"
+                  spellCheck={false}
+                  className="w-full h-8 px-2.5 rounded-lg bg-paper-warm/70 border border-paper-deep/40 text-[12px] font-mono text-ink-soft outline-none placeholder:text-ink-ghost/50"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="block text-[11px] font-body text-ink-faint">
+                  Model
+                </label>
+                <input
+                  type="text"
+                  value={config.aiModel}
+                  onChange={(event) =>
+                    setConfigValue("aiModel", event.target.value)
+                  }
+                  placeholder="deepseek-v4-pro"
+                  spellCheck={false}
+                  className="w-full h-8 px-2.5 rounded-lg bg-paper-warm/70 border border-paper-deep/40 text-[12px] font-mono text-ink-soft outline-none placeholder:text-ink-ghost/50"
+                />
+              </div>
+            </>
+          )}
+        </section>
+
+        <section className="space-y-2">
           <label className="block text-[11px] font-body text-ink-faint">
             编辑器字号
           </label>

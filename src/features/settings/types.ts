@@ -18,4 +18,8 @@ export interface AppConfig {
   fontSize: number;
   surfaceFontSize: number;
   externalFileAutoSave: boolean;
+  aiEnabled: boolean;
+  aiApiKey: string;
+  aiApiEndpoint: string;
+  aiModel: string;
 }

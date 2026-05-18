@@ -1346,6 +1346,10 @@ mod tests {
             font_size: 14,
             surface_font_size: 14,
             external_file_auto_save: true,
+            ai_enabled: false,
+            ai_api_key: String::new(),
+            ai_api_endpoint: "https://api.deepseek.com/beta".into(),
+            ai_model: "deepseek-v4-pro".into(),
         };
         let next = AppConfig {
             notes_dir: "D:\\other-notes".into(),
@@ -1361,6 +1365,10 @@ mod tests {
             font_size: 16,
             surface_font_size: 16,
             external_file_auto_save: true,
+            ai_enabled: false,
+            ai_api_key: String::new(),
+            ai_api_endpoint: "https://api.deepseek.com/beta".into(),
+            ai_model: "deepseek-v4-pro".into(),
         };
 
         assert_eq!(

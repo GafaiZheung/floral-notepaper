@@ -16,6 +16,10 @@ const config = {
   fontSize: 14,
   surfaceFontSize: 14,
   externalFileAutoSave: true,
+  aiEnabled: false,
+  aiApiKey: "",
+  aiApiEndpoint: "https://api.deepseek.com/beta",
+  aiModel: "deepseek-v4-pro",
 };
 
 describe("SettingsPanel", () => {

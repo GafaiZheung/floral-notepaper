@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { emit, listen } from "@tauri-apps/api/event";
 import { exportMarkdownNote, importMarkdownNote } from "../features/importExport/api";
 import { MarkdownPreview } from "../features/markdown/MarkdownPreview";
@@ -275,6 +276,12 @@ export function MainWindow({
   const [renameCategoryValue, setRenameCategoryValue] = useState("");
   const [dragOverCategory, setDragOverCategory] = useState<string | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(280);
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiPrompt, setAiPrompt] = useState("");
+  const [aiMode, setAiMode] = useState<"chat" | "prefix" | "fim">("chat");
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState<string | null>(null);
+  const aiInputRef = useRef<HTMLTextAreaElement>(null);
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
   const [categoryMenu, setCategoryMenu] = useState<CategoryMenuState | null>(null);
   const [categoryMenuClosing, setCategoryMenuClosing] = useState(false);
@@ -924,6 +931,81 @@ export function MainWindow({
       markDirty();
     }
   };
+
+  const handleAiSubmit = useCallback(async () => {
+    const textarea = contentRef.current;
+    if (!textarea || !aiPrompt.trim()) return;
+
+    setAiError(null);
+    setAiLoading(true);
+
+    try {
+      let response: string;
+      const before = textarea.value.slice(0, textarea.selectionStart);
+      const after = textarea.value.slice(textarea.selectionEnd);
+
+      if (aiMode === "fim") {
+        response = await invoke<string>("ai_fim_completion", {
+          prefix: before,
+          suffix: after || "",
+        });
+      } else if (aiMode === "prefix") {
+        const prefix =
+          textarea.value.slice(
+            textarea.selectionStart,
+            textarea.selectionEnd,
+          ) || before.slice(-200);
+        response = await invoke<string>("ai_prefix_completion", {
+          prefix,
+          prompt: aiPrompt,
+        });
+      } else {
+        const selectedText = textarea.value.slice(
+          textarea.selectionStart,
+          textarea.selectionEnd,
+        );
+        response = await invoke<string>("ai_chat", {
+          prompt: aiPrompt,
+          context: selectedText || null,
+        });
+      }
+
+      const insertBefore = textarea.value.slice(0, textarea.selectionStart);
+      const insertAfter = textarea.value.slice(textarea.selectionEnd);
+      const newContent = insertBefore + response + insertAfter;
+      setContent(newContent);
+      markDirty();
+
+      requestAnimationFrame(() => {
+        textarea.focus();
+        const cursor = insertBefore.length + response.length;
+        textarea.setSelectionRange(cursor, cursor);
+      });
+
+      setAiOpen(false);
+      setAiPrompt("");
+      setAiError(null);
+    } catch (e) {
+      setAiError(typeof e === "string" ? e : (e as Error).message || String(e));
+    } finally {
+      setAiLoading(false);
+    }
+  }, [aiPrompt, aiMode, setContent, markDirty]);
+
+  const handleAiKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        handleAiSubmit();
+      } else if (e.key === "Escape") {
+        setAiOpen(false);
+        setAiPrompt("");
+        setAiError(null);
+        contentRef.current?.focus();
+      }
+    },
+    [handleAiSubmit],
+  );
 
   const handleOpenNotepad = async () => {
     setErrorMessage(null);
@@ -1795,7 +1877,82 @@ export function MainWindow({
                             {button.label}
                           </button>
                         ))}
+                        <div className="w-px h-4 bg-paper-deep/30 mx-1" />
+                        <button
+                          type="button"
+                          title="AI Agent"
+                          onMouseDown={(e) => e.preventDefault()}
+                          onClick={() => {
+                            setAiOpen(!aiOpen);
+                            setAiError(null);
+                            if (!aiOpen) {
+                              setTimeout(() => aiInputRef.current?.focus(), 50);
+                            }
+                          }}
+                          className={`w-6 h-6 flex items-center justify-center rounded text-[11px] transition-all cursor-pointer ${
+                            aiOpen
+                              ? "text-bamboo bg-bamboo-mist/30"
+                              : "text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/20"
+                          }`}
+                        >
+                          {aiLoading ? (
+                            <span className="inline-block w-2.5 h-2.5 border-2 border-bamboo/40 border-t-bamboo rounded-full animate-spin" />
+                          ) : (
+                            "✦"
+                          )}
+                        </button>
                       </div>
+                      {aiOpen && (
+                        <div className="px-4 pb-2 shrink-0 space-y-2">
+                          <div className="flex items-center gap-1.5">
+                            {(["chat", "prefix", "fim"] as const).map((mode) => (
+                              <button
+                                key={mode}
+                                type="button"
+                                onClick={() => setAiMode(mode)}
+                                className={`px-2 py-0.5 rounded text-[10px] transition-colors cursor-pointer ${
+                                  aiMode === mode
+                                    ? "bg-bamboo/15 text-bamboo font-medium"
+                                    : "text-ink-ghost hover:text-ink-faint"
+                                }`}
+                              >
+                                {mode === "chat" ? "对话" : mode === "prefix" ? "续写" : "FIM 补全"}
+                              </button>
+                            ))}
+                          </div>
+                          <textarea
+                            ref={aiInputRef}
+                            value={aiPrompt}
+                            onChange={(e) => setAiPrompt(e.target.value)}
+                            onKeyDown={handleAiKeyDown}
+                            placeholder={
+                              aiMode === "fim"
+                                ? "插入点前文本作 prefix，后文作 suffix..."
+                                : aiMode === "prefix"
+                                  ? "选中文本作续写起点..."
+                                  : "输入提示词，Ctrl+Enter 发送..."
+                            }
+                            rows={2}
+                            className="w-full bg-paper-warm/50 border border-paper-deep/30 rounded-lg px-2.5 py-1.5 text-[12px] text-ink-soft placeholder:text-ink-ghost/50 outline-none focus:border-bamboo/50 resize-none"
+                          />
+                          {aiError && (
+                            <div className="text-[10px] text-red-400 px-1">{aiError}</div>
+                          )}
+                          <div className="flex items-center justify-between">
+                            <span className="text-[9px] text-ink-ghost/60">
+                              Ctrl+Enter 发送 · Esc 取消
+                            </span>
+                            <button
+                              type="button"
+                              onClick={handleAiSubmit}
+                              disabled={aiLoading || !aiPrompt.trim()}
+                              className="px-3 py-1 rounded text-[11px] bg-bamboo text-white hover:bg-bamboo/90 disabled:opacity-40 transition-colors cursor-pointer"
+                            >
+                              {aiLoading ? "生成中..." : "发送"}
+                            </button>
+                          </div>
+                        </div>
+                      )}
 
                       <div className="flex-1 overflow-y-auto px-5 pb-4">
                         <textarea

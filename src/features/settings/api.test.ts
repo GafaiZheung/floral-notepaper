@@ -41,6 +41,10 @@ describe("settings api", () => {
       fontSize: 14,
       surfaceFontSize: 14,
       externalFileAutoSave: true,
+      aiEnabled: false,
+      aiApiKey: "",
+      aiApiEndpoint: "https://api.deepseek.com/beta",
+      aiModel: "deepseek-v4-pro",
     };
     mockedInvoke.mockResolvedValue(config);
 
@@ -64,6 +68,10 @@ describe("settings api", () => {
       fontSize: 16,
       surfaceFontSize: 16,
       externalFileAutoSave: true,
+      aiEnabled: true,
+      aiApiKey: "sk-test",
+      aiApiEndpoint: "https://api.deepseek.com/beta",
+      aiModel: "deepseek-v4-flash",
     };
     mockedInvoke.mockResolvedValue(config);
 

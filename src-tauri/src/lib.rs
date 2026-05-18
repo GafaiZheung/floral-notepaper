@@ -1,6 +1,7 @@
 pub mod desktop;
 pub mod services;
 
+use services::ai::{ai_chat, ai_fim_completion, ai_prefix_completion};
 use services::notes::{default_store, AppConfig, AppError, Note, NoteMetadata, SaveNoteRequest};
 use std::path::PathBuf;
 use tauri::{AppHandle, Emitter};
@@ -199,6 +200,8 @@ pub fn run() {
         }))
         .setup(|app| {
             desktop::setup_desktop(app)?;
+            #[cfg(target_os = "macos")]
+            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
             Ok(())
         })
         .on_window_event(desktop::handle_window_event)
@@ -224,7 +227,10 @@ pub fn run() {
             open_notepad_window,
             recycle_notepad_window,
             open_tile_window,
-            open_note_in_editor
+            open_note_in_editor,
+            ai_chat,
+            ai_prefix_completion,
+            ai_fim_completion
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
