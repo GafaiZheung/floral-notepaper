@@ -8,12 +8,15 @@ use std::{
     },
 };
 use tauri::{
-    menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem},
+    menu::{CheckMenuItem, Menu, MenuBuilder, MenuItem, PredefinedMenuItem, SubmenuBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     App, AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl,
-    WebviewWindowBuilder, Window, WindowEvent,
+    WebviewWindow, WebviewWindowBuilder, Window, WindowEvent,
 };
 use uuid::Uuid;
+
+#[cfg(target_os = "macos")]
+use objc2::msg_send;
 
 #[cfg(desktop)]
 use tauri_plugin_autostart::{MacosLauncher, ManagerExt as AutostartExt};
@@ -174,8 +177,9 @@ pub fn tray_menu_action(id: &str) -> Option<TrayMenuAction> {
     }
 }
 
+#[allow(unused_variables)]
 pub fn tray_menu_specs(close_to_tray: bool, autostart: bool) -> Vec<TrayMenuSpec> {
-    vec![
+    let mut specs = vec![
         TrayMenuSpec {
             id: TRAY_SHOW_MAIN_ID,
             label: "打开主窗口",
@@ -186,22 +190,27 @@ pub fn tray_menu_specs(close_to_tray: bool, autostart: bool) -> Vec<TrayMenuSpec
             label: "快速记录",
             checked: None,
         },
-        TrayMenuSpec {
-            id: TRAY_TOGGLE_CLOSE_TO_TRAY_ID,
-            label: "关闭到托盘",
-            checked: Some(close_to_tray),
-        },
-        TrayMenuSpec {
-            id: TRAY_TOGGLE_AUTOSTART_ID,
-            label: "开机自启动",
-            checked: Some(autostart),
-        },
-        TrayMenuSpec {
-            id: TRAY_QUIT_ID,
-            label: "退出",
-            checked: None,
-        },
-    ]
+    ];
+
+    #[cfg(not(target_os = "macos"))]
+    specs.push(TrayMenuSpec {
+        id: TRAY_TOGGLE_CLOSE_TO_TRAY_ID,
+        label: "关闭到托盘",
+        checked: Some(close_to_tray),
+    });
+
+    specs.push(TrayMenuSpec {
+        id: TRAY_TOGGLE_AUTOSTART_ID,
+        label: "开机自启动",
+        checked: Some(autostart),
+    });
+    specs.push(TrayMenuSpec {
+        id: TRAY_QUIT_ID,
+        label: "退出",
+        checked: None,
+    });
+
+    specs
 }
 
 pub fn shortcut_from_config(value: &str) -> Option<ShortcutSpec> {
@@ -343,6 +352,7 @@ pub fn setup_desktop(app: &mut App) -> Result<(), Box<dyn Error>> {
     sync_autostart_to_config(app.handle());
     register_configured_global_shortcut(app.handle());
     setup_tray(app)?;
+    setup_macos_menu(app)?;
     schedule_notepad_prewarm(app.handle());
 
     if !std::env::args().any(|a| a == "--silent") {
@@ -372,7 +382,12 @@ pub fn handle_window_event(window: &Window, event: &WindowEvent) {
         return;
     };
 
-    match main_window_close_action(app_is_exiting(window.app_handle()), close_to_tray_enabled()) {
+    #[cfg(target_os = "macos")]
+    let close_to_tray = true;
+    #[cfg(not(target_os = "macos"))]
+    let close_to_tray = close_to_tray_enabled();
+
+    match main_window_close_action(app_is_exiting(window.app_handle()), close_to_tray) {
         MainWindowCloseAction::AllowClose => {}
         MainWindowCloseAction::HideToTray => {
             api.prevent_close();
@@ -405,35 +420,62 @@ fn setup_tray(app: &mut App) -> Result<(), Box<dyn Error>> {
 
     let show_main = MenuItem::with_id(app, specs[0].id, specs[0].label, true, None::<&str>)?;
     let quick_note = MenuItem::with_id(app, specs[1].id, specs[1].label, true, None::<&str>)?;
-    let close_to_tray = CheckMenuItem::with_id(
-        app,
-        specs[2].id,
-        specs[2].label,
-        true,
-        specs[2].checked.unwrap_or(false),
-        None::<&str>,
-    )?;
-    let autostart = CheckMenuItem::with_id(
-        app,
-        specs[3].id,
-        specs[3].label,
-        true,
-        specs[3].checked.unwrap_or(false),
-        None::<&str>,
-    )?;
     let separator = PredefinedMenuItem::separator(app)?;
-    let quit = MenuItem::with_id(app, specs[4].id, specs[4].label, true, None::<&str>)?;
-    let menu = Menu::with_items(
-        app,
-        &[
-            &show_main,
-            &quick_note,
-            &close_to_tray,
-            &autostart,
-            &separator,
-            &quit,
-        ],
-    )?;
+
+    #[cfg(target_os = "macos")]
+    let menu = {
+        let autostart = CheckMenuItem::with_id(
+            app,
+            specs[2].id,
+            specs[2].label,
+            true,
+            specs[2].checked.unwrap_or(false),
+            None::<&str>,
+        )?;
+        let quit = MenuItem::with_id(app, specs[3].id, specs[3].label, true, None::<&str>)?;
+        Menu::with_items(
+            app,
+            &[
+                &show_main,
+                &quick_note,
+                &autostart,
+                &separator,
+                &quit,
+            ],
+        )?
+    };
+
+    #[cfg(not(target_os = "macos"))]
+    let menu = {
+        let close_to_tray = CheckMenuItem::with_id(
+            app,
+            specs[2].id,
+            specs[2].label,
+            true,
+            specs[2].checked.unwrap_or(false),
+            None::<&str>,
+        )?;
+        let autostart = CheckMenuItem::with_id(
+            app,
+            specs[3].id,
+            specs[3].label,
+            true,
+            specs[3].checked.unwrap_or(false),
+            None::<&str>,
+        )?;
+        let quit = MenuItem::with_id(app, specs[4].id, specs[4].label, true, None::<&str>)?;
+        Menu::with_items(
+            app,
+            &[
+                &show_main,
+                &quick_note,
+                &close_to_tray,
+                &autostart,
+                &separator,
+                &quit,
+            ],
+        )?
+    };
 
     TrayIconBuilder::new()
         .icon(
@@ -641,6 +683,10 @@ fn prewarm_notepad(app: &AppHandle) -> Result<(), AppError> {
     .focused(false)
     .build()?;
 
+    if let Some(window) = app.get_webview_window(&label) {
+        apply_macos_window_behavior(&window, true);
+    }
+
     pool.put(label);
 
     Ok(())
@@ -717,6 +763,12 @@ fn open_or_focus_window(
 
     builder.build()?;
 
+    if let Some(window) = app.get_webview_window(label) {
+        let is_auxiliary =
+            label.starts_with("notepad-") || label.starts_with("tile-");
+        apply_macos_window_behavior(&window, is_auxiliary);
+    }
+
     Ok(label.to_string())
 }
 
@@ -770,6 +822,7 @@ fn load_config() -> Result<AppConfig, AppError> {
     default_store()?.load_config()
 }
 
+#[cfg(not(target_os = "macos"))]
 fn close_to_tray_enabled() -> bool {
     load_config()
         .map(|config| config.close_to_tray)
@@ -1043,6 +1096,78 @@ fn apply_autostart(_app: &AppHandle, _enabled: bool) -> Result<(), Box<dyn Error
     Ok(())
 }
 
+#[cfg(target_os = "macos")]
+fn apply_macos_window_behavior(window: &WebviewWindow, is_auxiliary: bool) {
+    use objc2::runtime::NSObject;
+
+    let ns_window_ptr: *mut NSObject = match window.ns_window() {
+        Ok(w) => w as *mut NSObject,
+        Err(e) => {
+            eprintln!("failed to get NSWindow for behavior update: {e}");
+            return;
+        }
+    };
+
+    let behavior: i64 = if is_auxiliary {
+        (1 << 1) | (1 << 13) | (1 << 8)
+    } else {
+        0
+    };
+
+    unsafe {
+        let _: () = msg_send![ns_window_ptr, setCollectionBehavior: behavior];
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+fn apply_macos_window_behavior(_window: &WebviewWindow, _is_auxiliary: bool) {}
+
+#[cfg(target_os = "macos")]
+fn setup_macos_menu(app: &mut App) -> Result<(), Box<dyn Error>> {
+    let app_menu = SubmenuBuilder::new(app, "花笺")
+        .about(Some(tauri::menu::AboutMetadata {
+            name: Some("花笺".into()),
+            version: Some(app.package_info().version.to_string()),
+            ..Default::default()
+        }))
+        .separator()
+        .hide()
+        .hide_others()
+        .show_all()
+        .separator()
+        .quit()
+        .build()?;
+
+    let edit_menu = SubmenuBuilder::new(app, "编辑")
+        .undo()
+        .redo()
+        .separator()
+        .cut()
+        .copy()
+        .paste()
+        .select_all()
+        .build()?;
+
+    let window_menu = SubmenuBuilder::new(app, "窗口")
+        .minimize()
+        .close_window()
+        .build()?;
+
+    let menu = MenuBuilder::new(app)
+        .item(&app_menu)
+        .item(&edit_menu)
+        .item(&window_menu)
+        .build()?;
+
+    app.set_menu(menu)?;
+    Ok(())
+}
+
+#[cfg(not(target_os = "macos"))]
+fn setup_macos_menu(_app: &mut App) -> Result<(), Box<dyn Error>> {
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1074,18 +1199,35 @@ mod tests {
         let specs = tray_menu_specs(true, false);
         let ids: Vec<_> = specs.iter().map(|spec| spec.id).collect();
 
-        assert_eq!(
-            ids,
-            vec![
-                "show-main",
-                "quick-note",
-                "toggle-close-to-tray",
-                "toggle-autostart",
-                "quit"
-            ]
-        );
-        assert_eq!(specs[2].checked, Some(true));
-        assert_eq!(specs[3].checked, Some(false));
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert_eq!(
+                ids,
+                vec![
+                    "show-main",
+                    "quick-note",
+                    "toggle-close-to-tray",
+                    "toggle-autostart",
+                    "quit"
+                ]
+            );
+            assert_eq!(specs[2].checked, Some(true));
+            assert_eq!(specs[3].checked, Some(false));
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(
+                ids,
+                vec![
+                    "show-main",
+                    "quick-note",
+                    "toggle-autostart",
+                    "quit"
+                ]
+            );
+            assert_eq!(specs[2].checked, Some(false));
+        }
     }
 
     #[test]

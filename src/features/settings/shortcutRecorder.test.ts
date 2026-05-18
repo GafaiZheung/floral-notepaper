@@ -20,6 +20,7 @@ describe("shortcutRecorder", () => {
   });
 
   test("formats held meta keys for the recorder UI", () => {
-    expect(formatHeldKeys(["Meta", "P"])).toBe("Meta + P");
+    const isMac = /Mac/.test(navigator.platform);
+    expect(formatHeldKeys(["Meta", "P"])).toBe(isMac ? "Cmd + P" : "Meta + P");
   });
 });

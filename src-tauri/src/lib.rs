@@ -139,7 +139,12 @@ fn config_get() -> Result<AppConfig, AppError> {
 }
 
 #[tauri::command]
-fn config_save(app: AppHandle, config: AppConfig) -> Result<AppConfig, AppError> {
+fn config_save(app: AppHandle, mut config: AppConfig) -> Result<AppConfig, AppError> {
+    #[cfg(target_os = "macos")]
+    {
+        config.close_to_tray = true;
+    }
+
     let store = default_store()?;
     let previous = store.load_config()?;
     desktop::apply_runtime_config(&app, &previous, &config).map_err(|error| AppError {

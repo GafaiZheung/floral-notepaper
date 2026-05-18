@@ -1009,6 +1009,7 @@ name = "floral-notepaper"
 version = "1.0.2"
 dependencies = [
  "chrono",
+ "objc2",
  "serde",
  "serde_json",
  "tauri",

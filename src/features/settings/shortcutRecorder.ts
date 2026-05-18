@@ -1,9 +1,12 @@
 import { parseHotkey, type Hotkey } from "@tanstack/react-hotkeys";
 
+const IS_MAC = navigator.platform.includes("Mac");
+const KEYBOARD_LAYOUT = IS_MAC ? "mac" : "windows";
+
 const KEY_DISPLAY_NAMES: Record<string, string> = {
   Control: "Ctrl",
-  Meta: "Meta",
-  Backspace: "←",
+  Meta: IS_MAC ? "Cmd" : "Meta",
+  Backspace: "⌫",
   ArrowUp: "↑",
   ArrowDown: "↓",
   ArrowLeft: "←",
@@ -11,7 +14,7 @@ const KEY_DISPLAY_NAMES: Record<string, string> = {
 };
 
 export function hotkeyToConfigString(hotkey: Hotkey): string {
-  const parsed = parseHotkey(hotkey, "windows");
+  const parsed = parseHotkey(hotkey, KEYBOARD_LAYOUT);
   const parts: string[] = [];
   if (parsed.ctrl) parts.push("Ctrl");
   if (parsed.alt) parts.push("Alt");
@@ -22,7 +25,7 @@ export function hotkeyToConfigString(hotkey: Hotkey): string {
 }
 
 export function isValidGlobalShortcut(hotkey: Hotkey): boolean {
-  const parsed = parseHotkey(hotkey, "windows");
+  const parsed = parseHotkey(hotkey, KEYBOARD_LAYOUT);
   return parsed.ctrl || parsed.alt || parsed.meta;
 }
 

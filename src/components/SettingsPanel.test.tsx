@@ -33,7 +33,9 @@ describe("SettingsPanel", () => {
     expect(markup).toContain("D:\\Notes\\花笺");
     expect(markup).toContain("选择文件夹");
     expect(markup).toContain("Ctrl+Space");
-    expect(markup).toContain("关闭到托盘");
+    if (!/Mac/.test(navigator.platform)) {
+      expect(markup).toContain("关闭到托盘");
+    }
     expect(markup).toContain("开机自启");
     expect(markup).toContain("自动保存笔记");
     expect(markup).toContain("小窗笔记自动保存");
