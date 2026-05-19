@@ -597,6 +597,41 @@ export function NotePad({
                     setContent(event.target.value);
                     setStatus("未保存");
                   }}
+                  onKeyDown={(event) => {
+                    if (event.key !== "Enter") return;
+                    const textarea = event.currentTarget;
+                    const before = textarea.value.slice(0, textarea.selectionStart);
+                    const after = textarea.value.slice(textarea.selectionEnd);
+                    const lineStart = before.lastIndexOf("\n") + 1;
+                    const currentLine = before.slice(lineStart);
+                    const taskMatch = currentLine.match(/^(\s*)- \[([ x])\] /);
+                    if (!taskMatch) return;
+                    event.preventDefault();
+                    const indent = taskMatch[1];
+                    const restOfLine = currentLine.slice(taskMatch[0].length);
+                    if (!restOfLine.trim()) {
+                      // Only checkbox, no text — remove the checkbox line
+                      const newBefore = before.slice(0, lineStart);
+                      const newContent = newBefore + after;
+                      setContent(newContent);
+                      setStatus("未保存");
+                      requestAnimationFrame(() => {
+                        textarea.focus();
+                        textarea.setSelectionRange(newBefore.length, newBefore.length);
+                      });
+                    } else {
+                      // Has text — add new checkbox on next line
+                      const insertion = `\n${indent}- [ ] `;
+                      const newContent = before + insertion + after;
+                      setContent(newContent);
+                      setStatus("未保存");
+                      requestAnimationFrame(() => {
+                        textarea.focus();
+                        const cursor = before.length + insertion.length;
+                        textarea.setSelectionRange(cursor, cursor);
+                      });
+                    }
+                  }}
                   placeholder="写点什么……"
                   className="w-full flex-1 min-h-0 pb-2 leading-relaxed text-ink-soft font-body placeholder:text-ink-ghost/50"
                   style={{ fontSize: `${surfaceFontSize}px` }}

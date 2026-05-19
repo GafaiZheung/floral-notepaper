@@ -1352,6 +1352,11 @@ mod tests {
             ai_model: "deepseek-v4-pro".into(),
             ai_fim_endpoint: "https://api.deepseek.com/beta".into(),
             ai_title_model: "deepseek-v4-flash".into(),
+            ai_title_prompt: String::new(),
+            ai_continue_prompt: String::new(),
+            ai_fim_prompt: String::new(),
+            ai_format_model: "deepseek-v4-flash".into(),
+            ai_format_prompt: String::new(),
         };
         let next = AppConfig {
             notes_dir: "D:\\other-notes".into(),
@@ -1373,6 +1378,11 @@ mod tests {
             ai_model: "deepseek-v4-pro".into(),
             ai_fim_endpoint: "https://api.deepseek.com/beta".into(),
             ai_title_model: "deepseek-v4-flash".into(),
+            ai_title_prompt: String::new(),
+            ai_continue_prompt: String::new(),
+            ai_fim_prompt: String::new(),
+            ai_format_model: "deepseek-v4-flash".into(),
+            ai_format_prompt: String::new(),
         };
 
         assert_eq!(

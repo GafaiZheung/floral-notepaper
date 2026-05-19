@@ -279,7 +279,7 @@ export function MainWindow({
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiGenOpen, setAiGenOpen] = useState(false);
   const [aiLoading, setAiLoading] = useState(false);
-  const [aiLoadingAction, setAiLoadingAction] = useState<"" | "gen" | "pref" | "fim">("");
+  const [aiLoadingAction, setAiLoadingAction] = useState<"" | "gen" | "pref" | "fim" | "fmt">("");
   const [aiError, setAiError] = useState<string | null>(null);
   const [fimSuggestion, setFimSuggestion] = useState<string | null>(null);
   const aiInputRef = useRef<HTMLTextAreaElement>(null);
@@ -949,6 +949,22 @@ export function MainWindow({
     });
   }, [setContent, markDirty]);
 
+  const appendAfterSelection = useCallback((text: string) => {
+    const textarea = contentRef.current;
+    if (!textarea) return;
+    const before = textarea.value.slice(0, textarea.selectionEnd);
+    const after = textarea.value.slice(textarea.selectionEnd);
+    const separator = after.trim() ? "\n" : "";
+    const newContent = before + separator + text + after;
+    setContent(newContent);
+    markDirty();
+    requestAnimationFrame(() => {
+      textarea.focus();
+      const cursor = before.length + separator.length + text.length;
+      textarea.setSelectionRange(cursor, cursor);
+    });
+  }, [setContent, markDirty]);
+
   const handleAiGenerate = useCallback(async () => {
     if (!aiPrompt.trim()) return;
     setAiError(null);
@@ -979,14 +995,35 @@ export function MainWindow({
     setAiLoadingAction("pref");
     try {
       const response = await invoke<string>("ai_prefix_completion", { prefix: selected, prompt: null });
-      insertAtCursor(response);
+      appendAfterSelection(response);
     } catch (e) {
       setAiError(typeof e === "string" ? e : (e as Error).message || String(e));
     } finally {
       setAiLoading(false);
       setAiLoadingAction("");
     }
-  }, [insertAtCursor]);
+  }, [appendAfterSelection]);
+
+  const handleAiFormat = useCallback(async () => {
+    const textarea = contentRef.current;
+    if (!textarea) return;
+    const fullContent = textarea.value;
+    if (!fullContent.trim()) return;
+    if (!window.confirm("AI 将自动为当前内容添加 Markdown 章节标记并调整段落排版，是否继续？")) return;
+    setAiError(null);
+    setAiLoading(true);
+    setAiLoadingAction("fmt");
+    try {
+      const response = await invoke<string>("ai_format_note", { content: fullContent });
+      setContent(response);
+      markDirty();
+    } catch (e) {
+      setAiError(typeof e === "string" ? e : (e as Error).message || String(e));
+    } finally {
+      setAiLoading(false);
+      setAiLoadingAction("");
+    }
+  }, [setContent, markDirty]);
 
   const handleAiFim = useCallback(async () => {
     const textarea = contentRef.current;
@@ -1020,25 +1057,34 @@ export function MainWindow({
     return textarea.selectionStart !== textarea.selectionEnd;
   }, []);
 
-  // Auto-title generation
+  // Generate title via AI — used when saving with no title, or on sparkle button click
+  const handleGenerateTitle = useCallback(async (useContent?: string) => {
+    const sourceContent = useContent ?? content;
+    if (sourceContent.trim().length < 20) return null;
+    if (!settingsConfig?.aiEnabled) return null;
+    setAiTitlePending(true);
+    try {
+      const generated = await invoke<string>("ai_generate_title", { content: sourceContent });
+      return generated || null;
+    } catch {
+      return null;
+    } finally {
+      setAiTitlePending(false);
+    }
+  }, [content, settingsConfig?.aiEnabled]);
+
+  // Auto-title on save: if title is empty and content > 20 chars, generate one
   useEffect(() => {
-    if (!title.trim() && content.trim().length > 20 && !aiTitlePending && !isLoading) {
+    if (!title.trim() && content.trim().length > 20 && !aiTitlePending && !isLoading && settingsConfig?.aiEnabled) {
       const timer = setTimeout(async () => {
-        setAiTitlePending(true);
-        try {
-          const generated = await invoke<string>("ai_generate_title", { content });
-          if (generated && !title.trim()) {
-            setTitle(generated);
-          }
-        } catch {
-          // silently ignore title generation errors
-        } finally {
-          setAiTitlePending(false);
+        const generated = await handleGenerateTitle();
+        if (generated && !title.trim()) {
+          setTitle(generated);
         }
       }, 2000);
       return () => clearTimeout(timer);
     }
-  }, [content]);
+  }, [content, handleGenerateTitle, isLoading, settingsConfig?.aiEnabled]);
 
   const handleOpenNotepad = async () => {
     setErrorMessage(null);
@@ -1119,15 +1165,48 @@ export function MainWindow({
     void closeCurrentWindow();
   };
 
+  const isMac = /Mac/i.test(navigator.platform);
+
   return (
     <div className="w-full h-screen flex flex-col">
       <div className="noise-bg bg-cloud overflow-hidden flex flex-col flex-1">
         <div
-          className="flex items-center justify-between pl-5 pr-0 h-11 bg-paper/60 border-b border-paper-deep/30 shrink-0 select-none cursor-default"
+          className="flex items-center justify-between pl-3 pr-0 h-11 bg-paper/60 border-b border-paper-deep/30 shrink-0 select-none cursor-default"
           onMouseDown={handleTitleBarDrag}
           onDoubleClick={handleTitleBarDoubleClick}
         >
           <div className="flex items-center gap-3 min-w-0">
+            {isMac ? (
+              <div className="flex items-center gap-2 shrink-0 ml-1.5">
+                <button
+                  onClick={handleClose}
+                  className="group w-3 h-3 rounded-full flex items-center justify-center bg-[#FF5F57] hover:bg-[#FF3B30] transition-colors cursor-pointer"
+                  title="关闭"
+                >
+                  <svg width="6" height="6" viewBox="0 0 6 6" className="opacity-0 group-hover:opacity-100 transition-opacity">
+                    <path d="M1 1l4 4M5 1l-4 4" stroke="#4A0000" strokeWidth="1.2" strokeLinecap="round" />
+                  </svg>
+                </button>
+                <button
+                  onClick={handleMinimize}
+                  className="group w-3 h-3 rounded-full flex items-center justify-center bg-[#FFBD2E] hover:bg-[#FF9F0A] transition-colors cursor-pointer"
+                  title="最小化"
+                >
+                  <svg width="6" height="6" viewBox="0 0 6 6" className="opacity-0 group-hover:opacity-100 transition-opacity">
+                    <path d="M1 3h4" stroke="#7A4E00" strokeWidth="1.2" strokeLinecap="round" />
+                  </svg>
+                </button>
+                <button
+                  onClick={handleMaximize}
+                  className="group w-3 h-3 rounded-full flex items-center justify-center bg-[#28C840] hover:bg-[#00B81F] transition-colors cursor-pointer"
+                  title={isMaximized ? "还原" : "最大化"}
+                >
+                  <svg width="6" height="6" viewBox="0 0 6 6" className="opacity-0 group-hover:opacity-100 transition-opacity">
+                    <path d="M1.5 1v3.5h3.5" fill="none" stroke="#003A00" strokeWidth="1.2" strokeLinecap="round" />
+                  </svg>
+                </button>
+              </div>
+            ) : null}
             <span className="text-[13px] font-display font-medium text-ink-soft tracking-wide">
               花笺
             </span>
@@ -1183,40 +1262,44 @@ export function MainWindow({
 
             <div className="w-px h-4 bg-paper-deep/30 mx-0.5" />
 
-            <button
-              onClick={handleMinimize}
-              className="w-11 h-11 flex items-center justify-center text-ink-ghost hover:text-ink-soft hover:bg-paper-warm transition-all cursor-pointer"
-              title="最小化"
-            >
-              <svg width="12" height="12" viewBox="0 0 12 12">
-                <rect x="1" y="5.5" width="10" height="1" fill="currentColor" rx="0.5" />
-              </svg>
-            </button>
-            <button
-              onClick={handleMaximize}
-              className="w-11 h-11 flex items-center justify-center text-ink-ghost hover:text-ink-soft hover:bg-paper-warm transition-all cursor-pointer"
-              title={isMaximized ? "还原" : "最大化"}
-            >
-              {isMaximized ? (
-                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2">
-                  <rect x="3" y="3" width="7" height="7" rx="1" />
-                  <path d="M3 5H2V2a1 1 0 0 1 1-1h5v1" />
-                </svg>
-              ) : (
-                <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2">
-                  <rect x="1.5" y="1.5" width="9" height="9" rx="1.5" />
-                </svg>
-              )}
-            </button>
-            <button
-              onClick={handleClose}
-              className="w-11 h-11 flex items-center justify-center text-ink-ghost hover:text-red-500 hover:bg-danger-bg transition-all cursor-pointer"
-              title="关闭"
-            >
-              <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                <path d="M2 2l8 8M10 2l-8 8" />
-              </svg>
-            </button>
+            {isMac ? null : (
+              <>
+                <button
+                  onClick={handleMinimize}
+                  className="w-11 h-11 flex items-center justify-center text-ink-ghost hover:text-ink-soft hover:bg-paper-warm transition-all cursor-pointer"
+                  title="最小化"
+                >
+                  <svg width="12" height="12" viewBox="0 0 12 12">
+                    <rect x="1" y="5.5" width="10" height="1" fill="currentColor" rx="0.5" />
+                  </svg>
+                </button>
+                <button
+                  onClick={handleMaximize}
+                  className="w-11 h-11 flex items-center justify-center text-ink-ghost hover:text-ink-soft hover:bg-paper-warm transition-all cursor-pointer"
+                  title={isMaximized ? "还原" : "最大化"}
+                >
+                  {isMaximized ? (
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2">
+                      <rect x="3" y="3" width="7" height="7" rx="1" />
+                      <path d="M3 5H2V2a1 1 0 0 1 1-1h5v1" />
+                    </svg>
+                  ) : (
+                    <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.2">
+                      <rect x="1.5" y="1.5" width="9" height="9" rx="1.5" />
+                    </svg>
+                  )}
+                </button>
+                <button
+                  onClick={handleClose}
+                  className="w-11 h-11 flex items-center justify-center text-ink-ghost hover:text-red-500 hover:bg-danger-bg transition-all cursor-pointer"
+                  title="关闭"
+                >
+                  <svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
+                    <path d="M2 2l8 8M10 2l-8 8" />
+                  </svg>
+                </button>
+              </>
+            )}
           </div>
         </div>
 
@@ -1834,6 +1917,7 @@ export function MainWindow({
             </div>
 
             <div key={noteTransitionKey} className="animate-note-enter px-6 pt-4 pb-2 shrink-0 border-b border-paper-deep/15">
+              <div className="flex items-center gap-2">
               <input
                 type="text"
                 value={title}
@@ -1849,8 +1933,35 @@ export function MainWindow({
                 }}
                 placeholder="无标题笔记"
                 disabled={!selectedId}
-                className="w-full text-[20px] font-display font-bold text-ink placeholder:text-ink-ghost/50 tracking-wide disabled:opacity-60"
+                className="flex-1 text-[20px] font-display font-bold text-ink placeholder:text-ink-ghost/50 tracking-wide disabled:opacity-60 min-w-0"
               />
+              {title.trim() && selectedId && settingsConfig?.aiEnabled && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const generated = await handleGenerateTitle();
+                    if (generated) setTitle(generated);
+                  }}
+                  disabled={aiTitlePending}
+                  className="shrink-0 w-7 h-7 flex items-center justify-center rounded-lg text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 transition-all cursor-pointer disabled:opacity-40"
+                  title="AI 生成标题"
+                >
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    className={aiTitlePending ? "animate-spin" : ""}
+                  >
+                    <path d="M12 2l2.4 7.2h7.6l-6 4.8 2.4 7.2-6.4-4.8-6.4 4.8 2.4-7.2-6-4.8h7.6z" />
+                  </svg>
+                </button>
+              )}
+              </div>
               <div className="flex items-center gap-3 mt-1.5">
                 <span className="text-[10px] text-ink-ghost font-mono tabular-nums truncate max-w-[200px]">
                   {selectedExternalFile
@@ -1938,6 +2049,13 @@ export function MainWindow({
                           loading={aiLoadingAction === "fim"}
                           onClick={handleAiFim}
                         />
+                        <AIButton
+                          label="排版"
+                          title="AI 一键排版 (识别章节标题并添加 MD 标记)"
+                          active={false}
+                          loading={aiLoadingAction === "fmt"}
+                          onClick={handleAiFormat}
+                        />
                       </div>
                       {aiGenOpen && (
                         <div className="px-4 pb-2 shrink-0 space-y-1.5">
@@ -2017,6 +2135,37 @@ export function MainWindow({
                             if (e.key === "Tab" && fimSuggestion) {
                               e.preventDefault();
                               acceptFimSuggestion();
+                            }
+                            // TodoList: auto-continue checkbox on Enter
+                            if (e.key === "Enter") {
+                              const textarea = e.currentTarget;
+                              const before = textarea.value.slice(0, textarea.selectionStart);
+                              const after = textarea.value.slice(textarea.selectionEnd);
+                              const lineStart = before.lastIndexOf("\n") + 1;
+                              const currentLine = before.slice(lineStart);
+                              const taskMatch = currentLine.match(/^(\s*)- \[([ x])\] /);
+                              if (!taskMatch) return;
+                              e.preventDefault();
+                              const indent = taskMatch[1];
+                              const restOfLine = currentLine.slice(taskMatch[0].length);
+                              if (!restOfLine.trim()) {
+                                const newBefore = before.slice(0, lineStart);
+                                setContent(newBefore + after);
+                                markDirty();
+                                requestAnimationFrame(() => {
+                                  textarea.focus();
+                                  textarea.setSelectionRange(newBefore.length, newBefore.length);
+                                });
+                              } else {
+                                const insertion = `\n${indent}- [ ] `;
+                                setContent(before + insertion + after);
+                                markDirty();
+                                requestAnimationFrame(() => {
+                                  textarea.focus();
+                                  const cursor = before.length + insertion.length;
+                                  textarea.setSelectionRange(cursor, cursor);
+                                });
+                              }
                             }
                           }}
                           className="w-full h-full leading-[1.9] text-ink-soft font-mono placeholder:text-ink-ghost/40"

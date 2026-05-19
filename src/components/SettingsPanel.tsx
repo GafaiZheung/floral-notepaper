@@ -240,6 +240,81 @@ export function SettingsPanel({
                   className="w-full h-8 px-2.5 rounded-lg bg-paper-warm/70 border border-paper-deep/40 text-[12px] font-mono text-ink-soft outline-none placeholder:text-ink-ghost/50"
                 />
               </div>
+              <div className="space-y-1.5">
+                <label className="block text-[11px] font-body text-ink-faint">
+                  Title Prompt
+                </label>
+                <textarea
+                  value={config.aiTitlePrompt}
+                  onChange={(event) =>
+                    setConfigValue("aiTitlePrompt", event.target.value)
+                  }
+                  placeholder="为以下内容生成一个简洁的标题..."
+                  spellCheck={false}
+                  rows={2}
+                  className="w-full px-2.5 py-1.5 rounded-lg bg-paper-warm/70 border border-paper-deep/40 text-[12px] font-mono text-ink-soft outline-none placeholder:text-ink-ghost/50 resize-none"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="block text-[11px] font-body text-ink-faint">
+                  Continue Prompt
+                </label>
+                <textarea
+                  value={config.aiContinuePrompt}
+                  onChange={(event) =>
+                    setConfigValue("aiContinuePrompt", event.target.value)
+                  }
+                  placeholder="请续写以下文本..."
+                  spellCheck={false}
+                  rows={2}
+                  className="w-full px-2.5 py-1.5 rounded-lg bg-paper-warm/70 border border-paper-deep/40 text-[12px] font-mono text-ink-soft outline-none placeholder:text-ink-ghost/50 resize-none"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="block text-[11px] font-body text-ink-faint">
+                  FIM Prompt
+                </label>
+                <textarea
+                  value={config.aiFimPrompt}
+                  onChange={(event) =>
+                    setConfigValue("aiFimPrompt", event.target.value)
+                  }
+                  placeholder="留空使用默认 FIM 行为..."
+                  spellCheck={false}
+                  rows={2}
+                  className="w-full px-2.5 py-1.5 rounded-lg bg-paper-warm/70 border border-paper-deep/40 text-[12px] font-mono text-ink-soft outline-none placeholder:text-ink-ghost/50 resize-none"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="block text-[11px] font-body text-ink-faint">
+                  Format Model
+                </label>
+                <input
+                  type="text"
+                  value={config.aiFormatModel}
+                  onChange={(event) =>
+                    setConfigValue("aiFormatModel", event.target.value)
+                  }
+                  placeholder="deepseek-v4-flash"
+                  spellCheck={false}
+                  className="w-full h-8 px-2.5 rounded-lg bg-paper-warm/70 border border-paper-deep/40 text-[12px] font-mono text-ink-soft outline-none placeholder:text-ink-ghost/50"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <label className="block text-[11px] font-body text-ink-faint">
+                  Format Prompt
+                </label>
+                <textarea
+                  value={config.aiFormatPrompt}
+                  onChange={(event) =>
+                    setConfigValue("aiFormatPrompt", event.target.value)
+                  }
+                  placeholder="请分析以下 Markdown 文本..."
+                  spellCheck={false}
+                  rows={2}
+                  className="w-full px-2.5 py-1.5 rounded-lg bg-paper-warm/70 border border-paper-deep/40 text-[12px] font-mono text-ink-soft outline-none placeholder:text-ink-ghost/50 resize-none"
+                />
+              </div>
             </>
           )}
         </section>

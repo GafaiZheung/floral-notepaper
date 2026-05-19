@@ -141,12 +141,13 @@ const components: Components = {
       {children}
     </td>
   ),
-  input: ({ checked, ...props }) => (
+  input: ({ checked, type, ...props }) => (
     <input
       {...props}
+      type="checkbox"
       checked={checked}
-      disabled
-      className="mr-1.5 accent-bamboo"
+      readOnly
+      className="mr-1.5 accent-bamboo cursor-pointer"
     />
   ),
 };

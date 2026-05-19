@@ -42,6 +42,16 @@ pub struct AppConfig {
     pub ai_fim_endpoint: String,
     #[serde(default = "default_ai_title_model")]
     pub ai_title_model: String,
+    #[serde(default = "default_ai_title_prompt")]
+    pub ai_title_prompt: String,
+    #[serde(default = "default_ai_continue_prompt")]
+    pub ai_continue_prompt: String,
+    #[serde(default = "default_ai_fim_prompt")]
+    pub ai_fim_prompt: String,
+    #[serde(default = "default_ai_format_model")]
+    pub ai_format_model: String,
+    #[serde(default = "default_ai_format_prompt")]
+    pub ai_format_prompt: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -509,6 +519,11 @@ impl NoteStore {
             ai_model: default_ai_model(),
             ai_fim_endpoint: default_ai_fim_endpoint(),
             ai_title_model: default_ai_title_model(),
+            ai_title_prompt: default_ai_title_prompt(),
+            ai_continue_prompt: default_ai_continue_prompt(),
+            ai_fim_prompt: default_ai_fim_prompt(),
+            ai_format_model: default_ai_format_model(),
+            ai_format_prompt: default_ai_format_prompt(),
         }
     }
 
@@ -805,6 +820,26 @@ fn default_ai_title_model() -> String {
     "deepseek-v4-flash".into()
 }
 
+fn default_ai_title_prompt() -> String {
+    "为以下内容生成一个简洁的标题（不超过20个字，只返回标题文本，不要引号或额外说明）：\n\n{content}".into()
+}
+
+fn default_ai_continue_prompt() -> String {
+    "请续写以下文本：\n\n{prefix}".into()
+}
+
+fn default_ai_fim_prompt() -> String {
+    String::new()
+}
+
+fn default_ai_format_model() -> String {
+    "deepseek-v4-flash".into()
+}
+
+fn default_ai_format_prompt() -> String {
+    "请分析以下 Markdown 文本，识别其中的章节标题和段落结构，为章节标题添加适当级别的 `##` / `###` 标记，确保段落之间有适当的空行。保持原有内容不变，只调整格式。直接返回格式化后的 Markdown，不要添加解释：\n\n{content}".into()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -926,6 +961,11 @@ mod tests {
         assert_eq!(default_config.ai_model, "deepseek-v4-pro");
         assert_eq!(default_config.ai_fim_endpoint, "https://api.deepseek.com/beta");
         assert_eq!(default_config.ai_title_model, "deepseek-v4-flash");
+        assert_eq!(default_config.ai_title_prompt, "为以下内容生成一个简洁的标题（不超过20个字，只返回标题文本，不要引号或额外说明）：\n\n{content}");
+        assert_eq!(default_config.ai_continue_prompt, "请续写以下文本：\n\n{prefix}");
+        assert_eq!(default_config.ai_fim_prompt, "");
+        assert_eq!(default_config.ai_format_model, "deepseek-v4-flash");
+        assert!(default_config.ai_format_prompt.contains("章节标题"));
 
         let custom_notes_dir = store.base_dir().join("custom-notes");
         let saved = AppConfig {
@@ -948,6 +988,11 @@ mod tests {
             ai_model: "deepseek-v4-flash".into(),
             ai_fim_endpoint: "https://api.deepseek.com/beta".into(),
             ai_title_model: "deepseek-v4-flash".into(),
+            ai_title_prompt: "生成标题：\n\n{content}".into(),
+            ai_continue_prompt: "续写：\n\n{prefix}".into(),
+            ai_fim_prompt: "".into(),
+            ai_format_model: "deepseek-v4-flash".into(),
+            ai_format_prompt: "排版：\n\n{content}".into(),
         };
 
         store.save_config(saved.clone()).expect("save config");

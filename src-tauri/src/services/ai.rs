@@ -247,17 +247,44 @@ pub async fn ai_generate_title(content: String) -> Result<String, AppError> {
     let config = load_ai_config()?;
     let client = build_client()?;
 
+    let prompt_template = if config.ai_title_prompt.trim().is_empty() {
+        "为以下内容生成一个简洁的标题（不超过20个字，只返回标题文本，不要引号或额外说明）：\n\n{content}".to_string()
+    } else {
+        config.ai_title_prompt.clone()
+    };
+    let prompt = prompt_template.replace("{content}", &content);
+
     let messages = vec![ChatMessage {
         role: "user".into(),
-        content: format!(
-            "为以下内容生成一个简洁的标题（不超过20个字，只返回标题文本，不要引号或额外说明）：\n\n{content}"
-        ),
+        content: prompt,
         prefix: None,
     }];
 
     let endpoint = format!("{}/chat/completions", config.ai_api_endpoint.trim_end_matches('/'));
     let result = send_chat_request(&client, &endpoint, config.ai_api_key.trim(), &config.ai_title_model, messages).await?;
     Ok(result.trim().trim_matches('"').trim_matches('"').trim_matches('「').trim_matches('」').trim().to_string())
+}
+
+#[tauri::command]
+pub async fn ai_format_note(content: String) -> Result<String, AppError> {
+    let config = load_ai_config()?;
+    let client = build_client()?;
+
+    let prompt_template = if config.ai_format_prompt.trim().is_empty() {
+        "请分析以下 Markdown 文本，识别其中的章节标题和段落结构，为章节标题添加适当级别的 `##` / `###` 标记，确保段落之间有适当的空行。保持原有内容不变，只调整格式。直接返回格式化后的 Markdown，不要添加解释：\n\n{content}".to_string()
+    } else {
+        config.ai_format_prompt.clone()
+    };
+    let prompt = prompt_template.replace("{content}", &content);
+
+    let messages = vec![ChatMessage {
+        role: "user".into(),
+        content: prompt,
+        prefix: None,
+    }];
+
+    let endpoint = format!("{}/chat/completions", config.ai_api_endpoint.trim_end_matches('/'));
+    send_chat_request(&client, &endpoint, config.ai_api_key.trim(), &config.ai_format_model, messages).await
 }
 
 #[cfg(test)]

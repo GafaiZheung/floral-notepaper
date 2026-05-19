@@ -24,4 +24,9 @@ export interface AppConfig {
   aiModel: string;
   aiFimEndpoint: string;
   aiTitleModel: string;
+  aiTitlePrompt: string;
+  aiContinuePrompt: string;
+  aiFimPrompt: string;
+  aiFormatModel: string;
+  aiFormatPrompt: string;
 }

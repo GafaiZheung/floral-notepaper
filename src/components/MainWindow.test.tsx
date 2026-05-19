@@ -27,6 +27,11 @@ describe("MainWindow settings", () => {
           aiModel: "deepseek-v4-pro",
           aiFimEndpoint: "https://api.deepseek.com/beta",
           aiTitleModel: "deepseek-v4-flash",
+          aiTitlePrompt: "生成标题：\n\n{content}",
+          aiContinuePrompt: "续写：\n\n{prefix}",
+          aiFimPrompt: "",
+          aiFormatModel: "deepseek-v4-flash",
+          aiFormatPrompt: "排版：\n\n{content}",
         }}
       />,
     );
