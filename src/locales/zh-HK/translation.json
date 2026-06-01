@@ -245,6 +245,11 @@
     },
     "tileCtrlClose": "Ctrl+右鍵快速關閉磁貼",
     "tileRenderMarkdown": "磁貼渲染 Markdown",
+    "hiddenCategories": {
+      "label": "隱藏的分類目錄",
+      "placeholder": "輸入目錄名稱後按 Enter…",
+      "hint": "這些目錄不會在側欄顯示為分類"
+    },
     "title": "應用程式設定",
     "visibilityShortcut": "顯示／隱藏視窗快捷鍵",
     "background": {

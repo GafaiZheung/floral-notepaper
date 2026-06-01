@@ -202,6 +202,63 @@ export function SettingsPanel({ config, onChange, onChooseNotesDir, onClose }: S
             checked={config.tileRenderMarkdown}
             onChange={(checked) => setConfigValue("tileRenderMarkdown", checked)}
           />
+          <div className="space-y-2 pt-1">
+            <label className="block text-[11px] font-body text-ink-faint">
+              {t("settings.hiddenCategories.label", { defaultValue: "隐藏的分类目录" })}
+            </label>
+            <div className="flex flex-wrap gap-1.5">
+              {(config.hiddenCategories ?? []).map((name) => (
+                <span
+                  key={name}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono bg-paper-warm border border-paper-deep/40 text-ink-faint"
+                >
+                  {name}
+                  <button
+                    onClick={() =>
+                      setConfigValue(
+                        "hiddenCategories",
+                        (config.hiddenCategories ?? []).filter((c) => c !== name),
+                      )
+                    }
+                    className="text-ink-ghost hover:text-red-400 transition-colors cursor-pointer"
+                  >
+                    <svg
+                      width="10"
+                      height="10"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                    >
+                      <path d="M18 6L6 18M6 6l12 12" />
+                    </svg>
+                  </button>
+                </span>
+              ))}
+            </div>
+            <input
+              type="text"
+              placeholder={t("settings.hiddenCategories.placeholder", {
+                defaultValue: "输入目录名后回车…",
+              })}
+              className="w-full h-7 px-2.5 rounded-lg text-[11px] font-mono text-ink bg-paper-warm/70 border border-paper-deep/40 focus:border-bamboo/30 placeholder:text-ink-ghost/60"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && e.currentTarget.value.trim()) {
+                  const name = e.currentTarget.value.trim();
+                  if (!(config.hiddenCategories ?? []).includes(name)) {
+                    setConfigValue("hiddenCategories", [...(config.hiddenCategories ?? []), name]);
+                  }
+                  e.currentTarget.value = "";
+                }
+              }}
+            />
+            <p className="text-[10px] text-ink-ghost/60">
+              {t("settings.hiddenCategories.hint", {
+                defaultValue: "这些目录不会在侧栏显示为分类",
+              })}
+            </p>
+          </div>
         </section>
 
         {/* 快捷键功能设置区域，与上方常规设置分开 */}

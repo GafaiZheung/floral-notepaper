@@ -245,6 +245,11 @@
     },
     "tileCtrlClose": "Ctrl+右键快速关闭磁贴",
     "tileRenderMarkdown": "磁贴渲染 Markdown",
+    "hiddenCategories": {
+      "label": "隐藏的分类目录",
+      "placeholder": "输入目录名后回车…",
+      "hint": "这些目录不会在侧栏显示为分类"
+    },
     "title": "应用设置",
     "visibilityShortcut": "显示/隐藏窗口快捷键",
     "background": {

@@ -335,6 +335,7 @@ export function MainWindow({
   const contentRef = useRef<HTMLTextAreaElement>(null);
   const externalFileMtimeRef = useRef<number>(0);
   const lastExternalSaveRef = useRef<number>(0);
+  const savedHiddenCategoriesRef = useRef<string[] | undefined>(undefined);
   const saveStateRef = useRef(saveState);
   saveStateRef.current = saveState;
   const selectedIdRef = useRef(selectedId);
@@ -889,7 +890,13 @@ export function MainWindow({
           setSavedNotesDir(savedConfig.notesDir);
           setViewMode(normalizeViewMode(savedConfig.defaultViewMode));
 
-          if (savedConfig.notesDir !== previousNotesDir) {
+          const notesDirChanged = savedConfig.notesDir !== previousNotesDir;
+          const hiddenChanged =
+            (savedConfig.hiddenCategories ?? []).join(",") !==
+            (savedHiddenCategoriesRef.current ?? []).join(",");
+          savedHiddenCategoriesRef.current = savedConfig.hiddenCategories;
+
+          if (notesDirChanged || hiddenChanged) {
             const loadedNotes = await refreshNotes();
             if (loadedNotes[0]) {
               await loadNote(loadedNotes[0].id);

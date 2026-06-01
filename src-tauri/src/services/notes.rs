@@ -78,6 +78,23 @@ pub struct AppConfig {
     pub toggle_visibility_shortcut: String,
     #[serde(default = "default_open_at_cursor")]
     pub open_at_cursor: bool,
+    #[serde(default = "default_hidden_categories")]
+    pub hidden_categories: Vec<String>,
+}
+
+fn default_hidden_categories() -> Vec<String> {
+    vec![
+        ".codex".into(),
+        ".claude".into(),
+        ".git".into(),
+        "node_modules".into(),
+        ".github".into(),
+        "target".into(),
+        ".vscode".into(),
+        ".idea".into(),
+        ".vs".into(),
+        ".husky".into(),
+    ]
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -440,7 +457,6 @@ impl NoteStore {
 
     pub fn save_config(&self, mut config: AppConfig) -> Result<AppConfig, AppError> {
         self.ensure_base_dir()?;
-        config.notes_dir = ensure_notes_suffix(&config.notes_dir);
         config.notes_dir = normalize_notes_dir(&config.notes_dir);
         config.notes_dirs = dedupe_notes_dirs(&config.notes_dirs);
         let current_lower = config.notes_dir.to_lowercase();
@@ -720,11 +736,15 @@ impl NoteStore {
     pub fn list_categories(&self) -> Result<Vec<String>, AppError> {
         let notes_dir = self.notes_dir()?;
         fs::create_dir_all(&notes_dir)?;
+        let config = self.load_config()?;
         let mut categories = Vec::new();
         for entry in fs::read_dir(&notes_dir)? {
             let entry = entry?;
             if entry.path().is_dir() {
-                categories.push(entry.file_name().to_string_lossy().to_string());
+                let name = entry.file_name().to_string_lossy().to_string();
+                if !config.hidden_categories.contains(&name) {
+                    categories.push(name);
+                }
             }
         }
         categories.sort();
@@ -908,6 +928,7 @@ impl NoteStore {
             surface_height: None,
             toggle_visibility_shortcut: default_toggle_visibility_shortcut(),
             open_at_cursor: default_open_at_cursor(),
+            hidden_categories: default_hidden_categories(),
         }
     }
 
@@ -1426,6 +1447,7 @@ mod tests {
             surface_height: None,
             toggle_visibility_shortcut: String::new(),
             open_at_cursor: true,
+            hidden_categories: vec![],
         };
 
         store.save_config(saved.clone()).expect("save config");
