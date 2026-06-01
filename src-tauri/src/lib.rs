@@ -169,6 +169,14 @@ fn notes_dirs_add(app: AppHandle, path: String) -> Result<AppConfig, AppError> {
 }
 
 #[tauri::command]
+fn notes_dirs_delete(app: AppHandle, path: String) -> Result<AppConfig, AppError> {
+    let config = default_store()?.remove_notes_dir(&path)?;
+    let _ = app.emit("notes-changed", ());
+    let _ = app.emit("config-changed", &config);
+    Ok(config)
+}
+
+#[tauri::command]
 fn open_file_classify(file_path: String) -> Result<OpenedFileClassification, AppError> {
     default_store()?.classify_opened_file(&file_path)
 }
@@ -325,6 +333,7 @@ pub fn run() {
             notes_dirs_list,
             notes_dirs_select,
             notes_dirs_add,
+            notes_dirs_delete,
             open_file_classify,
             config_get,
             copy_background_image,

@@ -60,7 +60,10 @@
     "notesDir": {
       "label": "Notes Directory",
       "select": "Switch notes directory",
-      "add": "Add directory"
+      "add": "Add directory",
+      "delete": "Delete directory",
+      "confirmDelete": "Delete \"{{path}}\"?",
+      "confirmDeleteAction": "Confirm Delete"
     },
     "externalPathPrompt": {
       "title": "Record new notes directory?",

@@ -60,7 +60,10 @@
     "notesDir": {
       "label": "笔记目录",
       "select": "切换笔记目录",
-      "add": "添加目录"
+      "add": "添加目录",
+      "delete": "删除目录",
+      "confirmDelete": "确认删除「{{path}}」？",
+      "confirmDeleteAction": "确认删除"
     },
     "externalPathPrompt": {
       "title": "记录新的笔记目录？",

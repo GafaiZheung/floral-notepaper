@@ -12,6 +12,7 @@ import {
   saveConfig,
   selectNotesDir,
   addNotesDir,
+  deleteNotesDir,
   classifyOpenedFile,
 } from "../features/settings/api";
 import type { AppConfig, ViewMode } from "../features/settings/types";
@@ -329,6 +330,8 @@ export function MainWindow({
     filePath: string;
     inputValue: string;
   } | null>(null);
+  const [notesDirDropdownOpen, setNotesDirDropdownOpen] = useState(false);
+  const [deleteConfirmDir, setDeleteConfirmDir] = useState<string | null>(null);
   const contentRef = useRef<HTMLTextAreaElement>(null);
   const externalFileMtimeRef = useRef<number>(0);
   const lastExternalSaveRef = useRef<number>(0);
@@ -709,6 +712,8 @@ export function MainWindow({
     function closeMenus() {
       setNoteMenuClosing(true);
       setCategoryMenuClosing(true);
+      setNotesDirDropdownOpen(false);
+      setDeleteConfirmDir(null);
     }
 
     function handleKeyDown(event: KeyboardEvent) {
@@ -1100,6 +1105,25 @@ export function MainWindow({
     }
   };
 
+  const handleDeleteNotesDir = async (path: string) => {
+    setDeleteConfirmDir(null);
+    setNotesDirDropdownOpen(false);
+    setErrorMessage(null);
+    try {
+      const savedConfig = await deleteNotesDir(path);
+      setSettingsConfig(savedConfig);
+      setSavedNotesDir(savedConfig.notesDir);
+      const loaded = await refreshNotes();
+      if (loaded[0]) {
+        await loadNote(loaded[0].id);
+      } else {
+        clearCurrentNote();
+      }
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
+    }
+  };
+
   const handleCreateCategory = async () => {
     const name = categoryInputValue.trim();
     if (!name) {
@@ -1465,18 +1489,105 @@ export function MainWindow({
             {settingsConfig && (
               <div className="px-3 pb-1.5 shrink-0">
                 <div className="flex items-center gap-1.5">
-                  <select
-                    value={settingsConfig.notesDir}
-                    onChange={(e) => void switchNotesDir(e.target.value)}
-                    className="flex-1 min-w-0 h-7 rounded-lg text-[11px] font-mono text-ink-faint bg-paper-warm/80 border border-paper-deep/40 px-2 appearance-none cursor-pointer"
-                    title={t("main.notesDir.select", { defaultValue: "切换笔记目录" })}
-                  >
-                    {(settingsConfig.notesDirs ?? [settingsConfig.notesDir]).map((dir) => (
-                      <option key={dir} value={dir}>
-                        {displayPathLabel(dir)}
-                      </option>
-                    ))}
-                  </select>
+                  <div className="relative flex-1 min-w-0">
+                    <button
+                      onMouseDown={(e) => e.stopPropagation()}
+                      onClick={() => {
+                        setDeleteConfirmDir(null);
+                        setNotesDirDropdownOpen((prev) => !prev);
+                      }}
+                      className="w-full flex items-center gap-1 h-7 rounded-lg text-[11px] font-body bg-paper-warm/80 border border-paper-deep/40 pl-2.5 pr-1.5 hover:border-bamboo/30 hover:bg-cloud transition-colors cursor-pointer"
+                      title={t("main.notesDir.select", { defaultValue: "切换笔记目录" })}
+                    >
+                      <span className="flex-1 truncate text-left text-ink-faint">
+                        {displayPathLabel(settingsConfig.notesDir)}
+                      </span>
+                      <svg
+                        width="10"
+                        height="10"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        className={`text-ink-ghost shrink-0 transition-transform duration-200 ${notesDirDropdownOpen ? "rotate-180" : ""}`}
+                      >
+                        <polyline points="6 9 12 15 18 9" />
+                      </svg>
+                    </button>
+                    <div
+                      onMouseDown={(e) => e.stopPropagation()}
+                      className={`absolute top-full left-0 right-0 mt-1 z-30 bg-cloud border border-paper-deep/40 rounded-xl shadow-lg overflow-hidden py-1 transition-all duration-200 origin-top ${notesDirDropdownOpen ? "opacity-100 scale-y-100" : "opacity-0 scale-y-95 pointer-events-none"}`}
+                    >
+                      {(settingsConfig.notesDirs ?? [settingsConfig.notesDir]).map((dir) => {
+                        const isCurrent = dir === settingsConfig.notesDir;
+                        return (
+                          <div key={dir} className="flex items-center">
+                            {deleteConfirmDir === dir ? (
+                              <div className="flex-1">
+                                <div className="px-3 py-1.5 text-[10px] font-body text-ink-faint border-b border-paper-deep/20">
+                                  {t("main.notesDir.confirmDelete", {
+                                    path: displayPathLabel(dir),
+                                    defaultValue: "确认删除「{{path}}」？",
+                                  })}
+                                </div>
+                                <div className="flex">
+                                  <button
+                                    onClick={() => void handleDeleteNotesDir(dir)}
+                                    className="flex-1 text-center px-2 py-1.5 text-[11px] font-body text-red-400 hover:bg-danger-bg hover:text-red-500 transition-colors cursor-pointer"
+                                  >
+                                    {t("main.notesDir.confirmDeleteAction", {
+                                      defaultValue: "确认删除",
+                                    })}
+                                  </button>
+                                  <button
+                                    onClick={() => setDeleteConfirmDir(null)}
+                                    className="flex-1 text-center px-2 py-1.5 text-[11px] font-body text-ink-soft hover:bg-paper-warm transition-colors cursor-pointer"
+                                  >
+                                    {t("common.cancel", { defaultValue: "取消" })}
+                                  </button>
+                                </div>
+                              </div>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  setNotesDirDropdownOpen(false);
+                                  void switchNotesDir(dir);
+                                }}
+                                className={`flex-1 text-left truncate px-3 py-1.5 text-[11px] font-mono transition-colors cursor-pointer ${
+                                  isCurrent
+                                    ? "text-bamboo font-medium bg-bamboo-mist/30"
+                                    : "text-ink-faint hover:text-ink-soft hover:bg-paper-warm/60"
+                                }`}
+                              >
+                                {displayPathLabel(dir)}
+                              </button>
+                            )}
+                            {!isCurrent && deleteConfirmDir !== dir && (
+                              <button
+                                onClick={() => setDeleteConfirmDir(dir)}
+                                className="shrink-0 w-6 h-6 flex items-center justify-center opacity-30 hover:opacity-100 text-ink-ghost hover:text-red-400 hover:bg-danger-bg rounded transition-all cursor-pointer mr-0.5"
+                                title={t("common.delete", { defaultValue: "删除" })}
+                              >
+                                <svg
+                                  width="10"
+                                  height="10"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth="2.5"
+                                  strokeLinecap="round"
+                                >
+                                  <path d="M18 6L6 18M6 6l12 12" />
+                                </svg>
+                              </button>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
                   <button
                     onClick={() => {
                       void handleChooseNotesDir();

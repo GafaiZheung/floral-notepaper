@@ -65,6 +65,10 @@ export function addNotesDir(path: string): Promise<AppConfig> {
   return invoke("notes_dirs_add", { path });
 }
 
+export function deleteNotesDir(path: string): Promise<AppConfig> {
+  return invoke("notes_dirs_delete", { path });
+}
+
 export function classifyOpenedFile(filePath: string): Promise<OpenedFileClassification> {
   return invoke("open_file_classify", { filePath });
 }

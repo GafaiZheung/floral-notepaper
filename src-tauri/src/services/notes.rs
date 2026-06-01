@@ -674,6 +674,28 @@ impl NoteStore {
         Ok(config)
     }
 
+    pub fn remove_notes_dir(&self, path: &str) -> Result<AppConfig, AppError> {
+        let normalized = normalize_notes_dir(path);
+        let mut config = self.load_config()?;
+        let lower = normalized.to_lowercase();
+        let current_is_target = config.notes_dir.to_lowercase() == lower;
+        config.notes_dirs.retain(|d| d.to_lowercase() != lower);
+        if config.notes_dirs.is_empty() {
+            let fallback = normalize_notes_dir(&self.default_config().notes_dir);
+            config.notes_dirs.push(fallback.clone());
+            config.notes_dir = fallback;
+        } else if current_is_target {
+            config.notes_dir = config.notes_dirs[0].clone();
+        }
+        self.save_config_raw(&config)?;
+        // Clean up metadata cache so re-adding triggers a fresh scan
+        let meta_path = self.metadata_path_for_dir(Path::new(&normalized));
+        if meta_path.exists() {
+            let _ = fs::remove_file(&meta_path);
+        }
+        Ok(config)
+    }
+
     pub fn classify_opened_file(
         &self,
         file_path: &str,

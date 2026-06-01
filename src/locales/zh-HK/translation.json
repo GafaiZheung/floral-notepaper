@@ -60,7 +60,10 @@
     "notesDir": {
       "label": "筆記目錄",
       "select": "切換筆記目錄",
-      "add": "添加目錄"
+      "add": "添加目錄",
+      "delete": "刪除目錄",
+      "confirmDelete": "確認刪除「{{path}}」？",
+      "confirmDeleteAction": "確認刪除"
     },
     "externalPathPrompt": {
       "title": "記錄新的筆記目錄？",
