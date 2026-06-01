@@ -10,6 +10,7 @@ describe("MainWindow settings", () => {
         initialConfig={{
           locale: "zh-CN",
           notesDir: "D:\\Notes\\花笺",
+          notesDirs: ["D:\\Notes\\花笺"],
           globalShortcut: "Ctrl+Space",
           closeToTray: true,
           autostart: false,

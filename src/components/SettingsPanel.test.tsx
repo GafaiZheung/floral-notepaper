@@ -5,6 +5,7 @@ import { SettingsPanel } from "./SettingsPanel";
 const config = {
   locale: "zh-CN",
   notesDir: "D:\\Notes\\花笺",
+  notesDirs: ["D:\\Notes\\花笺"],
   globalShortcut: "Command+Option+N",
   closeToTray: true,
   autostart: false,

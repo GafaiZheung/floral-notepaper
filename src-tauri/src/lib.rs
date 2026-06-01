@@ -3,7 +3,10 @@ pub mod locales;
 pub mod services;
 
 use locales::Locale;
-use services::notes::{default_store, AppConfig, AppError, Note, NoteMetadata, SaveNoteRequest};
+use services::notes::{
+    default_store, AppConfig, AppError, Note, NoteMetadata, OpenedFileClassification,
+    SaveNoteRequest,
+};
 use std::{fs, path::PathBuf};
 use tauri::{AppHandle, Emitter};
 
@@ -142,6 +145,35 @@ fn notes_move_category(
 }
 
 #[tauri::command]
+fn notes_dirs_list() -> Result<Vec<String>, AppError> {
+    default_store()?.list_notes_dirs()
+}
+
+#[tauri::command]
+fn notes_dirs_select(
+    app: AppHandle,
+    path: String,
+    add_to_cache: Option<bool>,
+) -> Result<AppConfig, AppError> {
+    let config = default_store()?.select_notes_dir(&path, add_to_cache.unwrap_or(true))?;
+    let _ = app.emit("notes-changed", ());
+    let _ = app.emit("config-changed", &config);
+    Ok(config)
+}
+
+#[tauri::command]
+fn notes_dirs_add(app: AppHandle, path: String) -> Result<AppConfig, AppError> {
+    let config = default_store()?.add_notes_dir(&path)?;
+    let _ = app.emit("config-changed", &config);
+    Ok(config)
+}
+
+#[tauri::command]
+fn open_file_classify(file_path: String) -> Result<OpenedFileClassification, AppError> {
+    default_store()?.classify_opened_file(&file_path)
+}
+
+#[tauri::command]
 fn config_get() -> Result<AppConfig, AppError> {
     default_store()?.load_config()
 }
@@ -188,6 +220,7 @@ fn copy_background_image(_app: AppHandle, source_path: String) -> Result<String,
 fn config_save(app: AppHandle, config: AppConfig) -> Result<AppConfig, AppError> {
     let store = default_store()?;
     let previous = store.load_config()?;
+    let notes_dir_changed = previous.notes_dir != config.notes_dir;
     desktop::apply_runtime_config(&app, &previous, &config).map_err(|error| {
         match error.downcast::<AppError>() {
             Ok(app_error) => *app_error,
@@ -203,6 +236,9 @@ fn config_save(app: AppHandle, config: AppConfig) -> Result<AppConfig, AppError>
         eprintln!("failed to refresh desktop shell state: {error}");
     }
     let _ = app.emit("config-changed", &saved);
+    if notes_dir_changed {
+        let _ = app.emit("notes-changed", ());
+    }
     Ok(saved)
 }
 
@@ -286,6 +322,10 @@ pub fn run() {
             categories_create,
             categories_rename,
             categories_delete,
+            notes_dirs_list,
+            notes_dirs_select,
+            notes_dirs_add,
+            open_file_classify,
             config_get,
             copy_background_image,
             config_save,

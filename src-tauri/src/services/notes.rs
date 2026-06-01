@@ -26,6 +26,8 @@ pub struct AppConfig {
     #[serde(default = "default_locale")]
     pub locale: String,
     pub notes_dir: String,
+    #[serde(default)]
+    pub notes_dirs: Vec<String>,
     pub global_shortcut: String,
     pub close_to_tray: bool,
     pub autostart: bool,
@@ -196,6 +198,14 @@ struct MetadataFile {
     notes: Vec<NoteMetadata>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenedFileClassification {
+    pub file_path: String,
+    pub known: bool,
+    pub matched_notes_dir: Option<String>,
+}
+
 #[derive(Debug, Clone)]
 pub struct NoteStore {
     base_dir: PathBuf,
@@ -292,6 +302,65 @@ fn is_safe_notes_dir(path: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
+fn normalize_notes_dir(path: &str) -> String {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let p = Path::new(trimmed);
+    let normalized = fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    // Strip \\?\ extended-length prefix on Windows
+    let normalized_str = normalized.to_string_lossy().to_string();
+    let normalized_str = normalized_str
+        .strip_prefix("\\\\?\\")
+        .unwrap_or(&normalized_str);
+    normalized_str.trim_end_matches(['/', '\\']).to_string()
+}
+
+use std::hash::{Hash, Hasher};
+
+fn sanitize_path_for_key(path: &Path) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    path.to_string_lossy().to_lowercase().hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+fn dedupe_notes_dirs(dirs: &[String]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut result = Vec::new();
+    for dir in dirs {
+        let normalized = normalize_notes_dir(dir);
+        if normalized.is_empty() {
+            continue;
+        }
+        let lower = normalized.to_lowercase();
+        if seen.insert(lower) {
+            result.push(normalized);
+        }
+    }
+    result
+}
+
+fn is_path_under_known_dir(file_path: &Path, notes_dirs: &[String]) -> Option<String> {
+    let file_parent = fs::canonicalize(file_path)
+        .ok()
+        .or_else(|| file_path.parent().and_then(|p| fs::canonicalize(p).ok()))
+        .or_else(|| file_path.parent().map(|p| p.to_path_buf()))?;
+
+    let file_parent_str = file_parent.to_string_lossy().to_string();
+    let file_parent_str = file_parent_str
+        .strip_prefix("\\\\?\\")
+        .unwrap_or(&file_parent_str);
+    let file_parent_str = file_parent_str.to_lowercase();
+
+    notes_dirs
+        .iter()
+        .map(|d| (d, normalize_notes_dir(d).to_lowercase()))
+        .filter(|(_, dn)| file_parent_str.starts_with(dn.as_str()))
+        .max_by_key(|(_, dn)| dn.len())
+        .map(|(d, _)| d.clone())
+}
+
 impl NoteStore {
     pub fn new(base_dir: PathBuf) -> Self {
         Self { base_dir }
@@ -302,7 +371,19 @@ impl NoteStore {
     }
 
     pub fn metadata_path(&self) -> PathBuf {
-        self.base_dir.join("metadata.json")
+        let notes_dir = self
+            .notes_dir()
+            .unwrap_or_else(|_| self.base_dir.join("notes"));
+        let key = sanitize_path_for_key(&notes_dir);
+        let dir = self.base_dir.join("metadata");
+        dir.join(format!("{key}.json"))
+    }
+
+    #[allow(dead_code)]
+    fn metadata_path_for_dir(&self, notes_dir: &Path) -> PathBuf {
+        let key = sanitize_path_for_key(notes_dir);
+        let dir = self.base_dir.join("metadata");
+        dir.join(format!("{key}.json"))
     }
 
     pub fn config_path(&self) -> PathBuf {
@@ -319,30 +400,61 @@ impl NoteStore {
         let path = self.config_path();
         if !path.exists() {
             let config = self.default_config();
-            self.save_config(config.clone())?;
+            self.save_config_raw(&config)?;
             self.mark_macos_shortcut_migration_handled()?;
             return Ok(config);
         }
 
         let mut config: AppConfig = serde_json::from_str(&fs::read_to_string(&path)?)?;
+        // Normalize current notes_dir
+        config.notes_dir = normalize_notes_dir(&config.notes_dir);
+        if config.notes_dir.is_empty() {
+            config.notes_dir = normalize_notes_dir(&self.default_config().notes_dir);
+        }
         if is_safe_notes_dir(Path::new(&config.notes_dir)).is_err() {
-            config.notes_dir = self.default_config().notes_dir;
-            write_json_atomic(&path, &config)?;
+            config.notes_dir = normalize_notes_dir(&self.default_config().notes_dir);
+        }
+        // Ensure notes_dirs are valid and contain current dir
+        config.notes_dirs = dedupe_notes_dirs(&config.notes_dirs);
+        let current_lower = config.notes_dir.to_lowercase();
+        if !config
+            .notes_dirs
+            .iter()
+            .any(|d| d.to_lowercase() == current_lower)
+        {
+            config.notes_dirs.push(config.notes_dir.clone());
         }
         fs::create_dir_all(&config.notes_dir)?;
         if self.migrate_macos_shortcut_default(&mut config)? {
-            write_json_atomic(&path, &config)?;
+            self.save_config_raw(&config)?;
+        } else {
+            self.save_config_raw(&config)?;
         }
         Ok(config)
+    }
+
+    fn save_config_raw(&self, config: &AppConfig) -> Result<(), AppError> {
+        self.ensure_base_dir()?;
+        write_json_atomic(&self.config_path(), config)
     }
 
     pub fn save_config(&self, mut config: AppConfig) -> Result<AppConfig, AppError> {
         self.ensure_base_dir()?;
         config.notes_dir = ensure_notes_suffix(&config.notes_dir);
+        config.notes_dir = normalize_notes_dir(&config.notes_dir);
+        config.notes_dirs = dedupe_notes_dirs(&config.notes_dirs);
+        let current_lower = config.notes_dir.to_lowercase();
+        if !config
+            .notes_dirs
+            .iter()
+            .any(|d| d.to_lowercase() == current_lower)
+        {
+            config.notes_dirs.push(config.notes_dir.clone());
+        }
         config.tab_indent_size = config.tab_indent_size.clamp(1, 8);
         is_safe_notes_dir(Path::new(&config.notes_dir))?;
         fs::create_dir_all(&config.notes_dir)?;
-        write_json_atomic(&self.config_path(), &config)?;
+        self.save_config_raw(&config)?;
         Ok(config)
     }
 
@@ -506,6 +618,83 @@ impl NoteStore {
         Ok(())
     }
 
+    pub fn list_notes_dirs(&self) -> Result<Vec<String>, AppError> {
+        let config = self.load_config()?;
+        Ok(config.notes_dirs)
+    }
+
+    pub fn select_notes_dir(&self, path: &str, add_to_cache: bool) -> Result<AppConfig, AppError> {
+        let normalized = normalize_notes_dir(path);
+        if normalized.is_empty() {
+            return Err(AppError::new("emptyPath", "笔记目录路径不能为空"));
+        }
+        is_safe_notes_dir(Path::new(&normalized))?;
+        fs::create_dir_all(&normalized)?;
+
+        let mut config = self.load_config()?;
+        config.notes_dir = normalized;
+        config.notes_dirs = dedupe_notes_dirs(&config.notes_dirs);
+        if add_to_cache {
+            let current_lower = config.notes_dir.to_lowercase();
+            if !config
+                .notes_dirs
+                .iter()
+                .any(|d| d.to_lowercase() == current_lower)
+            {
+                config.notes_dirs.push(config.notes_dir.clone());
+            }
+        }
+        self.save_config_raw(&config)?;
+        // Ensure metadata file exists for this dir and scan existing files
+        let meta_path = self.metadata_path();
+        if let Some(parent) = meta_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        if !meta_path.exists() {
+            self.save_metadata(&self.rebuild_metadata()?)?;
+        }
+        Ok(config)
+    }
+
+    pub fn add_notes_dir(&self, path: &str) -> Result<AppConfig, AppError> {
+        let normalized = normalize_notes_dir(path);
+        if normalized.is_empty() {
+            return Err(AppError::new("emptyPath", "笔记目录路径不能为空"));
+        }
+        is_safe_notes_dir(Path::new(&normalized))?;
+        fs::create_dir_all(&normalized)?;
+
+        let mut config = self.load_config()?;
+        config.notes_dirs = dedupe_notes_dirs(&config.notes_dirs);
+        let lower = normalized.to_lowercase();
+        if !config.notes_dirs.iter().any(|d| d.to_lowercase() == lower) {
+            config.notes_dirs.push(normalized);
+        }
+        self.save_config_raw(&config)?;
+        Ok(config)
+    }
+
+    pub fn classify_opened_file(
+        &self,
+        file_path: &str,
+    ) -> Result<OpenedFileClassification, AppError> {
+        let path = Path::new(file_path);
+        let config = self.load_config()?;
+        let matched = if path.exists() {
+            // For existing files, check if they're inside any known notes dir
+            is_path_under_known_dir(path, &config.notes_dirs)
+        } else {
+            // For non-existing files, check parent dir
+            path.parent()
+                .and_then(|p| is_path_under_known_dir(p, &config.notes_dirs))
+        };
+        Ok(OpenedFileClassification {
+            file_path: file_path.to_string(),
+            known: matched.is_some(),
+            matched_notes_dir: matched,
+        })
+    }
+
     pub fn list_categories(&self) -> Result<Vec<String>, AppError> {
         let notes_dir = self.notes_dir()?;
         fs::create_dir_all(&notes_dir)?;
@@ -656,9 +845,17 @@ impl NoteStore {
     }
 
     fn default_config(&self) -> AppConfig {
+        let default_notes = self.base_dir.join("notes").to_string_lossy().to_string();
+        let normalized_notes = normalize_notes_dir(&default_notes);
+        let notes_dir = if normalized_notes.is_empty() {
+            default_notes.clone()
+        } else {
+            normalized_notes
+        };
         AppConfig {
             locale: default_locale(),
-            notes_dir: self.base_dir.join("notes").to_string_lossy().to_string(),
+            notes_dir: notes_dir.clone(),
+            notes_dirs: vec![notes_dir],
             #[cfg(target_os = "macos")]
             global_shortcut: DEFAULT_MACOS_GLOBAL_SHORTCUT.into(),
             #[cfg(not(target_os = "macos"))]
@@ -735,8 +932,12 @@ impl NoteStore {
         self.ensure_base_dir()?;
         let config = self.load_config()?;
         fs::create_dir_all(&config.notes_dir)?;
-        if !self.metadata_path().exists() {
-            self.save_metadata(&MetadataFile::default())?;
+        let meta_path = self.metadata_path();
+        if let Some(parent) = meta_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        if !meta_path.exists() {
+            self.save_metadata(&self.rebuild_metadata()?)?;
         }
         Ok(())
     }
@@ -1171,9 +1372,11 @@ mod tests {
         assert!(default_config.notes_dir.ends_with("notes"));
 
         let custom_notes_dir = store.base_dir().join("custom-notes");
+        let notes_path = custom_notes_dir.join("notes").to_string_lossy().to_string();
         let saved = AppConfig {
             locale: "en-US".into(),
-            notes_dir: custom_notes_dir.join("notes").to_string_lossy().to_string(),
+            notes_dir: notes_path.clone(),
+            notes_dirs: vec![notes_path],
             global_shortcut: "Alt+Space".into(),
             close_to_tray: false,
             autostart: true,
@@ -1206,7 +1409,24 @@ mod tests {
         store.save_config(saved.clone()).expect("save config");
 
         let loaded = store.load_config().expect("reload config");
-        assert_eq!(loaded, saved);
+        // Compare fields individually since path normalization may differ
+        assert_eq!(loaded.locale, saved.locale);
+        assert_eq!(loaded.global_shortcut, saved.global_shortcut);
+        assert_eq!(loaded.close_to_tray, saved.close_to_tray);
+        assert_eq!(loaded.autostart, saved.autostart);
+        assert_eq!(loaded.default_view_mode, saved.default_view_mode);
+        assert_eq!(loaded.note_auto_save, saved.note_auto_save);
+        assert_eq!(loaded.note_surface_auto_save, saved.note_surface_auto_save);
+        assert_eq!(loaded.tile_color, saved.tile_color);
+        assert_eq!(loaded.tile_color_mode, saved.tile_color_mode);
+        assert_eq!(loaded.theme, saved.theme);
+        assert_eq!(loaded.font_size, saved.font_size);
+        assert_eq!(loaded.surface_font_size, saved.surface_font_size);
+        assert_eq!(loaded.tab_indent_size, saved.tab_indent_size);
+        assert_eq!(
+            normalize_notes_dir(&loaded.notes_dir),
+            normalize_notes_dir(&saved.notes_dir)
+        );
         assert!(custom_notes_dir.exists());
     }
 
@@ -1396,5 +1616,89 @@ mod tests {
             fs::read_to_string(export_path).expect("read exported markdown"),
             content
         );
+    }
+
+    #[test]
+    fn manages_multiple_notes_directories() {
+        let root = test_root("multi-dir");
+        let store = NoteStore::new(root);
+        let config = store.load_config().expect("load config");
+
+        assert!(!config.notes_dirs.is_empty());
+        assert!(config
+            .notes_dirs
+            .iter()
+            .any(|d| d.to_lowercase() == config.notes_dir.to_lowercase()));
+
+        // Add a second directory
+        let dir2 = test_root("multi-dir-2").join("notes");
+        fs::create_dir_all(&dir2).unwrap();
+        let dir2_str = normalize_notes_dir(&dir2.to_string_lossy());
+        let updated = store.add_notes_dir(&dir2_str).expect("add dir");
+        assert!(updated.notes_dirs.len() >= 2);
+
+        // Select second directory
+        let selected = store.select_notes_dir(&dir2_str, true).expect("select dir");
+        assert_eq!(
+            normalize_notes_dir(&selected.notes_dir),
+            normalize_notes_dir(&dir2_str)
+        );
+
+        // Create a note in dir2
+        store
+            .create_note(SaveNoteRequest {
+                title: "Note in dir2".into(),
+                content: "content".into(),
+                category: String::new(),
+            })
+            .expect("create note in dir2");
+        let notes_dir2 = store.list_notes().expect("list notes dir2");
+        assert_eq!(notes_dir2.len(), 1);
+
+        // Switch back to first dir
+        store
+            .select_notes_dir(&config.notes_dir, true)
+            .expect("switch back");
+        let notes_dir1 = store.list_notes().expect("list notes dir1");
+        assert!(notes_dir1.is_empty(), "first dir should still be empty");
+    }
+
+    #[test]
+    fn classifies_opened_files() {
+        let root = test_root("classify");
+        let store = NoteStore::new(root);
+        let config = store.load_config().unwrap();
+        let notes_dir = &config.notes_dir;
+
+        // File outside known dirs
+        let result = store
+            .classify_opened_file("C:\\some\\unknown\\file.md")
+            .unwrap();
+        assert!(!result.known);
+
+        // File inside known dir
+        let inside = PathBuf::from(notes_dir).join("test.md");
+        let result = store
+            .classify_opened_file(&inside.to_string_lossy())
+            .unwrap();
+        assert!(result.known);
+    }
+
+    #[test]
+    fn notes_dirs_list_includes_current_dir() {
+        let root = test_root("dirs-list");
+        let store = NoteStore::new(root);
+        let dirs = store.list_notes_dirs().expect("list dirs");
+        let config = store.load_config().expect("load config");
+        assert!(dirs
+            .iter()
+            .any(|d| normalize_notes_dir(d) == normalize_notes_dir(&config.notes_dir)));
+    }
+
+    #[test]
+    fn dedupes_and_normalizes_notes_dirs() {
+        let dirs =
+            dedupe_notes_dirs(&["C:\\Notes".into(), "c:\\notes\\".into(), "D:\\Other".into()]);
+        assert_eq!(dirs.len(), 2);
     }
 }

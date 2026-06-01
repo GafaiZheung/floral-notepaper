@@ -57,6 +57,18 @@
       "rename": "重命名",
       "uncategorized": "未分类"
     },
+    "notesDir": {
+      "label": "笔记目录",
+      "select": "切换笔记目录",
+      "add": "添加目录"
+    },
+    "externalPathPrompt": {
+      "title": "记录新的笔记目录？",
+      "message": "打开的文件不在已知笔记目录下。是否将以下路径记录为笔记目录？",
+      "pathLabel": "笔记目录路径",
+      "save": "保存并切换",
+      "cancel": "取消记录"
+    },
     "confirm": {
       "unsavedExternalFile": "「{{title}}」有未保存的更改，是否保存到原文件？"
     },
@@ -192,6 +204,7 @@
       "zhHK": "繁體中文"
     },
     "notesDir": "笔记目录",
+    "notesDirs": "已记录笔记目录",
     "openAtCursor": "快捷键打开时跟随鼠标位置",
     "quickNoteShortcut": "快捷记录快捷键",
     "rememberSurfaceSize": "记住小窗尺寸",

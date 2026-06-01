@@ -31,6 +31,7 @@ describe("settings api", () => {
     const config: AppConfig = {
       locale: "zh-CN",
       notesDir: "D:\\notes",
+      notesDirs: ["D:\\notes"],
       globalShortcut: "Ctrl+Space",
       closeToTray: true,
       autostart: false,
@@ -61,6 +62,7 @@ describe("settings api", () => {
     const config: AppConfig = {
       locale: "zh-CN",
       notesDir: "D:\\notes",
+      notesDirs: ["D:\\notes"],
       globalShortcut: "Alt+Space",
       closeToTray: false,
       autostart: true,

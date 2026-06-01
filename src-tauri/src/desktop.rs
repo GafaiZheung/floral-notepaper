@@ -1795,6 +1795,7 @@ mod tests {
         let config = AppConfig {
             locale: "zh-CN".into(),
             notes_dir: "D:\\notes".into(),
+            notes_dirs: vec!["D:\\notes".into()],
             global_shortcut: "Ctrl+Shift+K".into(),
             close_to_tray: true,
             autostart: false,
@@ -1821,6 +1822,7 @@ mod tests {
             surface_width: None,
             surface_height: None,
             toggle_visibility_shortcut: "Ctrl+Shift+K".into(),
+            open_at_cursor: true,
         };
 
         let error = match shortcut_bindings_from_config(&config) {
@@ -1844,6 +1846,7 @@ mod tests {
         let previous = AppConfig {
             locale: "zh-CN".into(),
             notes_dir: "D:\\notes".into(),
+            notes_dirs: vec!["D:\\notes".into()],
             global_shortcut: "Ctrl+Space".into(),
             close_to_tray: true,
             autostart: false,
@@ -1870,10 +1873,12 @@ mod tests {
             surface_width: None,
             surface_height: None,
             toggle_visibility_shortcut: String::new(),
+            open_at_cursor: true,
         };
         let next = AppConfig {
             locale: "en-US".into(),
             notes_dir: "D:\\other-notes".into(),
+            notes_dirs: vec!["D:\\other-notes".into()],
             global_shortcut: "Alt+Space".into(),
             close_to_tray: false,
             autostart: true,
@@ -1900,6 +1905,7 @@ mod tests {
             surface_width: None,
             surface_height: None,
             toggle_visibility_shortcut: "Ctrl+Shift+H".into(),
+            open_at_cursor: true,
         };
 
         assert_eq!(

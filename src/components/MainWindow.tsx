@@ -10,8 +10,12 @@ import {
   getConfig,
   normalizeViewMode,
   saveConfig,
+  selectNotesDir,
+  addNotesDir,
+  classifyOpenedFile,
 } from "../features/settings/api";
 import type { AppConfig, ViewMode } from "../features/settings/types";
+import { displayPathLabel, parentDirFromFilePath } from "../features/settings/notePaths";
 import { normalizeTileColor } from "../features/settings/tileColor";
 import { BackgroundLayer } from "./BackgroundLayer";
 import { SettingsPanel } from "./SettingsPanel";
@@ -321,6 +325,10 @@ export function MainWindow({
   const [categoryMenu, setCategoryMenu] = useState<CategoryMenuState | null>(null);
   const [categoryMenuClosing, setCategoryMenuClosing] = useState(false);
   const [categoryMenuConfirmDelete, setCategoryMenuConfirmDelete] = useState(false);
+  const [pendingPathPrompt, setPendingPathPrompt] = useState<{
+    filePath: string;
+    inputValue: string;
+  } | null>(null);
   const contentRef = useRef<HTMLTextAreaElement>(null);
   const externalFileMtimeRef = useRef<number>(0);
   const lastExternalSaveRef = useRef<number>(0);
@@ -620,7 +628,20 @@ export function MainWindow({
 
   useEffect(() => {
     const unlisten = listen<string>("open-external-file", (event) => {
+      // Always open as external file first
       void loadExternalFile(event.payload);
+      // Then check if we should prompt to record the directory
+      void classifyOpenedFile(event.payload)
+        .then((result) => {
+          if (!result.known) {
+            const suggestedDir = parentDirFromFilePath(event.payload);
+            setPendingPathPrompt({
+              filePath: event.payload,
+              inputValue: suggestedDir || event.payload,
+            });
+          }
+        })
+        .catch(() => {});
     });
     return () => {
       void unlisten.then((fn) => fn());
@@ -833,13 +854,11 @@ export function MainWindow({
   };
 
   const handleChooseNotesDir = async () => {
-    if (!settingsConfig) return;
-
     setErrorMessage(null);
     try {
       const notesDir = await chooseNotesDirectory();
       if (!notesDir) return;
-      handleSettingsChange({ ...settingsConfig, notesDir });
+      await switchNotesDir(notesDir, true);
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
     }
@@ -1056,6 +1075,26 @@ export function MainWindow({
     try {
       await moveNoteCategory(noteId, targetCategory);
       await refreshNotes();
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
+    }
+  };
+
+  const switchNotesDir = async (path: string, addToCache = true) => {
+    if (saveState === "dirty" && selectedId) {
+      await saveCurrentNote();
+    }
+    setErrorMessage(null);
+    try {
+      const savedConfig = await selectNotesDir(path, addToCache);
+      setSettingsConfig(savedConfig);
+      setSavedNotesDir(savedConfig.notesDir);
+      const loaded = await refreshNotes();
+      if (loaded[0]) {
+        await loadNote(loaded[0].id);
+      } else {
+        clearCurrentNote();
+      }
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
     }
@@ -1421,6 +1460,45 @@ export function MainWindow({
                 )}
               </div>
             </div>
+
+            {/* Notes directory selector */}
+            {settingsConfig && (
+              <div className="px-3 pb-1.5 shrink-0">
+                <div className="flex items-center gap-1.5">
+                  <select
+                    value={settingsConfig.notesDir}
+                    onChange={(e) => void switchNotesDir(e.target.value)}
+                    className="flex-1 min-w-0 h-7 rounded-lg text-[11px] font-mono text-ink-faint bg-paper-warm/80 border border-paper-deep/40 px-2 appearance-none cursor-pointer"
+                    title={t("main.notesDir.select", { defaultValue: "切换笔记目录" })}
+                  >
+                    {(settingsConfig.notesDirs ?? [settingsConfig.notesDir]).map((dir) => (
+                      <option key={dir} value={dir}>
+                        {displayPathLabel(dir)}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => {
+                      void handleChooseNotesDir();
+                    }}
+                    className="h-7 w-7 flex items-center justify-center rounded-lg text-[10px] text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 transition-colors cursor-pointer shrink-0"
+                    title={t("main.notesDir.add", { defaultValue: "添加目录" })}
+                  >
+                    <svg
+                      width="12"
+                      height="12"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                    >
+                      <path d="M12 5v14M5 12h14" />
+                    </svg>
+                  </button>
+                </div>
+              </div>
+            )}
 
             <div className="px-3 pb-2 shrink-0 space-y-1">
               <button
@@ -2368,6 +2446,75 @@ export function MainWindow({
               </button>
             </div>
           )}
+        </div>
+      )}
+
+      {/* External file path recording prompt */}
+      {pendingPathPrompt && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm"
+          onClick={() => setPendingPathPrompt(null)}
+        >
+          <div
+            className="bg-cloud border border-paper-deep/40 rounded-2xl shadow-lg p-5 w-[420px] max-w-[90vw]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-[14px] font-display font-medium text-ink-soft mb-2">
+              {t("main.externalPathPrompt.title", {
+                defaultValue: "记录新的笔记目录？",
+              })}
+            </h3>
+            <p className="text-[12px] text-ink-faint mb-3 leading-relaxed">
+              {t("main.externalPathPrompt.message", {
+                defaultValue: "打开的文件不在已知笔记目录下。是否将以下路径记录为笔记目录？",
+              })}
+            </p>
+            <label className="block text-[11px] text-ink-faint mb-1">
+              {t("main.externalPathPrompt.pathLabel", {
+                defaultValue: "笔记目录路径",
+              })}
+            </label>
+            <input
+              type="text"
+              value={pendingPathPrompt.inputValue}
+              onChange={(e) =>
+                setPendingPathPrompt({
+                  ...pendingPathPrompt,
+                  inputValue: e.target.value,
+                })
+              }
+              className="w-full px-2.5 h-8 rounded-lg text-[12px] font-mono text-ink bg-paper-warm/80 border border-paper-deep/40 focus:border-bamboo/30 mb-4"
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setPendingPathPrompt(null)}
+                className="px-4 py-1.5 rounded-lg text-[12px] text-ink-faint hover:bg-paper-warm border border-paper-deep/30 transition-colors cursor-pointer"
+              >
+                {t("main.externalPathPrompt.cancel", {
+                  defaultValue: "取消记录",
+                })}
+              </button>
+              <button
+                onClick={async () => {
+                  const path = pendingPathPrompt.inputValue.trim();
+                  if (!path) return;
+                  setErrorMessage(null);
+                  try {
+                    await addNotesDir(path);
+                    await switchNotesDir(path, true);
+                    setPendingPathPrompt(null);
+                  } catch (error) {
+                    setErrorMessage(getErrorMessage(error));
+                  }
+                }}
+                className="px-4 py-1.5 rounded-lg text-[12px] text-white bg-bamboo hover:bg-bamboo-light transition-colors cursor-pointer"
+              >
+                {t("main.externalPathPrompt.save", {
+                  defaultValue: "保存并切换",
+                })}
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

@@ -46,3 +46,25 @@ export function normalizeViewMode(value: string): ViewMode {
 
   return "split";
 }
+
+export interface OpenedFileClassification {
+  filePath: string;
+  known: boolean;
+  matchedNotesDir: string | null;
+}
+
+export function listNotesDirs(): Promise<string[]> {
+  return invoke("notes_dirs_list");
+}
+
+export function selectNotesDir(path: string, addToCache?: boolean): Promise<AppConfig> {
+  return invoke("notes_dirs_select", { path, addToCache: addToCache ?? true });
+}
+
+export function addNotesDir(path: string): Promise<AppConfig> {
+  return invoke("notes_dirs_add", { path });
+}
+
+export function classifyOpenedFile(filePath: string): Promise<OpenedFileClassification> {
+  return invoke("open_file_classify", { filePath });
+}

@@ -57,6 +57,18 @@
       "rename": "重新命名",
       "uncategorized": "未分類"
     },
+    "notesDir": {
+      "label": "筆記目錄",
+      "select": "切換筆記目錄",
+      "add": "添加目錄"
+    },
+    "externalPathPrompt": {
+      "title": "記錄新的筆記目錄？",
+      "message": "開啟的檔案不在已知筆記目錄下。是否將以下路徑記錄為筆記目錄？",
+      "pathLabel": "筆記目錄路徑",
+      "save": "儲存並切換",
+      "cancel": "取消記錄"
+    },
     "confirm": {
       "unsavedExternalFile": "「{{title}}」有未儲存的變更，是否儲存到原檔案？"
     },
@@ -192,6 +204,7 @@
       "zhHK": "繁體中文"
     },
     "notesDir": "筆記目錄",
+    "notesDirs": "已記錄筆記目錄",
     "openAtCursor": "快捷鍵開啟時跟隨滑鼠位置",
     "quickNoteShortcut": "快捷記錄快捷鍵",
     "rememberSurfaceSize": "記住小窗尺寸",

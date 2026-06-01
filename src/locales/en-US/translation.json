@@ -57,6 +57,18 @@
       "rename": "Rename",
       "uncategorized": "Uncategorized"
     },
+    "notesDir": {
+      "label": "Notes Directory",
+      "select": "Switch notes directory",
+      "add": "Add directory"
+    },
+    "externalPathPrompt": {
+      "title": "Record new notes directory?",
+      "message": "The opened file is not in any known notes directory. Save this path as a notes directory?",
+      "pathLabel": "Notes directory path",
+      "save": "Save & Switch",
+      "cancel": "Don't record"
+    },
     "confirm": {
       "unsavedExternalFile": "\"{{title}}\" has unsaved changes. Save to the original file?"
     },
@@ -192,6 +204,7 @@
       "zhHK": "繁體中文"
     },
     "notesDir": "Notes directory",
+    "notesDirs": "Saved notes directories",
     "openAtCursor": "Open near cursor with shortcut",
     "quickNoteShortcut": "Quick Note shortcut",
     "rememberSurfaceSize": "Remember surface size",
