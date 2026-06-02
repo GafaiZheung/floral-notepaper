@@ -46,6 +46,14 @@
     "copy": "复制",
     "emptyHint": "预览区会显示当前笔记内容"
   },
+  "mermaid": {
+    "clickToZoom": "点击放大",
+    "downloadPng": "下载 PNG",
+    "downloadSvg": "下载 SVG",
+    "renderError": "Mermaid 渲染错误",
+    "rendering": "渲染图表中…",
+    "zoomIn": "放大"
+  },
   "main": {
     "category": {
       "confirmDelete": "确认删除「{{category}}」？",

@@ -8,6 +8,7 @@ import rehypeKatex from "rehype-katex";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Components } from "react-markdown";
 import "katex/dist/katex.min.css";
+import { MermaidDiagram } from "./MermaidDiagram";
 
 function CodeBlock({ children }: { children: React.ReactNode }) {
   const { t } = useTranslation();
@@ -100,7 +101,14 @@ const components: Components = {
     <hr className="my-6 border-none h-px bg-gradient-to-r from-transparent via-paper-deep to-transparent" />
   ),
   code: ({ className, children }) => {
-    const isBlock = className?.startsWith("language-") || String(children).includes("\n");
+    const isMermaid = className === "language-mermaid";
+    const childText = extractText(children);
+
+    if (isMermaid) {
+      return <MermaidDiagram chart={childText} />;
+    }
+
+    const isBlock = className?.startsWith("language-") || childText.includes("\n");
     if (isBlock) {
       return (
         <code className="text-[0.85em] font-mono text-ink-soft leading-[1.8] whitespace-pre">

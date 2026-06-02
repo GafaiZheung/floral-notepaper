@@ -10,6 +10,9 @@ use services::notes::{
 use std::{fs, path::PathBuf};
 use tauri::{AppHandle, Emitter};
 
+const APP_FONT_FAMILY: &str = "HarmonyOS Sans SC";
+const APP_FONT_BYTES: &[u8] = include_bytes!("../../src/assets/fonts/HarmonyOS_Sans_SC.ttf");
+
 #[tauri::command]
 fn app_name() -> Result<String, AppError> {
     let locale = Locale::from_tag(&default_store()?.load_config()?.locale);
@@ -101,6 +104,74 @@ fn save_external_file(path: String, content: String) -> Result<(), AppError> {
         })?;
     }
     std::fs::write(&path, content).map_err(|e| AppError {
+        code: "io".into(),
+        message: e.to_string(),
+        details: Default::default(),
+    })
+}
+
+#[tauri::command]
+fn convert_svg_to_png(svg: String, path: String) -> Result<(), AppError> {
+    // Load system fonts and register generic family mappings.
+    // Mermaid SVGs use font-family like "var(--font-body), sans-serif"
+    // usvg can't resolve CSS vars, so it falls back to generic "sans-serif".
+    // We must map generic families to actual system fonts.
+    let mut fontdb = fontdb::Database::new();
+    fontdb.load_system_fonts();
+    fontdb.load_font_source(fontdb::Source::Binary(std::sync::Arc::new(APP_FONT_BYTES)));
+    fontdb.set_sans_serif_family(APP_FONT_FAMILY);
+    fontdb.set_serif_family("Times New Roman");
+    fontdb.set_monospace_family("Consolas");
+
+    let mut opts = usvg::Options::default();
+    // Default when the SVG's font-family can't be resolved at all
+    opts.font_family = APP_FONT_FAMILY.into();
+    opts.font_size = 14.0;
+    opts.fontdb = std::sync::Arc::new(fontdb);
+
+    let tree = usvg::Tree::from_str(&svg, &opts).map_err(|e| AppError {
+        code: "svgParse".into(),
+        message: e.to_string(),
+        details: Default::default(),
+    })?;
+
+    let size = tree.size();
+    let pixmap_size =
+        tiny_skia::IntSize::from_wh((size.width() as u32).max(1), (size.height() as u32).max(1))
+            .ok_or_else(|| AppError {
+                code: "svgRender".into(),
+                message: "invalid SVG dimensions".into(),
+                details: Default::default(),
+            })?;
+
+    let mut pixmap =
+        tiny_skia::Pixmap::new(pixmap_size.width(), pixmap_size.height()).ok_or_else(|| {
+            AppError {
+                code: "svgRender".into(),
+                message: "failed to create pixmap".into(),
+                details: Default::default(),
+            }
+        })?;
+
+    // Fill with white so background is not transparent
+    pixmap.fill(tiny_skia::Color::from_rgba8(255, 255, 255, 255));
+
+    resvg::render(&tree, usvg::Transform::default(), &mut pixmap.as_mut());
+
+    let png_bytes = pixmap.encode_png().map_err(|e| AppError {
+        code: "pngEncode".into(),
+        message: e.to_string(),
+        details: Default::default(),
+    })?;
+
+    if let Some(parent) = PathBuf::from(&path).parent() {
+        std::fs::create_dir_all(parent).map_err(|e| AppError {
+            code: "io".into(),
+            message: e.to_string(),
+            details: Default::default(),
+        })?;
+    }
+    std::fs::write(&path, png_bytes).map_err(|e| AppError {
         code: "io".into(),
         message: e.to_string(),
         details: Default::default(),
@@ -337,6 +408,7 @@ pub fn run() {
             notes_rename_file_stem,
             read_external_file,
             save_external_file,
+            convert_svg_to_png,
             get_file_modified_time,
             categories_list,
             categories_create,

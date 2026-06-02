@@ -46,6 +46,14 @@
     "copy": "Copy",
     "emptyHint": "Preview of the current note"
   },
+  "mermaid": {
+    "clickToZoom": "Click to enlarge",
+    "downloadPng": "Download PNG",
+    "downloadSvg": "Download SVG",
+    "renderError": "Mermaid render error",
+    "rendering": "Rendering diagram…",
+    "zoomIn": "Enlarge"
+  },
   "main": {
     "category": {
       "confirmDelete": "Delete \"{{category}}\"?",
