@@ -148,7 +148,9 @@
   "noteMenu": {
     "delete": "刪除筆記",
     "export": "匯出 Markdown",
-    "moveToCategory": "移至分類…"
+    "moveToCategory": "移至分類…",
+    "renameFile": "重新命名檔案",
+    "syncTitleToFile": "標題同步為檔案名稱"
   },
   "notepad": {
     "button": {

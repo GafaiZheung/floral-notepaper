@@ -113,6 +113,8 @@ pub struct NoteMetadata {
     pub title: String,
     pub file_name: String,
     #[serde(default)]
+    pub file_stem: String,
+    #[serde(default)]
     pub category: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
@@ -126,6 +128,8 @@ pub struct Note {
     pub id: String,
     pub title: String,
     pub file_name: String,
+    #[serde(default)]
+    pub file_stem: String,
     #[serde(default)]
     pub category: String,
     pub created_at: DateTime<Utc>,
@@ -495,6 +499,7 @@ impl NoteStore {
             id: metadata.id,
             title: metadata.title,
             file_name: metadata.file_name,
+            file_stem: metadata.file_stem,
             category: metadata.category,
             created_at: metadata.created_at,
             updated_at: metadata.updated_at,
@@ -518,6 +523,7 @@ impl NoteStore {
             id: id.clone(),
             title: request.title,
             file_name: file_name.clone(),
+            file_stem: file_stem_display(&file_name),
             category: category.clone(),
             created_at: now,
             updated_at: now,
@@ -534,6 +540,7 @@ impl NoteStore {
             id,
             title: metadata.title,
             file_name,
+            file_stem: metadata.file_stem,
             category,
             created_at: now,
             updated_at: now,
@@ -574,6 +581,7 @@ impl NoteStore {
 
         note.title = request.title;
         note.file_name = new_file_name.clone();
+        note.file_stem = file_stem_display(&new_file_name);
         note.category = new_category.clone();
         note.updated_at = now;
         note.word_count = word_count;
@@ -583,6 +591,7 @@ impl NoteStore {
             id: note.id.clone(),
             title: note.title.clone(),
             file_name: note.file_name.clone(),
+            file_stem: note.file_stem.clone(),
             category: new_category,
             created_at: note.created_at,
             updated_at: note.updated_at,
@@ -590,6 +599,56 @@ impl NoteStore {
             content: request.content,
         };
 
+        self.save_metadata(&metadata_file)?;
+        Ok(result)
+    }
+
+    pub fn rename_file_stem(&self, id: &str, new_stem: &str) -> Result<NoteMetadata, AppError> {
+        self.ensure_storage()?;
+        let mut metadata_file = self.load_metadata()?;
+        let note = metadata_file
+            .notes
+            .iter_mut()
+            .find(|note| note.id == id)
+            .ok_or_else(|| AppError::note_not_found(id))?;
+
+        let safe_stem = safe_file_stem(new_stem);
+        let new_file_name = if safe_stem.is_empty() {
+            format!("{id}.md")
+        } else {
+            format!("{id}_{safe_stem}.md")
+        };
+
+        // Dedup: if target file already exists (different note), append -copy
+        let new_path = self.note_path_in_category(&new_file_name, &note.category);
+        let final_file_name = if new_path.exists() {
+            let dedup_stem = format!(
+                "{safe_stem}-copy",
+                safe_stem = if safe_stem.is_empty() {
+                    "note"
+                } else {
+                    &safe_stem
+                }
+            );
+            if safe_stem.is_empty() {
+                format!("{id}-copy.md")
+            } else {
+                format!("{id}_{dedup_stem}.md")
+            }
+        } else {
+            new_file_name
+        };
+        let final_path = self.note_path_in_category(&final_file_name, &note.category);
+
+        let old_path = self.note_path_in_category(&note.file_name, &note.category);
+        if old_path.exists() && old_path != final_path {
+            fs::rename(&old_path, &final_path)?;
+        }
+
+        note.file_name = final_file_name.clone();
+        note.file_stem = file_stem_display(&final_file_name);
+        note.updated_at = Utc::now();
+        let result = note.clone();
         self.save_metadata(&metadata_file)?;
         Ok(result)
     }
@@ -1094,7 +1153,8 @@ impl NoteStore {
             notes.push(NoteMetadata {
                 id,
                 title,
-                file_name,
+                file_name: file_name.clone(),
+                file_stem: file_stem_display(&file_name),
                 category: category.to_string(),
                 created_at: modified,
                 updated_at: modified,
@@ -1191,7 +1251,14 @@ fn infer_title(file_name: &str, content: &str) -> String {
     let stem = file_name.strip_suffix(".md").unwrap_or(file_name);
     stem.split_once('_')
         .map(|(_, title)| title.replace('_', " "))
-        .unwrap_or_default()
+        .unwrap_or_else(|| stem.to_string())
+}
+
+fn file_stem_display(file_name: &str) -> String {
+    let stem = file_name.strip_suffix(".md").unwrap_or(file_name);
+    stem.split_once('_')
+        .map(|(_, display)| display.replace('_', " "))
+        .unwrap_or_else(|| stem.to_string())
 }
 
 fn is_markdown_path(path: &Path) -> bool {

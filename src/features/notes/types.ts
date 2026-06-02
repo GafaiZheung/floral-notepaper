@@ -2,6 +2,7 @@ export interface NoteMetadata {
   id: string;
   title: string;
   fileName: string;
+  fileStem: string;
   category: string;
   createdAt: string;
   updatedAt: string;

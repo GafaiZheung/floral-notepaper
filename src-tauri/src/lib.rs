@@ -145,6 +145,17 @@ fn notes_move_category(
 }
 
 #[tauri::command]
+fn notes_rename_file_stem(
+    app: AppHandle,
+    id: String,
+    stem: String,
+) -> Result<NoteMetadata, AppError> {
+    let result = default_store()?.rename_file_stem(&id, &stem)?;
+    let _ = app.emit("notes-changed", ());
+    Ok(result)
+}
+
+#[tauri::command]
 fn notes_dirs_list() -> Result<Vec<String>, AppError> {
     default_store()?.list_notes_dirs()
 }
@@ -323,6 +334,7 @@ pub fn run() {
             notes_import_markdown,
             notes_export_markdown,
             notes_move_category,
+            notes_rename_file_stem,
             read_external_file,
             save_external_file,
             get_file_modified_time,

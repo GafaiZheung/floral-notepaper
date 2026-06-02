@@ -148,7 +148,9 @@
   "noteMenu": {
     "delete": "Delete Note",
     "export": "Export Markdown",
-    "moveToCategory": "Move to category…"
+    "moveToCategory": "Move to category…",
+    "renameFile": "Rename file",
+    "syncTitleToFile": "Sync title to filename"
   },
   "notepad": {
     "button": {

@@ -29,6 +29,7 @@ describe("importExport api", () => {
       id: "note-1",
       title: "外部笔记",
       fileName: "note-1.md",
+      fileStem: "note-1",
       createdAt: "2026-04-28T00:00:00Z",
       updatedAt: "2026-04-28T00:00:00Z",
       wordCount: 4,

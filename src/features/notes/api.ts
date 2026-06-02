@@ -47,6 +47,10 @@ export function moveNoteCategory(id: string, category: string): Promise<NoteMeta
   return invoke("notes_move_category", { id, category });
 }
 
+export function renameNoteFileStem(id: string, stem: string): Promise<NoteMetadata> {
+  return invoke("notes_rename_file_stem", { id, stem });
+}
+
 export function listCategories(): Promise<string[]> {
   return invoke("categories_list");
 }

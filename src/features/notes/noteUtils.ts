@@ -2,11 +2,13 @@ import { t, type TFunction } from "i18next";
 import type { Note, NoteMetadata } from "./types";
 
 export function getDisplayTitle(
-  note: Pick<NoteMetadata, "title" | "preview">,
+  note: Pick<NoteMetadata, "title" | "preview" | "fileStem">,
   translate: TFunction = t,
 ): string {
   const title = note.title.trim();
   if (title) return title;
+
+  if ("fileStem" in note && note.fileStem) return note.fileStem;
 
   const preview = note.preview.trim();
   if (preview) return preview.slice(0, 20);
@@ -31,6 +33,7 @@ export function metadataFromNote(note: Note): NoteMetadata {
     id: note.id,
     title: note.title,
     fileName: note.fileName,
+    fileStem: note.fileStem,
     category: note.category,
     createdAt: note.createdAt,
     updatedAt: note.updatedAt,

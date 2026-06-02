@@ -34,6 +34,7 @@ import {
   moveNoteCategory,
   readExternalFile,
   renameCategory,
+  renameNoteFileStem,
   saveExternalFile,
   updateNote,
 } from "../features/notes/api";
@@ -332,6 +333,8 @@ export function MainWindow({
   } | null>(null);
   const [notesDirDropdownOpen, setNotesDirDropdownOpen] = useState(false);
   const [deleteConfirmDir, setDeleteConfirmDir] = useState<string | null>(null);
+  const [renameFileFor, setRenameFileFor] = useState<string | null>(null);
+  const [renameFileValue, setRenameFileValue] = useState("");
   const contentRef = useRef<HTMLTextAreaElement>(null);
   const externalFileMtimeRef = useRef<number>(0);
   const lastExternalSaveRef = useRef<number>(0);
@@ -1851,13 +1854,20 @@ export function MainWindow({
                                 }`}
                               />
                               <div className="flex items-baseline justify-between mb-0.5">
-                                <span
-                                  className={`text-[13px] font-display font-medium truncate pr-2 transition-colors ${
-                                    isSelected ? "text-bamboo" : "text-ink-soft"
-                                  }`}
-                                >
-                                  {getDisplayTitle(note, t)}
-                                </span>
+                                <div className="min-w-0 flex-1 pr-2">
+                                  <span
+                                    className={`text-[13px] font-display font-medium block truncate transition-colors ${
+                                      isSelected ? "text-bamboo" : "text-ink-soft"
+                                    }`}
+                                  >
+                                    {getDisplayTitle(note, t)}
+                                  </span>
+                                  {note.fileStem && note.title && note.title !== note.fileStem && (
+                                    <span className="text-[10px] text-ink-ghost/50 font-mono block truncate mt-0.5">
+                                      {note.fileStem}
+                                    </span>
+                                  )}
+                                </div>
                                 <span className="text-[10px] text-ink-ghost font-mono tabular-nums shrink-0">
                                   {formatShortDate(note.updatedAt)}
                                 </span>
@@ -2026,13 +2036,22 @@ export function MainWindow({
                                   />
 
                                   <div className="flex items-baseline justify-between mb-0.5">
-                                    <span
-                                      className={`text-[13px] font-display font-medium truncate pr-2 transition-colors ${
-                                        isSelected ? "text-bamboo" : "text-ink-soft"
-                                      }`}
-                                    >
-                                      {getDisplayTitle(note, t)}
-                                    </span>
+                                    <div className="min-w-0 flex-1 pr-2">
+                                      <span
+                                        className={`text-[13px] font-display font-medium block truncate transition-colors ${
+                                          isSelected ? "text-bamboo" : "text-ink-soft"
+                                        }`}
+                                      >
+                                        {getDisplayTitle(note, t)}
+                                      </span>
+                                      {note.fileStem &&
+                                        note.title &&
+                                        note.title !== note.fileStem && (
+                                          <span className="text-[10px] text-ink-ghost/50 font-mono block truncate mt-0.5">
+                                            {note.fileStem}
+                                          </span>
+                                        )}
+                                    </div>
                                     <span className="text-[10px] text-ink-ghost font-mono tabular-nums shrink-0">
                                       {formatShortDate(note.updatedAt)}
                                     </span>
@@ -2234,6 +2253,87 @@ export function MainWindow({
                     </svg>
                   </button>
                 )}
+                {/* Rename file button */}
+                {renameFileFor === selectedNote?.id ? (
+                  <input
+                    type="text"
+                    value={renameFileValue}
+                    onChange={(e) => setRenameFileValue(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        const v = renameFileValue.trim();
+                        if (v && selectedNote) {
+                          void renameNoteFileStem(selectedNote.id, v)
+                            .then(() => refreshNotes())
+                            .catch((err) => setErrorMessage(getErrorMessage(err)));
+                        }
+                        setRenameFileFor(null);
+                      }
+                      if (e.key === "Escape") setRenameFileFor(null);
+                    }}
+                    onBlur={() => setRenameFileFor(null)}
+                    autoFocus
+                    className="w-28 px-1.5 h-6 rounded text-[11px] font-mono text-ink bg-paper-warm border border-bamboo/40"
+                    onClick={(e) => e.stopPropagation()}
+                  />
+                ) : (
+                  <button
+                    onClick={() => {
+                      if (selectedNote) {
+                        setRenameFileFor(selectedNote.id);
+                        setRenameFileValue(selectedNote.fileStem);
+                      }
+                    }}
+                    disabled={!selectedId}
+                    className="w-7 h-7 flex items-center justify-center rounded-lg text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                    title={t("noteMenu.renameFile", { defaultValue: "重命名文件" })}
+                  >
+                    <svg
+                      width="14"
+                      height="14"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                    </svg>
+                  </button>
+                )}
+                {/* Sync title to filename button */}
+                <button
+                  onClick={() => {
+                    if (selectedNote) {
+                      void renameNoteFileStem(
+                        selectedNote.id,
+                        selectedNote.title || selectedNote.fileStem,
+                      )
+                        .then(() => refreshNotes())
+                        .catch((err) => setErrorMessage(getErrorMessage(err)));
+                    }
+                  }}
+                  disabled={!selectedId}
+                  className="w-7 h-7 flex items-center justify-center rounded-lg text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                  title={t("noteMenu.syncTitleToFile", { defaultValue: "标题同步为文件名" })}
+                >
+                  <svg
+                    width="14"
+                    height="14"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                  >
+                    <polyline points="17 1 21 5 17 9" />
+                    <path d="M3 11V9a4 4 0 0 1 4-4h14" />
+                    <polyline points="7 23 3 19 7 15" />
+                    <path d="M21 13v2a4 4 0 0 1-4 4H3" />
+                  </svg>
+                </button>
               </div>
 
               <SlidingButtonGroup
