@@ -7,8 +7,9 @@ use services::notes::{
     default_store, AppConfig, AppError, Note, NoteMetadata, OpenedFileClassification,
     SaveNoteRequest,
 };
+use services::onedrive::{OneDriveFolder, OneDriveService, OneDriveStatus, SyncStatus};
 use std::{fs, path::PathBuf};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 
 const APP_FONT_FAMILY: &str = "HarmonyOS Sans SC";
 const APP_FONT_BYTES: &[u8] = include_bytes!("../../src/assets/fonts/HarmonyOS_Sans_SC.ttf");
@@ -379,6 +380,86 @@ async fn open_note_in_editor(app: AppHandle, note_id: String) -> Result<(), AppE
     Ok(())
 }
 
+// ---------------------------------------------------------------------------
+// OneDrive commands (local folder approach — no OAuth / Graph API needed)
+// ---------------------------------------------------------------------------
+
+/// Get OneDrive status: detected root path, sync folder list.
+#[tauri::command]
+fn one_drive_status(svc: tauri::State<'_, OneDriveService>) -> Result<OneDriveStatus, AppError> {
+    Ok(svc.get_status())
+}
+
+/// List subfolders at a given local path (used for OneDrive folder browsing).
+#[tauri::command]
+fn one_drive_list_folders(
+    svc: tauri::State<'_, OneDriveService>,
+    parent_path: String,
+) -> Result<Vec<OneDriveFolder>, AppError> {
+    svc.list_folders(&PathBuf::from(&parent_path))
+}
+
+/// List folders at the OneDrive root (auto-detected).
+#[tauri::command]
+fn one_drive_list_root_folders(
+    svc: tauri::State<'_, OneDriveService>,
+) -> Result<Vec<OneDriveFolder>, AppError> {
+    let root = OneDriveService::detect_one_drive_root()
+        .ok_or_else(|| AppError::new("oneDrive", "未检测到 OneDrive 文件夹"))?;
+    svc.list_folders(&root)
+}
+
+/// Add a OneDrive folder to the sync config.
+#[tauri::command]
+fn one_drive_add_sync_folder(
+    svc: tauri::State<'_, OneDriveService>,
+    folder_id: String,
+    folder_name: String,
+    local_path: String,
+) -> Result<(), AppError> {
+    svc.add_sync_folder(&folder_id, &folder_name, &local_path)
+}
+
+/// Remove a sync folder mapping.
+#[tauri::command]
+fn one_drive_remove_sync_folder(
+    svc: tauri::State<'_, OneDriveService>,
+    folder_id: String,
+) -> Result<(), AppError> {
+    svc.remove_sync_folder(&folder_id)
+}
+
+/// Get current sync folder status list.
+#[tauri::command]
+fn one_drive_sync_status(
+    svc: tauri::State<'_, OneDriveService>,
+) -> Result<Vec<SyncStatus>, AppError> {
+    let infos = svc.get_sync_infos();
+    Ok(infos
+        .into_iter()
+        .map(|i| SyncStatus {
+            folder_id: i.folder_id,
+            status: "idle".into(),
+            last_sync: None,
+            message: None,
+            files_downloaded: 0,
+            files_uploaded: 0,
+        })
+        .collect())
+}
+
+/// Clear sync config.
+#[tauri::command]
+fn one_drive_logout(svc: tauri::State<'_, OneDriveService>) -> Result<(), AppError> {
+    svc.logout()
+}
+
+/// Get the list of local paths managed by OneDrive sync config.
+#[tauri::command]
+fn one_drive_synced_paths(svc: tauri::State<'_, OneDriveService>) -> Result<Vec<String>, AppError> {
+    Ok(svc.get_synced_paths())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -391,6 +472,11 @@ pub fn run() {
             let _ = desktop::show_main_window(app);
         }))
         .setup(|app| {
+            // Initialize OneDrive service with data directory.
+            let store = default_store()?;
+            let onedrive_dir = store.base_dir().join("onedrive");
+            app.manage(OneDriveService::new(onedrive_dir));
+
             desktop::setup_desktop(app)?;
             Ok(())
         })
@@ -427,7 +513,16 @@ pub fn run() {
             recycle_notepad_window,
             open_tile_window,
             toggle_tile_window,
-            open_note_in_editor
+            open_note_in_editor,
+            // OneDrive
+            one_drive_status,
+            one_drive_list_folders,
+            one_drive_list_root_folders,
+            one_drive_add_sync_folder,
+            one_drive_remove_sync_folder,
+            one_drive_sync_status,
+            one_drive_synced_paths,
+            one_drive_logout
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

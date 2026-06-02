@@ -262,6 +262,17 @@
     },
     "title": "Settings",
     "visibilityShortcut": "Show/Hide window shortcut",
+    "oneDrive": {
+      "sectionTitle": "OneDrive Cloud Sync",
+      "browseFolders": "Browse OneDrive folders",
+      "syncedFolders": "Recorded folders",
+      "useFolder": "Select",
+      "useDirectly": "Use directly",
+      "copyTo": "Copy to…",
+      "clearConfig": "Clear config",
+      "notFoundHint": "OneDrive local folder not detected. Make sure the OneDrive desktop client is installed and has completed its first sync.",
+      "notFoundDetail": "The OneDrive client keeps cloud files synced locally. Floral Notepaper reads them directly from the local folder."
+    },
     "background": {
       "label": "Background image",
       "default": "Default background",

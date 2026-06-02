@@ -262,6 +262,17 @@
     },
     "title": "应用设置",
     "visibilityShortcut": "显示/隐藏窗口快捷键",
+    "oneDrive": {
+      "sectionTitle": "OneDrive 云同步",
+      "browseFolders": "浏览 OneDrive 文件夹",
+      "syncedFolders": "已记录的文件夹",
+      "useFolder": "选择",
+      "useDirectly": "直接使用",
+      "copyTo": "复制到…",
+      "clearConfig": "清除配置",
+      "notFoundHint": "未检测到 OneDrive 本地文件夹。请确保已安装 OneDrive 桌面客户端并完成首次同步。",
+      "notFoundDetail": "OneDrive 客户端会自动将云端文件同步到本地文件夹，花笺可直接读取该文件夹中的内容。"
+    },
     "background": {
       "label": "背景图片",
       "default": "默认背景",

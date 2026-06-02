@@ -15,6 +15,7 @@ import {
   deleteNotesDir,
   classifyOpenedFile,
 } from "../features/settings/api";
+import { getOneDriveSyncedPaths } from "../features/onedrive/api";
 import type { AppConfig, ViewMode } from "../features/settings/types";
 import { displayPathLabel, parentDirFromFilePath } from "../features/settings/notePaths";
 import { normalizeTileColor } from "../features/settings/tileColor";
@@ -333,6 +334,16 @@ export function MainWindow({
   } | null>(null);
   const [notesDirDropdownOpen, setNotesDirDropdownOpen] = useState(false);
   const [deleteConfirmDir, setDeleteConfirmDir] = useState<string | null>(null);
+  const [oneDriveSyncedPaths, setOneDriveSyncedPaths] = useState<string[]>([]);
+
+  const refreshOneDrivePaths = useCallback(async () => {
+    try {
+      const paths = await getOneDriveSyncedPaths();
+      setOneDriveSyncedPaths(paths);
+    } catch {
+      // Ignore — OneDrive service may not be available.
+    }
+  }, []);
   const [renameFileFor, setRenameFileFor] = useState<string | null>(null);
   const [renameFileValue, setRenameFileValue] = useState("");
   const contentRef = useRef<HTMLTextAreaElement>(null);
@@ -1505,6 +1516,7 @@ export function MainWindow({
                       onClick={() => {
                         setDeleteConfirmDir(null);
                         setNotesDirDropdownOpen((prev) => !prev);
+                        void refreshOneDrivePaths();
                       }}
                       className="w-full flex items-center gap-1 h-7 rounded-lg text-[11px] font-body bg-paper-warm/80 border border-paper-deep/40 pl-2.5 pr-1.5 hover:border-bamboo/30 hover:bg-cloud transition-colors cursor-pointer"
                       title={t("main.notesDir.select", { defaultValue: "切换笔记目录" })}
@@ -1571,7 +1583,26 @@ export function MainWindow({
                                     : "text-ink-faint hover:text-ink-soft hover:bg-paper-warm/60"
                                 }`}
                               >
-                                {displayPathLabel(dir)}
+                                <span className="flex items-center gap-1.5">
+                                  {oneDriveSyncedPaths.includes(dir) && (
+                                    <svg
+                                      width="11"
+                                      height="11"
+                                      viewBox="0 0 24 24"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      strokeWidth="1.7"
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      className="shrink-0 opacity-60"
+                                    >
+                                      <path d="M6.5 17.5c-2.3-.5-4-2.5-4-4.9 0-3 2.3-5 5-4.8.8-2.7 3.3-4.5 6.1-4.1a5.2 5.2 0 0 1 3.6 2.1c2.7.2 4.8 2.6 4.8 5.3 0 2.3-1.3 4.2-3.2 5.1" />
+                                      <path d="M9 19a3 3 0 0 0 6 0" />
+                                      <path d="M12 16v3" />
+                                    </svg>
+                                  )}
+                                  {displayPathLabel(dir)}
+                                </span>
                               </button>
                             )}
                             {!isCurrent && deleteConfirmDir !== dir && (
