@@ -217,6 +217,8 @@ impl From<tauri::Error> for AppError {
 #[serde(rename_all = "camelCase")]
 struct MetadataFile {
     notes: Vec<NoteMetadata>,
+    #[serde(default)]
+    migrated_v2: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -480,7 +482,16 @@ impl NoteStore {
 
     pub fn list_notes(&self) -> Result<Vec<NoteMetadata>, AppError> {
         self.ensure_storage()?;
-        let mut metadata = self.load_metadata()?.notes;
+        let mut metadata_file = self.load_metadata()?;
+        if !metadata_file.migrated_v2 {
+            let migrated = self.migrate_legacy_filenames(&mut metadata_file)?;
+            if migrated > 0 {
+                eprintln!("Migrated {} legacy note filenames", migrated);
+            }
+            metadata_file.migrated_v2 = true;
+            self.save_metadata(&metadata_file)?;
+        }
+        let mut metadata = metadata_file.notes;
         metadata.retain(|note| {
             self.note_path_in_category(&note.file_name, &note.category)
                 .exists()
@@ -510,15 +521,23 @@ impl NoteStore {
 
     pub fn create_note(&self, request: SaveNoteRequest) -> Result<Note, AppError> {
         self.ensure_storage()?;
-        let id = Uuid::new_v4().to_string();
         let now = Utc::now();
-        let file_name = self.file_name_for(&id, &request.title);
-        let word_count = count_words(&request.content);
+        let safe_stem = safe_file_stem(&request.title);
         let category = request.category.clone();
+        let (actual_stem, file_name) = self.find_available_file_name(&safe_stem, &category);
+        let (file_name, id) = if safe_stem.is_empty() {
+            // Fallback: use random ID as filename when title is empty after sanitization.
+            let fallback_id = Uuid::new_v4().as_simple().to_string()[..12].to_string();
+            (format!("{fallback_id}.md"), fallback_id)
+        } else {
+            let id = Self::make_note_id(&actual_stem, &category);
+            (file_name, id)
+        };
         let note_path = self.note_path_in_category(&file_name, &category);
         if let Some(parent) = note_path.parent() {
             fs::create_dir_all(parent)?;
         }
+        let word_count = count_words(&request.content);
         let metadata = NoteMetadata {
             id: id.clone(),
             title: request.title,
@@ -558,30 +577,28 @@ impl NoteStore {
             .find(|note| note.id == id)
             .ok_or_else(|| AppError::note_not_found(id))?;
 
-        let old_file_name = note.file_name.clone();
+        let file_name = note.file_name.clone();
         let old_category = note.category.clone();
-        let new_file_name = self.file_name_for(id, &request.title);
         let new_category = request.category.clone();
         let now = Utc::now();
         let word_count = count_words(&request.content);
 
-        let new_path = self.note_path_in_category(&new_file_name, &new_category);
-        if let Some(parent) = new_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(&new_path, &request.content)?;
-
-        if old_file_name != new_file_name || old_category != new_category {
-            let old_path = self.note_path_in_category(&old_file_name, &old_category);
-            if old_path.exists() && old_path != new_path {
-                trash::delete(&old_path)
-                    .map_err(|e| AppError::new("trash", format!("移入回收站失败: {e}")))?;
+        // 分类变更时移动文件，文件名保持不变
+        if old_category != new_category {
+            let old_path = self.note_path_in_category(&file_name, &old_category);
+            let new_path = self.note_path_in_category(&file_name, &new_category);
+            if let Some(parent) = new_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            if old_path.exists() {
+                fs::rename(&old_path, &new_path)?;
             }
         }
 
+        let current_path = self.note_path_in_category(&file_name, &new_category);
+        fs::write(&current_path, &request.content)?;
+
         note.title = request.title;
-        note.file_name = new_file_name.clone();
-        note.file_stem = file_stem_display(&new_file_name);
         note.category = new_category.clone();
         note.updated_at = now;
         note.word_count = word_count;
@@ -613,40 +630,22 @@ impl NoteStore {
             .ok_or_else(|| AppError::note_not_found(id))?;
 
         let safe_stem = safe_file_stem(new_stem);
-        let new_file_name = if safe_stem.is_empty() {
-            format!("{id}.md")
+        let (actual_stem, new_file_name) = if safe_stem.is_empty() {
+            // Fallback: use ID as stem when title sanitizes to empty.
+            (id.to_string(), format!("{id}.md"))
         } else {
-            format!("{id}_{safe_stem}.md")
+            self.find_available_file_name(&safe_stem, &note.category)
         };
 
-        // Dedup: if target file already exists (different note), append -copy
-        let new_path = self.note_path_in_category(&new_file_name, &note.category);
-        let final_file_name = if new_path.exists() {
-            let dedup_stem = format!(
-                "{safe_stem}-copy",
-                safe_stem = if safe_stem.is_empty() {
-                    "note"
-                } else {
-                    &safe_stem
-                }
-            );
-            if safe_stem.is_empty() {
-                format!("{id}-copy.md")
-            } else {
-                format!("{id}_{dedup_stem}.md")
-            }
-        } else {
-            new_file_name
-        };
-        let final_path = self.note_path_in_category(&final_file_name, &note.category);
-
+        let final_path = self.note_path_in_category(&new_file_name, &note.category);
         let old_path = self.note_path_in_category(&note.file_name, &note.category);
         if old_path.exists() && old_path != final_path {
             fs::rename(&old_path, &final_path)?;
         }
 
-        note.file_name = final_file_name.clone();
-        note.file_stem = file_stem_display(&final_file_name);
+        note.id = Self::make_note_id(&actual_stem, &note.category);
+        note.file_name = new_file_name.clone();
+        note.file_stem = file_stem_display(&new_file_name);
         note.updated_at = Utc::now();
         let result = note.clone();
         self.save_metadata(&metadata_file)?;
@@ -1067,13 +1066,33 @@ impl NoteStore {
             .ok_or_else(|| AppError::note_not_found(id))
     }
 
-    fn file_name_for(&self, id: &str, title: &str) -> String {
-        let safe_title = safe_file_stem(title);
-        if safe_title.is_empty() {
-            format!("{id}.md")
+    /// Generate a note ID from file stem and category.
+    /// - If category is empty, ID = file stem.
+    /// - If category is not empty, ID = "{category}/{file_stem}".
+    fn make_note_id(stem: &str, category: &str) -> String {
+        if category.is_empty() {
+            stem.to_string()
         } else {
-            format!("{id}_{safe_title}.md")
+            format!("{}/{}", category, stem)
         }
+    }
+
+    /// Find an available filename by trying `{stem}.md`, `{stem}-2.md`, `{stem}-3.md`...
+    /// Returns `(available_stem, file_name)`.
+    fn find_available_file_name(&self, stem: &str, category: &str) -> (String, String) {
+        let base = format!("{stem}.md");
+        if !self.note_path_in_category(&base, category).exists() {
+            return (stem.to_string(), base);
+        }
+        for n in 2u32.. {
+            let candidate_stem = format!("{stem}-{n}");
+            let candidate = format!("{candidate_stem}.md");
+            if !self.note_path_in_category(&candidate, category).exists() {
+                return (candidate_stem, candidate);
+            }
+        }
+        // Unreachable in practice.
+        (stem.to_string(), base)
     }
 
     fn load_metadata(&self) -> Result<MetadataFile, AppError> {
@@ -1122,7 +1141,10 @@ impl NoteStore {
             }
         }
 
-        Ok(MetadataFile { notes })
+        Ok(MetadataFile {
+            notes,
+            migrated_v2: false,
+        })
     }
 
     fn scan_dir_for_notes(
@@ -1139,9 +1161,12 @@ impl NoteStore {
             }
 
             let file_name = entry.file_name().to_string_lossy().to_string();
-            let Some(id) = id_from_file_name(&file_name) else {
-                continue;
-            };
+            // Try legacy pattern first ({uuid}_{title}.md), then fall back
+            // to generating a new ID for clean filenames ({title}.md).
+            let id = id_from_file_name(&file_name).unwrap_or_else(|| {
+                let stem = file_name.strip_suffix(".md").unwrap_or(&file_name);
+                Self::make_note_id(stem, category)
+            });
             let content = fs::read_to_string(&path).unwrap_or_default();
             let title = infer_title(&file_name, &content);
             let modified = entry
@@ -1163,6 +1188,48 @@ impl NoteStore {
             });
         }
         Ok(())
+    }
+
+    /// Rename legacy `{uuid}_{title}.md` files to `{title}.md` format.
+    /// UUID is preserved as the note ID in metadata; only the filename changes.
+    fn migrate_legacy_filenames(
+        &self,
+        metadata_file: &mut MetadataFile,
+    ) -> Result<usize, AppError> {
+        let mut count = 0;
+        for note in metadata_file.notes.iter_mut() {
+            let stem = note
+                .file_name
+                .strip_suffix(".md")
+                .unwrap_or(&note.file_name);
+
+            // Legacy format: {uuid}_{title}.md where first part is 32+ hex chars (no hyphens)
+            // or 36 chars with hyphens.
+            if let Some((first, rest)) = stem.split_once('_') {
+                let is_uuid =
+                    first.len() >= 32 && first.chars().all(|c| c.is_ascii_hexdigit() || c == '-');
+                if is_uuid && !rest.is_empty() {
+                    let new_file_name = format!("{rest}.md");
+                    let (_, deduped_name) = self.find_available_file_name(rest, &note.category);
+                    let final_name = if deduped_name == new_file_name {
+                        new_file_name
+                    } else {
+                        deduped_name
+                    };
+
+                    let old_path = self.note_path_in_category(&note.file_name, &note.category);
+                    let new_path = self.note_path_in_category(&final_name, &note.category);
+                    if old_path.exists() && old_path != new_path {
+                        fs::rename(&old_path, &new_path)?;
+                    }
+
+                    note.file_name = final_name.clone();
+                    note.file_stem = file_stem_display(&final_name);
+                    count += 1;
+                }
+            }
+        }
+        Ok(count)
     }
 }
 
@@ -1232,11 +1299,14 @@ fn preview(content: &str) -> String {
 
 fn id_from_file_name(file_name: &str) -> Option<String> {
     let stem = file_name.strip_suffix(".md")?;
-    Some(
-        stem.split_once('_')
-            .map(|(id, _)| id.to_string())
-            .unwrap_or_else(|| stem.to_string()),
-    )
+    // Legacy: {uuid}_{title}.md → extract the UUID part.
+    if let Some((first, _)) = stem.split_once('_') {
+        if first.len() >= 32 && first.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+            return Some(first.to_string());
+        }
+    }
+    // New format: {title}.md — no ID in filename; caller should generate one.
+    None
 }
 
 fn infer_title(file_name: &str, content: &str) -> String {
@@ -1249,16 +1319,26 @@ fn infer_title(file_name: &str, content: &str) -> String {
     }
 
     let stem = file_name.strip_suffix(".md").unwrap_or(file_name);
-    stem.split_once('_')
-        .map(|(_, title)| title.replace('_', " "))
-        .unwrap_or_else(|| stem.to_string())
+    // Legacy: {uuid}_{title}.md → extract title after first _.
+    if let Some((first, rest)) = stem.split_once('_') {
+        if first.len() >= 32 && first.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+            return rest.replace('_', " ");
+        }
+    }
+    // New format: {title}.md → the whole stem is the title.
+    stem.replace('_', " ")
 }
 
 fn file_stem_display(file_name: &str) -> String {
     let stem = file_name.strip_suffix(".md").unwrap_or(file_name);
-    stem.split_once('_')
-        .map(|(_, display)| display.replace('_', " "))
-        .unwrap_or_else(|| stem.to_string())
+    // Legacy: {uuid}_{title}.md → extract title after first _.
+    if let Some((first, rest)) = stem.split_once('_') {
+        if first.len() >= 32 && first.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+            return rest.replace('_', " ");
+        }
+    }
+    // New format: {title}.md → the whole stem is the display name.
+    stem.replace('_', " ")
 }
 
 fn is_markdown_path(path: &Path) -> bool {
@@ -1420,7 +1500,7 @@ mod tests {
 
         assert_eq!(updated.title, "");
         assert_eq!(updated.content, "# 新标题\nsecond line");
-        assert_ne!(updated.file_name, created.file_name);
+        assert_eq!(updated.file_name, created.file_name);
 
         store.delete_note(&created.id).expect("delete note");
         assert!(store.read_note(&created.id).is_err());

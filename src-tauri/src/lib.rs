@@ -8,7 +8,8 @@ use services::notes::{
     SaveNoteRequest,
 };
 use services::onedrive::{OneDriveFolder, OneDriveService, OneDriveStatus, SyncStatus};
-use std::{fs, path::PathBuf};
+use services::watcher::NotesWatcher;
+use std::{fs, path::PathBuf, sync::Mutex};
 use tauri::{AppHandle, Emitter, Manager};
 
 const APP_FONT_FAMILY: &str = "HarmonyOS Sans SC";
@@ -239,6 +240,8 @@ fn notes_dirs_select(
     add_to_cache: Option<bool>,
 ) -> Result<AppConfig, AppError> {
     let config = default_store()?.select_notes_dir(&path, add_to_cache.unwrap_or(true))?;
+    let watch_dirs: Vec<PathBuf> = config.notes_dirs.iter().map(PathBuf::from).collect();
+    let _ = start_or_reconfigure_watcher(&app, &watch_dirs);
     let _ = app.emit("notes-changed", ());
     let _ = app.emit("config-changed", &config);
     Ok(config)
@@ -247,6 +250,8 @@ fn notes_dirs_select(
 #[tauri::command]
 fn notes_dirs_add(app: AppHandle, path: String) -> Result<AppConfig, AppError> {
     let config = default_store()?.add_notes_dir(&path)?;
+    let watch_dirs: Vec<PathBuf> = config.notes_dirs.iter().map(PathBuf::from).collect();
+    let _ = start_or_reconfigure_watcher(&app, &watch_dirs);
     let _ = app.emit("config-changed", &config);
     Ok(config)
 }
@@ -254,6 +259,8 @@ fn notes_dirs_add(app: AppHandle, path: String) -> Result<AppConfig, AppError> {
 #[tauri::command]
 fn notes_dirs_delete(app: AppHandle, path: String) -> Result<AppConfig, AppError> {
     let config = default_store()?.remove_notes_dir(&path)?;
+    let watch_dirs: Vec<PathBuf> = config.notes_dirs.iter().map(PathBuf::from).collect();
+    let _ = start_or_reconfigure_watcher(&app, &watch_dirs);
     let _ = app.emit("notes-changed", ());
     let _ = app.emit("config-changed", &config);
     Ok(config)
@@ -327,10 +334,31 @@ fn config_save(app: AppHandle, config: AppConfig) -> Result<AppConfig, AppError>
         eprintln!("failed to refresh desktop shell state: {error}");
     }
     let _ = app.emit("config-changed", &saved);
+
+    // Reconfigure watcher on any config save (handles notes_dirs changes).
+    let watch_dirs: Vec<PathBuf> = saved.notes_dirs.iter().map(PathBuf::from).collect();
+    if let Err(e) = start_or_reconfigure_watcher(&app, &watch_dirs) {
+        eprintln!("Failed to reconfigure notes watcher: {e}");
+    }
+
     if notes_dir_changed {
         let _ = app.emit("notes-changed", ());
     }
     Ok(saved)
+}
+
+/// Helper to start or reconfigure the NotesWatcher managed state.
+fn start_or_reconfigure_watcher(
+    app: &AppHandle,
+    dirs: &[PathBuf],
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    if let Some(state) = app.try_state::<Mutex<NotesWatcher>>() {
+        state.lock().unwrap().reconfigure(app.clone(), dirs)
+    } else {
+        let watcher = NotesWatcher::start(app.clone(), dirs)?;
+        app.manage(Mutex::new(watcher));
+        Ok(())
+    }
 }
 
 #[tauri::command]
@@ -478,6 +506,14 @@ pub fn run() {
             app.manage(OneDriveService::new(onedrive_dir));
 
             desktop::setup_desktop(app)?;
+
+            // Start filesystem watcher for notes directories.
+            let config = store.load_config()?;
+            let watch_dirs: Vec<PathBuf> = config.notes_dirs.iter().map(PathBuf::from).collect();
+            if let Err(e) = start_or_reconfigure_watcher(app.handle(), &watch_dirs) {
+                eprintln!("Failed to start notes watcher: {e}");
+            }
+
             Ok(())
         })
         .on_window_event(desktop::handle_window_event)
