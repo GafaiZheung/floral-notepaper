@@ -34,6 +34,8 @@ import {
   listNotes,
   moveNoteCategory,
   readExternalFile,
+  openFileWithSystemApp,
+  openNoteWithSystemApp,
   renameCategory,
   renameNoteFileStem,
   saveExternalFile,
@@ -46,7 +48,10 @@ import {
   formatShortDate,
   formatTime,
   getDisplayTitle,
+  getFileTypeIconColor,
+  getFileTypeLabel,
   groupNotesByCategory,
+  isReadOnlyNote,
   metadataFromNote,
 } from "../features/notes/noteUtils";
 import type { CategoryGroup } from "../features/notes/noteUtils";
@@ -273,6 +278,47 @@ export function pinTileButtonTitle(isPinned: boolean): string {
   return isPinned ? "取消钉屏" : "钉到屏幕";
 }
 
+/**
+ * Renders HTML content safely in a sandboxed iframe for read-only file viewing.
+ * Sanitizes the HTML by removing dangerous tags before rendering.
+ */
+function ReadOnlyHtmlViewer({ content, fontSize }: { content: string; fontSize: number }) {
+  const sanitized = useMemo(() => sanitizeHtml(content), [content]);
+
+  return (
+    <div
+      className="h-full w-full overflow-auto bg-white rounded"
+      style={{
+        fontSize: `${fontSize}px`,
+        fontFamily: "system-ui, sans-serif",
+        lineHeight: 1.7,
+        padding: "12px 16px",
+        color: "#222",
+        wordBreak: "break-word",
+      }}
+      dangerouslySetInnerHTML={{ __html: sanitized }}
+    />
+  );
+}
+
+/**
+ * Basic HTML sanitizer: removes script tags, iframes, event handlers, and
+ * other potentially dangerous elements from HTML content.
+ */
+function sanitizeHtml(html: string): string {
+  // Remove <script> tags and their content
+  let sanitized = html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "");
+  // Remove <iframe> tags
+  sanitized = sanitized.replace(/<iframe\b[^<]*(?:(?!<\/iframe>)<[^<]*)*<\/iframe>/gi, "");
+  // Remove event handler attributes (onclick, onload, etc.)
+  sanitized = sanitized.replace(/\s+on\w+\s*=\s*"[^"]*"/gi, "");
+  sanitized = sanitized.replace(/\s+on\w+\s*=\s*'[^']*'/gi, "");
+  // Remove javascript: URLs
+  sanitized = sanitized.replace(/href\s*=\s*"javascript:[^"]*"/gi, 'href="#"');
+  sanitized = sanitized.replace(/href\s*=\s*'javascript:[^']*'/gi, "href='#'");
+  return sanitized;
+}
+
 interface MainWindowProps {
   initialSettingsOpen?: boolean;
   initialConfig?: AppConfig;
@@ -294,6 +340,7 @@ export function MainWindow({
   );
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [content, setContent] = useState("");
+  const [contentFormat, setContentFormat] = useState<string>("markdown");
   const [title, setTitle] = useState("");
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [hoveredId, setHoveredId] = useState<string | null>(null);
@@ -368,6 +415,12 @@ export function MainWindow({
   );
 
   const isExternal = selectedExternalFile !== null;
+  const isReadOnlyExternal = selectedExternalFile?.readOnly === true;
+  const isReadOnlyInternal = selectedNote ? isReadOnlyNote(selectedNote) : false;
+
+  // Force preview mode for read-only files (external or internal non-md notes).
+  const effectiveViewMode: ViewMode =
+    isReadOnlyExternal || isReadOnlyInternal ? "preview" : viewMode;
 
   const noteMenuTarget = useMemo(
     () => notes.find((note) => note.id === noteMenu?.noteId) ?? null,
@@ -487,6 +540,7 @@ export function MainWindow({
     setSelectedId(note.id);
     setTitle(note.title);
     setContent(note.content);
+    setContentFormat(note.fileFormat && note.fileFormat !== "md" ? "html" : "markdown");
     setSaveState("saved");
     setErrorMessage(null);
     setNoteTransitionKey((k) => k + 1);
@@ -524,41 +578,68 @@ export function MainWindow({
     setSelectedId(null);
     setTitle("");
     setContent("");
+    setContentFormat("markdown");
     setSaveState("idle");
   }, []);
 
   const loadExternalFile = useCallback(async (filePath: string) => {
     setErrorMessage(null);
+    const fileName = filePath.split(/[\\/]/).pop() ?? filePath;
+    const displayTitle = fileName.replace(/\.(md|txt|docx?|pdf|xlsx)$/i, "");
+    const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
+    const isReadOnlyFormat = /^(docx?|pdf|xlsx)$/i.test(ext);
+
+    // Add the file to the external files list immediately so it's visible
+    // even if reading fails (user can retry by clicking).
+    setExternalFiles((current) => {
+      if (current.some((f) => f.id === filePath)) {
+        return current;
+      }
+      const entry: ExternalFile = {
+        id: filePath,
+        title: displayTitle,
+        filePath,
+        readOnly: isReadOnlyFormat,
+      };
+      if (isReadOnlyFormat) {
+        entry.contentFormat = "html";
+        entry.mimeType =
+          ext === "docx" || ext === "doc"
+            ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            : ext === "pdf"
+              ? "application/pdf"
+              : ext === "xlsx"
+                ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                : "application/octet-stream";
+      }
+      return [...current, entry];
+    });
+    setSelectedId(filePath);
+    setTitle(displayTitle);
+
     try {
-      const [fileContent, mtime] = await Promise.all([
-        readExternalFile(filePath),
-        getFileModifiedTime(filePath),
-      ]);
-      const fileName = filePath.split(/[\\/]/).pop() ?? filePath;
-      const displayTitle = fileName.replace(/\.(md|txt)$/i, "");
-
-      setExternalFiles((current) => {
-        if (current.some((f) => f.id === filePath)) {
-          return current;
+      if (isReadOnlyFormat) {
+        // Open with system default app (WPS/Word/Excel/PDF reader)
+        setContent("");
+        setSaveState("saved");
+        try {
+          await openFileWithSystemApp(filePath);
+        } catch (error) {
+          setErrorMessage(getErrorMessage(error));
         }
-        return [
-          ...current,
-          {
-            id: filePath,
-            title: displayTitle,
-            filePath,
-          },
-        ];
-      });
-
-      setSelectedId(filePath);
-      setTitle(displayTitle);
-      setContent(fileContent);
+      } else {
+        const [fileContent, mtime] = await Promise.all([
+          readExternalFile(filePath),
+          getFileModifiedTime(filePath),
+        ]);
+        setContent(fileContent);
+        externalFileMtimeRef.current = mtime;
+      }
       setSaveState("saved");
       setNoteTransitionKey((k) => k + 1);
-      externalFileMtimeRef.current = mtime;
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
+      setSaveState("error");
     }
   }, []);
 
@@ -707,6 +788,8 @@ export function MainWindow({
 
     const interval = window.setInterval(async () => {
       if (Date.now() - lastExternalSaveRef.current < 2000) return;
+      // Read-only files are opened with system app — skip polling content
+      if (selectedExternalFile.readOnly) return;
       try {
         const mtime = await getFileModifiedTime(selectedExternalFile.filePath);
         if (mtime !== externalFileMtimeRef.current) {
@@ -765,6 +848,11 @@ export function MainWindow({
 
   const saveCurrentNote = useCallback(async () => {
     if (!selectedId) return null;
+
+    // Read-only files cannot be saved
+    if (selectedExternalFile?.readOnly || isReadOnlyInternal) {
+      return null;
+    }
 
     if (isExternal && selectedExternalFile) {
       setSaveState("saving");
@@ -964,6 +1052,23 @@ export function MainWindow({
       await saveCurrentNote();
     }
 
+    // Non-md files: open with system default app instead of loading in-app
+    const note = notes.find((n) => n.id === id);
+    if (note && isReadOnlyNote(note)) {
+      setErrorMessage(null);
+      setSelectedId(id);
+      setTitle(note.fileStem || note.title);
+      setContent("");
+      setSaveState("saved");
+      setNoteTransitionKey((k) => k + 1);
+      try {
+        await openNoteWithSystemApp(id);
+      } catch (error) {
+        setErrorMessage(getErrorMessage(error));
+      }
+      return;
+    }
+
     setIsLoading(true);
     try {
       await loadNote(id);
@@ -986,10 +1091,26 @@ export function MainWindow({
 
     setIsLoading(true);
     try {
+      if (file.readOnly) {
+        // Open with system default app
+        setSelectedId(id);
+        setTitle(file.title);
+        setContent("");
+        setSaveState("saved");
+        setErrorMessage(null);
+        try {
+          await openFileWithSystemApp(file.filePath);
+        } catch (error) {
+          setErrorMessage(getErrorMessage(error));
+        }
+        return;
+      }
+
       const [fileContent, mtime] = await Promise.all([
         readExternalFile(file.filePath),
         getFileModifiedTime(file.filePath),
       ]);
+
       setSelectedId(id);
       setTitle(file.title);
       setContent(fileContent);
@@ -1798,6 +1919,13 @@ export function MainWindow({
                                 <polyline points="14 2 14 8 20 8" />
                               </svg>
                               {file.title}
+                              {file.readOnly && (
+                                <span className="text-[9px] text-ink-ghost/50 font-mono bg-paper-deep/30 px-1 rounded">
+                                  {file.mimeType
+                                    ? file.mimeType.split("/").pop()?.toUpperCase()
+                                    : "📎"}
+                                </span>
+                              )}
                             </span>
                             <button
                               onClick={(e) => {
@@ -1887,10 +2015,17 @@ export function MainWindow({
                               <div className="flex items-baseline justify-between mb-0.5">
                                 <div className="min-w-0 flex-1 pr-2">
                                   <span
-                                    className={`text-[13px] font-display font-medium block truncate transition-colors ${
+                                    className={`text-[13px] font-display font-medium block truncate transition-colors flex items-center gap-1.5 ${
                                       isSelected ? "text-bamboo" : "text-ink-soft"
                                     }`}
                                   >
+                                    {isReadOnlyNote(note) && (
+                                      <span
+                                        className={`text-[9px] font-mono shrink-0 px-1 rounded ${getFileTypeIconColor(note)} bg-current/10`}
+                                      >
+                                        {getFileTypeLabel(note)}
+                                      </span>
+                                    )}
                                     {getDisplayTitle(note, t)}
                                   </span>
                                   {note.fileStem && note.title && note.title !== note.fileStem && (
@@ -2069,10 +2204,17 @@ export function MainWindow({
                                   <div className="flex items-baseline justify-between mb-0.5">
                                     <div className="min-w-0 flex-1 pr-2">
                                       <span
-                                        className={`text-[13px] font-display font-medium block truncate transition-colors ${
+                                        className={`text-[13px] font-display font-medium block truncate transition-colors flex items-center gap-1.5 ${
                                           isSelected ? "text-bamboo" : "text-ink-soft"
                                         }`}
                                       >
+                                        {isReadOnlyNote(note) && (
+                                          <span
+                                            className={`text-[9px] font-mono shrink-0 px-1 rounded ${getFileTypeIconColor(note)} bg-current/10`}
+                                          >
+                                            {getFileTypeLabel(note)}
+                                          </span>
+                                        )}
                                         {getDisplayTitle(note, t)}
                                       </span>
                                       {note.fileStem &&
@@ -2367,12 +2509,19 @@ export function MainWindow({
                 </button>
               </div>
 
-              <SlidingButtonGroup
-                options={viewModeOptions}
-                value={viewMode}
-                onChange={setViewMode}
-                buttonClassName="px-3 py-1"
-              />
+              {!isReadOnlyExternal && (
+                <SlidingButtonGroup
+                  options={viewModeOptions}
+                  value={viewMode}
+                  onChange={setViewMode}
+                  buttonClassName="px-3 py-1"
+                />
+              )}
+              {isReadOnlyExternal && (
+                <span className="text-[10px] text-ink-ghost/60 font-mono tracking-widest uppercase px-3">
+                  {t("main.editor.readOnly", { defaultValue: "只读" })}
+                </span>
+              )}
             </div>
 
             <div
@@ -2393,7 +2542,7 @@ export function MainWindow({
                   }
                 }}
                 placeholder={t("common.untitledNote", { defaultValue: "无标题笔记" })}
-                disabled={!selectedId}
+                disabled={!selectedId || isReadOnlyExternal || isReadOnlyInternal}
                 className="w-full text-[20px] font-display font-bold text-ink placeholder:text-ink-ghost/50 tracking-wide disabled:opacity-60"
               />
               <div className="flex items-center gap-3 mt-1.5">
@@ -2422,13 +2571,15 @@ export function MainWindow({
                         : "text-bamboo/60"
                   }`}
                 >
-                  {saveStateLabel[saveState]}
+                  {isReadOnlyExternal || isReadOnlyInternal
+                    ? t("main.statusBar.readOnly", { defaultValue: "只读" })
+                    : saveStateLabel[saveState]}
                 </span>
               </div>
             </div>
 
             <div
-              key={viewMode}
+              key={effectiveViewMode}
               ref={splitContainerRef}
               className="flex-1 flex min-h-0 animate-view-fade"
             >
@@ -2438,10 +2589,12 @@ export function MainWindow({
                 </div>
               ) : (
                 <>
-                  {(viewMode === "edit" || viewMode === "split") && (
+                  {(effectiveViewMode === "edit" || effectiveViewMode === "split") && (
                     <div
                       className="flex flex-col min-h-0 shrink-0"
-                      style={{ width: viewMode === "split" ? `${splitRatio * 100}%` : "100%" }}
+                      style={{
+                        width: effectiveViewMode === "split" ? `${splitRatio * 100}%` : "100%",
+                      }}
                     >
                       <div className="flex items-center gap-0.5 px-4 pt-2 pb-1 shrink-0">
                         {toolbarButtons.map((button) => (
@@ -2491,7 +2644,7 @@ export function MainWindow({
                     </div>
                   )}
 
-                  {viewMode === "split" && (
+                  {effectiveViewMode === "split" && (
                     <div
                       className={`w-1.5 shrink-0 cursor-col-resize group relative flex items-center justify-center ${isResizingSplit ? "bg-bamboo/30" : "hover:bg-bamboo/20"} transition-colors`}
                       onMouseDown={(e) => {
@@ -2511,9 +2664,9 @@ export function MainWindow({
                     </div>
                   )}
 
-                  {(viewMode === "preview" || viewMode === "split") && (
+                  {(effectiveViewMode === "preview" || effectiveViewMode === "split") && (
                     <div className="flex flex-col min-h-0 min-w-0 flex-1">
-                      {viewMode === "split" && (
+                      {effectiveViewMode === "split" && (
                         <div className="px-4 pt-2.5 pb-1 shrink-0">
                           <span className="text-[10px] text-ink-ghost/60 font-mono tracking-widest uppercase">
                             {t("main.editor.previewLabel", { defaultValue: "Preview" })}
@@ -2522,13 +2675,20 @@ export function MainWindow({
                       )}
                       <div
                         className={`flex-1 overflow-y-auto px-6 pb-6 ${
-                          viewMode === "preview" ? "pt-3" : "pt-1"
+                          effectiveViewMode === "preview" ? "pt-3" : "pt-1"
                         }`}
                       >
-                        <MarkdownPreview
-                          content={content}
-                          fontSize={settingsConfig?.fontSize ?? 14}
-                        />
+                        {contentFormat === "html" ? (
+                          <ReadOnlyHtmlViewer
+                            content={content}
+                            fontSize={settingsConfig?.fontSize ?? 14}
+                          />
+                        ) : (
+                          <MarkdownPreview
+                            content={content}
+                            fontSize={settingsConfig?.fontSize ?? 14}
+                          />
+                        )}
                       </div>
                     </div>
                   )}
@@ -2546,7 +2706,13 @@ export function MainWindow({
                 </span>
                 <span className="text-[10px] text-ink-ghost/40">|</span>
                 <span className="text-[10px] text-ink-ghost font-mono">
-                  {t("main.statusBar.format", { defaultValue: "Markdown + LaTeX" })}
+                  {isReadOnlyInternal && selectedNote
+                    ? getFileTypeLabel(selectedNote)
+                    : isReadOnlyExternal && selectedExternalFile
+                      ? selectedExternalFile.contentFormat === "html"
+                        ? (selectedExternalFile.mimeType ?? "HTML")
+                        : (selectedExternalFile.mimeType ?? "Document")
+                      : t("main.statusBar.format", { defaultValue: "Markdown + LaTeX" })}
                 </span>
               </div>
               <div className="flex items-center gap-3">

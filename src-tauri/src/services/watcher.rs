@@ -49,11 +49,14 @@ impl NotesWatcher {
 
                 match event_rx.recv_timeout(Duration::from_millis(200)) {
                     Ok(Ok(event)) => {
-                        // Only care about .md files.
+                        // Only care about supported file types (md, docx, pdf, xlsx, etc.).
                         let relevant = event.paths.iter().any(|p| {
                             p.extension()
                                 .and_then(|e| e.to_str())
-                                .map(|e| e.eq_ignore_ascii_case("md"))
+                                .map(|e| {
+                                    let lower = e.to_ascii_lowercase();
+                                    ["md", "docx", "doc", "pdf", "xlsx"].contains(&lower.as_str())
+                                })
                                 .unwrap_or(false)
                         });
                         if !relevant {

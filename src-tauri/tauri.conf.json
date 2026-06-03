@@ -60,6 +60,24 @@
         "name": "Text Document",
         "description": "Plain text file",
         "role": "Editor"
+      },
+      {
+        "ext": ["docx"],
+        "name": "Word Document",
+        "description": "Microsoft Word document",
+        "role": "Viewer"
+      },
+      {
+        "ext": ["pdf"],
+        "name": "PDF Document",
+        "description": "Portable Document Format file",
+        "role": "Viewer"
+      },
+      {
+        "ext": ["xlsx"],
+        "name": "Excel Spreadsheet",
+        "description": "Microsoft Excel spreadsheet",
+        "role": "Viewer"
       }
     ],
     "icon": [

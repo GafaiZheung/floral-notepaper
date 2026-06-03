@@ -79,6 +79,14 @@ export function getFileModifiedTime(path: string): Promise<number> {
   return invoke("get_file_modified_time", { path });
 }
 
+export function openFileWithSystemApp(path: string): Promise<void> {
+  return invoke("open_file_with_system_app", { path });
+}
+
+export function openNoteWithSystemApp(id: string): Promise<void> {
+  return invoke("open_note_with_system_app", { id });
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }

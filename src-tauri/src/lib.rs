@@ -11,6 +11,7 @@ use services::onedrive::{OneDriveFolder, OneDriveService, OneDriveStatus, SyncSt
 use services::watcher::NotesWatcher;
 use std::{fs, path::PathBuf, sync::Mutex};
 use tauri::{AppHandle, Emitter, Manager};
+use tauri_plugin_opener::OpenerExt;
 
 const APP_FONT_FAMILY: &str = "HarmonyOS Sans SC";
 const APP_FONT_BYTES: &[u8] = include_bytes!("../../src/assets/fonts/HarmonyOS_Sans_SC.ttf");
@@ -110,6 +111,31 @@ fn save_external_file(path: String, content: String) -> Result<(), AppError> {
         message: e.to_string(),
         details: Default::default(),
     })
+}
+
+#[tauri::command]
+fn open_file_with_system_app(app: AppHandle, path: String) -> Result<(), AppError> {
+    app.opener()
+        .open_path(&path, None::<&str>)
+        .map_err(|e| AppError {
+            code: "openFile".into(),
+            message: e.to_string(),
+            details: Default::default(),
+        })
+}
+
+#[tauri::command]
+fn open_note_with_system_app(app: AppHandle, id: String) -> Result<(), AppError> {
+    let store = default_store()?;
+    let metadata = store.find_note_metadata(&id)?;
+    let path = store.note_path_for(&metadata.file_name, &metadata.category);
+    app.opener()
+        .open_path(path.display().to_string(), None::<&str>)
+        .map_err(|e| AppError {
+            code: "openFile".into(),
+            message: e.to_string(),
+            details: Default::default(),
+        })
 }
 
 #[tauri::command]
@@ -529,6 +555,8 @@ pub fn run() {
             notes_move_category,
             notes_rename_file_stem,
             read_external_file,
+            open_file_with_system_app,
+            open_note_with_system_app,
             save_external_file,
             convert_svg_to_png,
             get_file_modified_time,

@@ -116,10 +116,16 @@ pub struct NoteMetadata {
     pub file_stem: String,
     #[serde(default)]
     pub category: String,
+    #[serde(default = "default_file_format")]
+    pub file_format: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub word_count: usize,
     pub preview: String,
+}
+
+fn default_file_format() -> String {
+    "md".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -132,6 +138,8 @@ pub struct Note {
     pub file_stem: String,
     #[serde(default)]
     pub category: String,
+    #[serde(default = "default_file_format")]
+    pub file_format: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub word_count: usize,
@@ -491,6 +499,19 @@ impl NoteStore {
             metadata_file.migrated_v2 = true;
             self.save_metadata(&metadata_file)?;
         }
+        // Patch file_format from file_name extension — handles metadata
+        // cached before the file_format field was introduced.
+        let mut format_patched = false;
+        for note in metadata_file.notes.iter_mut() {
+            let detected = classify_format(&note.file_name);
+            if note.file_format != detected {
+                note.file_format = detected.to_string();
+                format_patched = true;
+            }
+        }
+        if format_patched {
+            self.save_metadata(&metadata_file)?;
+        }
         let mut metadata = metadata_file.notes;
         metadata.retain(|note| {
             self.note_path_in_category(&note.file_name, &note.category)
@@ -503,20 +524,42 @@ impl NoteStore {
     pub fn read_note(&self, id: &str) -> Result<Note, AppError> {
         self.ensure_storage()?;
         let metadata = self.find_metadata(id)?;
-        let content = fs::read_to_string(
-            self.note_path_in_category(&metadata.file_name, &metadata.category),
-        )?;
+        let path = self.note_path_in_category(&metadata.file_name, &metadata.category);
+        // Determine format: use metadata field first, but fall back to
+        // extension detection (handles legacy caches without file_format).
+        let format = if metadata.file_format == "md" {
+            // Double-check: if the file name doesn't end with .md, re-detect.
+            classify_format(&metadata.file_name)
+        } else {
+            &metadata.file_format
+        };
+        let content = if format == "md" {
+            fs::read_to_string(&path)?
+        } else {
+            String::new() // non-md opened via system default app
+        };
         Ok(Note {
             id: metadata.id,
             title: metadata.title,
             file_name: metadata.file_name,
             file_stem: metadata.file_stem,
             category: metadata.category,
+            file_format: format.to_string(),
             created_at: metadata.created_at,
             updated_at: metadata.updated_at,
             word_count: metadata.word_count,
             content,
         })
+    }
+
+    /// Public accessor for building a file path from file_name + category.
+    pub fn note_path_for(&self, file_name: &str, category: &str) -> PathBuf {
+        self.note_path_in_category(file_name, category)
+    }
+
+    /// Find note metadata by ID (public, used by commands outside NoteStore).
+    pub fn find_note_metadata(&self, id: &str) -> Result<NoteMetadata, AppError> {
+        self.find_metadata(id)
     }
 
     pub fn create_note(&self, request: SaveNoteRequest) -> Result<Note, AppError> {
@@ -544,6 +587,7 @@ impl NoteStore {
             file_name: file_name.clone(),
             file_stem: file_stem_display(&file_name),
             category: category.clone(),
+            file_format: "md".to_string(),
             created_at: now,
             updated_at: now,
             word_count,
@@ -561,6 +605,7 @@ impl NoteStore {
             file_name,
             file_stem: metadata.file_stem,
             category,
+            file_format: "md".to_string(),
             created_at: now,
             updated_at: now,
             word_count,
@@ -576,6 +621,10 @@ impl NoteStore {
             .iter_mut()
             .find(|note| note.id == id)
             .ok_or_else(|| AppError::note_not_found(id))?;
+
+        if note.file_format != "md" {
+            return Err(AppError::new("readOnly", "只读文件，不可编辑内容"));
+        }
 
         let file_name = note.file_name.clone();
         let old_category = note.category.clone();
@@ -610,6 +659,7 @@ impl NoteStore {
             file_name: note.file_name.clone(),
             file_stem: note.file_stem.clone(),
             category: new_category,
+            file_format: note.file_format.clone(),
             created_at: note.created_at,
             updated_at: note.updated_at,
             word_count: note.word_count,
@@ -628,6 +678,10 @@ impl NoteStore {
             .iter_mut()
             .find(|note| note.id == id)
             .ok_or_else(|| AppError::note_not_found(id))?;
+
+        if note.file_format != "md" {
+            return Err(AppError::new("readOnly", "只读文件，不可重命名"));
+        }
 
         let safe_stem = safe_file_stem(new_stem);
         let (actual_stem, new_file_name) = if safe_stem.is_empty() {
@@ -662,10 +716,14 @@ impl NoteStore {
             .ok_or_else(|| AppError::note_not_found(id))?;
         let metadata = metadata_file.notes.remove(index);
         let path = self.note_path_in_category(&metadata.file_name, &metadata.category);
-        if path.exists() {
-            trash::delete(&path)
-                .map_err(|e| AppError::new("trash", format!("移入回收站失败: {e}")))?;
+        if metadata.file_format == "md" {
+            // Markdown files: move to OS trash
+            if path.exists() {
+                trash::delete(&path)
+                    .map_err(|e| AppError::new("trash", format!("移入回收站失败: {e}")))?;
+            }
         }
+        // Non-md files: only remove from metadata cache; original file stays on disk
         self.save_metadata(&metadata_file)
     }
 
@@ -1153,22 +1211,38 @@ impl NoteStore {
         category: &str,
         notes: &mut Vec<NoteMetadata>,
     ) -> Result<(), AppError> {
+        let supported = supported_extensions();
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
             let path = entry.path();
-            if path.extension().and_then(|extension| extension.to_str()) != Some("md") {
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if !supported.contains(&ext.to_ascii_lowercase().as_str()) {
                 continue;
             }
 
             let file_name = entry.file_name().to_string_lossy().to_string();
-            // Try legacy pattern first ({uuid}_{title}.md), then fall back
-            // to generating a new ID for clean filenames ({title}.md).
+            let format = classify_format(&file_name);
+            let is_md = format == "md";
+
             let id = id_from_file_name(&file_name).unwrap_or_else(|| {
-                let stem = file_name.strip_suffix(".md").unwrap_or(&file_name);
+                let stem = strip_known_extension(&file_name);
                 Self::make_note_id(stem, category)
             });
-            let content = fs::read_to_string(&path).unwrap_or_default();
-            let title = infer_title(&file_name, &content);
+
+            let (title, word_count, preview) = if is_md {
+                let content = fs::read_to_string(&path).unwrap_or_default();
+                (
+                    infer_title(&file_name, &content),
+                    count_words(&content),
+                    preview(&content),
+                )
+            } else {
+                // Non-md files: don't read content during scan (performance).
+                // Title from file stem, preview as format indicator.
+                let stem = file_stem_display(&file_name);
+                (stem, 0usize, format!("[{} 文件]", format_label(format)))
+            };
+
             let modified = entry
                 .metadata()
                 .and_then(|metadata| metadata.modified())
@@ -1181,10 +1255,11 @@ impl NoteStore {
                 file_name: file_name.clone(),
                 file_stem: file_stem_display(&file_name),
                 category: category.to_string(),
+                file_format: format.to_string(),
                 created_at: modified,
                 updated_at: modified,
-                word_count: count_words(&content),
-                preview: preview(&content),
+                word_count,
+                preview,
             });
         }
         Ok(())
@@ -1298,14 +1373,17 @@ fn preview(content: &str) -> String {
 }
 
 fn id_from_file_name(file_name: &str) -> Option<String> {
-    let stem = file_name.strip_suffix(".md")?;
+    let stem = strip_known_extension(file_name);
+    if stem.len() == file_name.len() {
+        return None; // no known extension
+    }
     // Legacy: {uuid}_{title}.md → extract the UUID part.
     if let Some((first, _)) = stem.split_once('_') {
         if first.len() >= 32 && first.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
             return Some(first.to_string());
         }
     }
-    // New format: {title}.md — no ID in filename; caller should generate one.
+    // New format: {title}.{ext} — no ID in filename; caller should generate one.
     None
 }
 
@@ -1318,7 +1396,7 @@ fn infer_title(file_name: &str, content: &str) -> String {
         return title.to_string();
     }
 
-    let stem = file_name.strip_suffix(".md").unwrap_or(file_name);
+    let stem = strip_known_extension(file_name);
     // Legacy: {uuid}_{title}.md → extract title after first _.
     if let Some((first, rest)) = stem.split_once('_') {
         if first.len() >= 32 && first.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
@@ -1330,7 +1408,7 @@ fn infer_title(file_name: &str, content: &str) -> String {
 }
 
 fn file_stem_display(file_name: &str) -> String {
-    let stem = file_name.strip_suffix(".md").unwrap_or(file_name);
+    let stem = strip_known_extension(file_name);
     // Legacy: {uuid}_{title}.md → extract title after first _.
     if let Some((first, rest)) = stem.split_once('_') {
         if first.len() >= 32 && first.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
@@ -1346,6 +1424,50 @@ fn is_markdown_path(path: &Path) -> bool {
         .and_then(|extension| extension.to_str())
         .map(|extension| extension.eq_ignore_ascii_case("md"))
         .unwrap_or(false)
+}
+
+/// All file extensions that the notes directory scanner recognizes.
+fn supported_extensions() -> &'static [&'static str] {
+    &["md", "docx", "doc", "pdf", "xlsx"]
+}
+
+/// Classify a file by its extension into a format label.
+fn classify_format(file_name: &str) -> &'static str {
+    let lower = file_name.to_lowercase();
+    for ext in supported_extensions() {
+        if lower.ends_with(&format!(".{}", ext)) {
+            return ext;
+        }
+    }
+    "md" // default
+}
+
+/// Whether a file (by name) should be treated as read-only in the editor.
+fn is_read_only_file(file_name: &str) -> bool {
+    classify_format(file_name) != "md"
+}
+
+/// Strip a known supported extension from a file name, returning the stem.
+fn strip_known_extension(file_name: &str) -> &str {
+    for ext in supported_extensions() {
+        let suffix = format!(".{}", ext);
+        if let Some(stem) = file_name.strip_suffix(&suffix) {
+            return stem;
+        }
+    }
+    file_name
+}
+
+/// Human-readable label for a file format.
+fn format_label(format: &str) -> &str {
+    match format {
+        "md" => "MD",
+        "docx" => "DOCX",
+        "doc" => "DOC",
+        "pdf" => "PDF",
+        "xlsx" => "XLSX",
+        _ => "FILE",
+    }
 }
 
 fn imported_markdown_title(path: &Path, content: &str) -> String {

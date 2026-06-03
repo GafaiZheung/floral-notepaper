@@ -574,7 +574,13 @@ pub fn extract_file_arg(args: &[String]) -> Option<String> {
     args.iter()
         .find(|arg| {
             let lower = arg.to_lowercase();
-            lower.ends_with(".md") || lower.ends_with(".markdown") || lower.ends_with(".txt")
+            lower.ends_with(".md")
+                || lower.ends_with(".markdown")
+                || lower.ends_with(".txt")
+                || lower.ends_with(".docx")
+                || lower.ends_with(".doc")
+                || lower.ends_with(".pdf")
+                || lower.ends_with(".xlsx")
         })
         .cloned()
 }
