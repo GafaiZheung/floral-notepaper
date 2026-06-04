@@ -21,7 +21,8 @@ describe("NotePad surface modes", () => {
     expect(markup).not.toContain("min-h-[96px]");
     expect(markup).toContain("pb-2");
     expect(markup).toContain("<input");
-    expect(markup).toContain("<textarea");
+    expect(markup).toContain('data-codemirror-editor="true"');
+    expect(markup).not.toContain("<textarea");
     expect(markup).toContain("cursor-default");
     expect(markup).not.toContain("cursor-grab");
     expect(markup).not.toContain("cursor-grabbing");
@@ -54,7 +55,7 @@ describe("NotePad surface modes", () => {
     expect(markup).not.toContain("cursor-grabbing");
     expect(markup).not.toContain("bg-bamboo-mist/70 p-2");
     expect(markup).not.toContain("<input");
-    expect(markup).not.toContain("<textarea");
+    expect(markup).not.toContain('data-codemirror-editor="true"');
     expect(markup).not.toContain(">保存<");
     expect(markup).toContain(">空<");
   });

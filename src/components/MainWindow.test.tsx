@@ -63,12 +63,11 @@ describe("MainWindow settings", () => {
     expect(markup).not.toContain('d="m7 8 5-5 5 5"');
   });
 
-  test("uses the body font for the main Markdown editor text", () => {
+  test("renders the CodeMirror markdown editor", () => {
     const markup = renderToStaticMarkup(<MainWindow />);
-    const editorMatch = markup.match(/<textarea[^>]*>/);
 
-    expect(editorMatch?.[0]).toContain("font-body");
-    expect(editorMatch?.[0]).not.toContain("font-mono");
+    expect(markup).toContain('data-codemirror-editor="true"');
+    expect(markup).not.toContain("<textarea");
   });
 
   test("labels the pin button as a toggle", () => {
@@ -87,15 +86,19 @@ describe("MainWindow editor undo", () => {
     expect(markup.indexOf('aria-label="撤销"')).toBeLessThan(markup.indexOf(">保存<"));
   });
 
-  test("focuses the editor and runs the browser undo command", () => {
+  test("focuses the editor and runs undo via ref API", () => {
     const focus = vi.fn();
-    const execCommand = vi.fn(() => true);
-    const textarea = { disabled: false, focus } as unknown as HTMLTextAreaElement;
+    const runUndo = vi.fn(() => true);
+    const editor = { focus, runUndo } as unknown as import("./MarkdownEditor").MarkdownEditorHandle;
 
-    const undone = runEditorUndo(textarea, { execCommand });
+    const undone = runEditorUndo(editor);
 
     expect(undone).toBe(true);
     expect(focus).toHaveBeenCalledOnce();
-    expect(execCommand).toHaveBeenCalledWith("undo");
+    expect(runUndo).toHaveBeenCalledOnce();
+  });
+
+  test("returns false for null editor", () => {
+    expect(runEditorUndo(null)).toBe(false);
   });
 });

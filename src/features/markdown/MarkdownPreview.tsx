@@ -9,6 +9,7 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import type { Components } from "react-markdown";
 import "katex/dist/katex.min.css";
 import { MermaidDiagram } from "./MermaidDiagram";
+import { SyntaxHighlightedCode } from "./SyntaxHighlightedCode";
 
 function CodeBlock({ children }: { children: React.ReactNode }) {
   const { t } = useTranslation();
@@ -108,8 +109,13 @@ const components: Components = {
       return <MermaidDiagram chart={childText} />;
     }
 
-    const isBlock = className?.startsWith("language-") || childText.includes("\n");
+    const hasLanguage = className?.startsWith("language-");
+    const isBlock = hasLanguage || childText.includes("\n");
     if (isBlock) {
+      // Use syntax highlighting for fenced code blocks with a language tag
+      if (hasLanguage && className) {
+        return <SyntaxHighlightedCode code={childText} className={className} />;
+      }
       return (
         <code className="text-[0.85em] font-mono text-ink-soft leading-[1.8] whitespace-pre">
           {children}

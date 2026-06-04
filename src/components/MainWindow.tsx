@@ -20,6 +20,8 @@ import type { AppConfig, ViewMode } from "../features/settings/types";
 import { displayPathLabel, parentDirFromFilePath } from "../features/settings/notePaths";
 import { normalizeTileColor } from "../features/settings/tileColor";
 import { BackgroundLayer } from "./BackgroundLayer";
+import { MarkdownEditor } from "./MarkdownEditor";
+import type { MarkdownEditorHandle } from "./MarkdownEditor";
 import { SettingsPanel } from "./SettingsPanel";
 import { SlidingButtonGroup } from "./SlidingButtonGroup";
 import {
@@ -100,13 +102,15 @@ type FormatAction =
   | "blockMath";
 
 function applyFormat(
-  textarea: HTMLTextAreaElement,
+  editor: MarkdownEditorHandle,
+  currentValue: string,
   action: FormatAction,
   translate: TFunction,
   setContent: (v: string) => void,
   markDirty: () => void,
 ) {
-  const { selectionStart: start, selectionEnd: end, value } = textarea;
+  const { from: start, to: end } = editor.getSelectionRange();
+  const value = currentValue;
   const selected = value.slice(start, end);
   const before = value.slice(0, start);
   const after = value.slice(end);
@@ -258,20 +262,15 @@ function applyFormat(
   setContent(result);
   markDirty();
   requestAnimationFrame(() => {
-    textarea.focus();
-    textarea.setSelectionRange(cursorStart, cursorEnd);
+    editor.focus();
+    editor.setSelectionRange(cursorStart, cursorEnd);
   });
 }
 
-type UndoDocument = Pick<Document, "execCommand">;
-
-export function runEditorUndo(
-  textarea: HTMLTextAreaElement | null,
-  doc: UndoDocument = document,
-): boolean {
-  if (!textarea || textarea.disabled) return false;
-  textarea.focus();
-  return doc.execCommand("undo");
+export function runEditorUndo(editor: MarkdownEditorHandle | null): boolean {
+  if (!editor) return false;
+  editor.focus();
+  return editor.runUndo();
 }
 
 export function pinTileButtonTitle(isPinned: boolean): string {
@@ -393,7 +392,9 @@ export function MainWindow({
   }, []);
   const [renameFileFor, setRenameFileFor] = useState<string | null>(null);
   const [renameFileValue, setRenameFileValue] = useState("");
-  const contentRef = useRef<HTMLTextAreaElement>(null);
+  const contentRef = useRef<MarkdownEditorHandle>(null);
+  const previewScrollRef = useRef<HTMLDivElement>(null);
+  const isScrollSyncing = useRef(false);
   const externalFileMtimeRef = useRef<number>(0);
   const lastExternalSaveRef = useRef<number>(0);
   const savedHiddenCategoriesRef = useRef<string[] | undefined>(undefined);
@@ -409,6 +410,38 @@ export function MainWindow({
   const selectedNoteRef = useRef(selectedNote);
   selectedNoteRef.current = selectedNote;
 
+  // Scroll sync: proportional ratio mapping between editor textarea and preview container.
+  // A guard ref prevents infinite loops when programmatically setting scrollTop.
+  const handleEditorScroll = useCallback(() => {
+    if (effectiveViewModeRef.current !== "split" || isScrollSyncing.current) return;
+    const editor = contentRef.current;
+    const preview = previewScrollRef.current;
+    if (!editor || !preview) return;
+    const maxScrollEditor = editor.getMaxScrollTop();
+    if (maxScrollEditor <= 0) return;
+    const ratio = editor.getScrollTop() / maxScrollEditor;
+    isScrollSyncing.current = true;
+    preview.scrollTop = ratio * (preview.scrollHeight - preview.clientHeight);
+    requestAnimationFrame(() => {
+      isScrollSyncing.current = false;
+    });
+  }, []);
+
+  const handlePreviewScroll = useCallback(() => {
+    if (effectiveViewModeRef.current !== "split" || isScrollSyncing.current) return;
+    const editor = contentRef.current;
+    const preview = previewScrollRef.current;
+    if (!editor || !preview) return;
+    const maxScrollPreview = preview.scrollHeight - preview.clientHeight;
+    if (maxScrollPreview <= 0) return;
+    const ratio = preview.scrollTop / maxScrollPreview;
+    isScrollSyncing.current = true;
+    editor.setScrollTop(ratio * editor.getMaxScrollTop());
+    requestAnimationFrame(() => {
+      isScrollSyncing.current = false;
+    });
+  }, []);
+
   const selectedExternalFile = useMemo(
     () => externalFiles.find((f) => f.id === selectedId) ?? null,
     [externalFiles, selectedId],
@@ -421,6 +454,8 @@ export function MainWindow({
   // Force preview mode for read-only files (external or internal non-md notes).
   const effectiveViewMode: ViewMode =
     isReadOnlyExternal || isReadOnlyInternal ? "preview" : viewMode;
+  const effectiveViewModeRef = useRef(effectiveViewMode);
+  effectiveViewModeRef.current = effectiveViewMode;
 
   const noteMenuTarget = useMemo(
     () => notes.find((note) => note.id === noteMenu?.noteId) ?? null,
@@ -805,6 +840,15 @@ export function MainWindow({
 
     return () => window.clearInterval(interval);
   }, [selectedExternalFile]);
+
+  useEffect(() => {
+    // Reset both editor and preview scroll positions when switching notes.
+    // requestAnimationFrame ensures the DOM has rendered the new content first.
+    requestAnimationFrame(() => {
+      if (contentRef.current) contentRef.current.setScrollTop(0);
+      if (previewScrollRef.current) previewScrollRef.current.scrollTop = 0;
+    });
+  }, [selectedId]);
 
   useEffect(() => {
     function closeMenus() {
@@ -1331,9 +1375,8 @@ export function MainWindow({
 
   const handleUndo = () => {
     if (!selectedId) return;
-    const textarea = contentRef.current;
-    if (runEditorUndo(textarea)) {
-      setContent(textarea?.value ?? content);
+    const editor = contentRef.current;
+    if (runEditorUndo(editor)) {
       markDirty();
     }
   };
@@ -2601,11 +2644,11 @@ export function MainWindow({
                           <button
                             key={button.label}
                             title={button.title}
-                            onMouseDown={(e) => e.preventDefault()}
                             onClick={() => {
                               if (contentRef.current) {
                                 applyFormat(
                                   contentRef.current,
+                                  content,
                                   button.action,
                                   t,
                                   setContent,
@@ -2621,24 +2664,19 @@ export function MainWindow({
                       </div>
 
                       <div className="flex-1 overflow-hidden px-5 pb-4">
-                        <textarea
+                        <MarkdownEditor
                           ref={contentRef}
-                          data-tab-indent="true"
                           value={content}
-                          onChange={(event) => {
-                            setContent(event.target.value);
+                          onScroll={handleEditorScroll}
+                          onChange={(newValue) => {
+                            setContent(newValue);
                             markDirty();
-                          }}
-                          className="w-full h-full leading-[1.9] text-ink-soft font-body placeholder:text-ink-ghost/40"
-                          style={{
-                            fontSize: `${settingsConfig?.fontSize ?? 14}px`,
-                            tabSize: `var(--tab-indent-size, 2)`,
                           }}
                           placeholder={t("main.editor.contentPlaceholder", {
                             defaultValue: "开始写作……",
                           })}
-                          spellCheck={false}
                           disabled={!selectedId}
+                          fontSize={settingsConfig?.fontSize ?? 14}
                         />
                       </div>
                     </div>
@@ -2674,6 +2712,8 @@ export function MainWindow({
                         </div>
                       )}
                       <div
+                        ref={previewScrollRef}
+                        onScroll={handlePreviewScroll}
                         className={`flex-1 overflow-y-auto px-6 pb-6 ${
                           effectiveViewMode === "preview" ? "pt-3" : "pt-1"
                         }`}

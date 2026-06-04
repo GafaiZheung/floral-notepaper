@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { MouseEvent } from "react";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
+import { MarkdownEditor } from "./MarkdownEditor";
+import type { MarkdownEditorHandle } from "./MarkdownEditor";
 import { createNote, getErrorMessage, getNote, listNotes, updateNote } from "../features/notes/api";
 import type { Note, NoteMetadata } from "../features/notes/types";
 import {
@@ -131,7 +133,7 @@ export function NotePad({
   );
   const [isExiting, setIsExiting] = useState(false);
   const titleRef = useRef<HTMLInputElement>(null);
-  const contentRef = useRef<HTMLTextAreaElement>(null);
+  const contentRef = useRef<MarkdownEditorHandle>(null);
   const isStandby = useRef(
     typeof window !== "undefined" &&
       new URLSearchParams(window.location.search).get("standby") === "1",
@@ -633,29 +635,31 @@ export function NotePad({
                   style={{ fontSize: `${surfaceFontSize}px` }}
                 />
 
-                <textarea
+                <MarkdownEditor
                   ref={contentRef}
-                  data-tab-indent="true"
                   value={content}
-                  onChange={(event) => {
-                    setContent(event.target.value);
+                  onChange={(newValue) => {
+                    setContent(newValue);
                     setStatus("dirty");
                   }}
                   onKeyDown={(event) => {
                     if (event.key === "ArrowUp") {
-                      const ta = contentRef.current;
-                      if (ta && ta.selectionStart === ta.selectionEnd) {
-                        const textBeforeCursor = content.slice(0, ta.selectionStart);
-                        if (!textBeforeCursor.includes("\n")) {
-                          event.preventDefault();
-                          titleRef.current?.focus();
+                      const editor = contentRef.current;
+                      if (editor) {
+                        const { from, to } = editor.getSelectionRange();
+                        if (from === to) {
+                          const textBeforeCursor = content.slice(0, from);
+                          if (!textBeforeCursor.includes("\n")) {
+                            event.preventDefault();
+                            titleRef.current?.focus();
+                          }
                         }
                       }
                     }
                   }}
                   placeholder={t("notepad.placeholder.content", { defaultValue: "写点什么……" })}
-                  className="w-full flex-1 min-h-0 pb-2 leading-relaxed text-ink-soft font-body placeholder:text-ink-ghost/50"
-                  style={{ fontSize: `${surfaceFontSize}px`, tabSize: `var(--tab-indent-size, 2)` }}
+                  className="w-full flex-1 min-h-0 pb-2"
+                  fontSize={surfaceFontSize}
                 />
 
                 <div className="flex items-center justify-between mt-auto pt-2 border-t border-paper-deep/30 shrink-0">
