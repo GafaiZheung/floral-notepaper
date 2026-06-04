@@ -115,7 +115,12 @@
       "clearSearch": "清空搜索",
       "importMarkdown": "导入 Markdown",
       "newNote": "新建笔记",
-      "searchPlaceholder": "搜索笔记…"
+      "searchPlaceholder": "搜索笔记…",
+      "tabDirectory": "目录",
+      "tabOutline": "大纲"
+    },
+    "outline": {
+      "empty": "当前文档暂无标题"
     },
     "statusBar": {
       "byteSize": "{{size}} KB",

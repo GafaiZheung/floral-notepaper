@@ -115,7 +115,12 @@
       "clearSearch": "清除搜尋",
       "importMarkdown": "匯入 Markdown",
       "newNote": "新增筆記",
-      "searchPlaceholder": "搜尋筆記…"
+      "searchPlaceholder": "搜尋筆記…",
+      "tabDirectory": "目錄",
+      "tabOutline": "大綱"
+    },
+    "outline": {
+      "empty": "目前文件暫無標題"
     },
     "statusBar": {
       "byteSize": "{{size}} KB",

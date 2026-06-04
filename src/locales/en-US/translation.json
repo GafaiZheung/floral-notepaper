@@ -115,7 +115,12 @@
       "clearSearch": "Clear search",
       "importMarkdown": "Import Markdown",
       "newNote": "New Note",
-      "searchPlaceholder": "Search notes…"
+      "searchPlaceholder": "Search notes…",
+      "tabDirectory": "Directory",
+      "tabOutline": "Outline"
+    },
+    "outline": {
+      "empty": "No headings in this document"
     },
     "statusBar": {
       "byteSize": "{{size}} KB",

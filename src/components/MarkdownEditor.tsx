@@ -17,6 +17,7 @@ export interface MarkdownEditorHandle {
   getScrollTop(): number;
   setScrollTop(top: number): void;
   getMaxScrollTop(): number;
+  scrollToLine(lineNumber: number): void;
   getSelectionRange(): { from: number; to: number };
   setSelectionRange(from: number, to: number): void;
   insertAtCursor(text: string): void;
@@ -188,6 +189,16 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           const view = viewRef.current;
           if (!view) return 0;
           return view.scrollDOM.scrollHeight - view.scrollDOM.clientHeight;
+        },
+        scrollToLine(lineNumber: number): void {
+          const view = viewRef.current;
+          if (!view) return;
+          const doc = view.state.doc;
+          if (lineNumber >= doc.lines) return;
+          const line = doc.line(lineNumber + 1); // CodeMirror lines are 1-based
+          // Get the vertical position of the target line within the scroll DOM
+          const lineTop = view.lineBlockAt(line.from).top;
+          view.scrollDOM.scrollTop = lineTop;
         },
         getSelectionRange(): { from: number; to: number } {
           const view = viewRef.current;
