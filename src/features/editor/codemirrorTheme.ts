@@ -19,15 +19,15 @@ const darkBamboo = "#4faa70";
 const darkBambooLight = "#5fc085";
 
 export const lightHighlightStyle = HighlightStyle.define([
-  { tag: tags.heading1, color: ink, fontWeight: "700", fontSize: "1.5em" },
-  { tag: tags.heading2, color: ink, fontWeight: "700", fontSize: "1.3em" },
-  { tag: tags.heading3, color: ink, fontWeight: "600", fontSize: "1.15em" },
+  { tag: tags.heading1, color: ink, fontWeight: "700", fontSize: "1.57em" },
+  { tag: tags.heading2, color: ink, fontWeight: "700", fontSize: "1.21em" },
+  { tag: tags.heading3, color: ink, fontWeight: "600", fontSize: "1.07em" },
   { tag: tags.heading4, color: ink, fontWeight: "600" },
   { tag: tags.heading5, color: inkSoft, fontWeight: "600" },
   { tag: tags.heading6, color: inkSoft, fontWeight: "600" },
   { tag: tags.strong, color: ink, fontWeight: "700" },
   { tag: tags.emphasis, color: bambooLight, fontStyle: "italic" },
-  { tag: tags.monospace, color: bamboo },
+  { tag: tags.monospace, color: bamboo, fontSize: "0.85em" },
   { tag: tags.url, color: bamboo, textDecoration: "underline" },
   { tag: tags.link, color: bamboo },
   { tag: tags.quote, color: bambooLight, fontStyle: "italic" },
@@ -40,15 +40,15 @@ export const lightHighlightStyle = HighlightStyle.define([
 ]);
 
 export const darkHighlightStyle = HighlightStyle.define([
-  { tag: tags.heading1, color: darkInk, fontWeight: "700", fontSize: "1.5em" },
-  { tag: tags.heading2, color: darkInk, fontWeight: "700", fontSize: "1.3em" },
-  { tag: tags.heading3, color: darkInk, fontWeight: "600", fontSize: "1.15em" },
+  { tag: tags.heading1, color: darkInk, fontWeight: "700", fontSize: "1.57em" },
+  { tag: tags.heading2, color: darkInk, fontWeight: "700", fontSize: "1.21em" },
+  { tag: tags.heading3, color: darkInk, fontWeight: "600", fontSize: "1.07em" },
   { tag: tags.heading4, color: darkInk, fontWeight: "600" },
   { tag: tags.heading5, color: darkInkSoft, fontWeight: "600" },
   { tag: tags.heading6, color: darkInkSoft, fontWeight: "600" },
   { tag: tags.strong, color: darkInk, fontWeight: "700" },
   { tag: tags.emphasis, color: darkBambooLight, fontStyle: "italic" },
-  { tag: tags.monospace, color: darkBamboo },
+  { tag: tags.monospace, color: darkBamboo, fontSize: "0.85em" },
   { tag: tags.url, color: darkBamboo, textDecoration: "underline" },
   { tag: tags.link, color: darkBamboo },
   { tag: tags.quote, color: darkBambooLight, fontStyle: "italic" },
@@ -122,6 +122,7 @@ export function createCodemirrorBaseTheme(isDark: boolean): ReturnType<typeof Ed
       },
       ".cm-codeblock-line": {
         backgroundColor: isDark ? darkPaperWarmBg : paperWarmBg,
+        fontSize: "0.85em",
       },
     },
     { dark: isDark },

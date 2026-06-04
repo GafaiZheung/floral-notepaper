@@ -31,7 +31,7 @@ function sanitizeSvgForXml(svg: string): string {
   );
 }
 
-function ensureMermaidInit() {
+function ensureMermaidInit(fontSize: number) {
   if (mermaidInitialized) return;
   mermaid.initialize({
     startOnLoad: false,
@@ -49,7 +49,7 @@ function ensureMermaidInit() {
       tertiaryBorderColor: "#d8d0c0",
       tertiaryTextColor: "#4c4a42",
       lineColor: "#8b7a5e",
-      fontSize: "14px",
+      fontSize: `${fontSize}px`,
       fontFamily: "var(--font-body), sans-serif",
     },
   });
@@ -58,9 +58,10 @@ function ensureMermaidInit() {
 
 interface MermaidDiagramProps {
   chart: string;
+  fontSize?: number;
 }
 
-export function MermaidDiagram({ chart }: MermaidDiagramProps) {
+export function MermaidDiagram({ chart, fontSize = 14 }: MermaidDiagramProps) {
   const { t } = useTranslation();
   const [svg, setSvg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -74,7 +75,7 @@ export function MermaidDiagram({ chart }: MermaidDiagramProps) {
   const panOffsetRef = useRef({ x: 0, y: 0 });
 
   useEffect(() => {
-    ensureMermaidInit();
+    ensureMermaidInit(fontSize);
     let cancelled = false;
     const id = `mermaid-${Math.random().toString(36).slice(2, 8)}`;
 

@@ -80,18 +80,20 @@ export function SyntaxHighlightedCode({ code, className }: { code: string; class
   const trimmed = code.endsWith("\n") ? code.slice(0, -1) : code;
 
   return (
-    <Highlight theme={theme} code={trimmed} language={language}>
-      {({ tokens, getLineProps, getTokenProps }) => (
-        <>
-          {tokens.map((line, i) => (
-            <div key={i} {...getLineProps({ line })}>
-              {line.map((token, key) => (
-                <span key={key} {...getTokenProps({ token })} />
-              ))}
-            </div>
-          ))}
-        </>
-      )}
-    </Highlight>
+    <div className="text-[0.85em] font-mono leading-[1.8]">
+      <Highlight theme={theme} code={trimmed} language={language}>
+        {({ tokens, getLineProps, getTokenProps }) => (
+          <>
+            {tokens.map((line, i) => (
+              <div key={i} {...getLineProps({ line })}>
+                {line.map((token, key) => (
+                  <span key={key} {...getTokenProps({ token })} />
+                ))}
+              </div>
+            ))}
+          </>
+        )}
+      </Highlight>
+    </div>
   );
 }
