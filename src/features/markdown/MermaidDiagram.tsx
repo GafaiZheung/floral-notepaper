@@ -142,14 +142,13 @@ export function MermaidDiagram({ chart, fontSize = 14 }: MermaidDiagramProps) {
     }
   }, []);
 
-  // Mouse wheel zoom in lightbox
-  const handleLightboxWheel = useCallback((e: React.WheelEvent) => {
-    e.stopPropagation();
-    setZoomScale((prev) => {
-      const delta = e.deltaY > 0 ? -0.15 : 0.15;
-      const next = prev + delta;
-      return Math.max(0.3, Math.min(5, next));
-    });
+  // Zoom in/out via buttons
+  const handleZoomIn = useCallback(() => {
+    setZoomScale((prev) => Math.min(5, prev + 0.25));
+  }, []);
+
+  const handleZoomOut = useCallback(() => {
+    setZoomScale((prev) => Math.max(0.25, prev - 0.25));
   }, []);
 
   // Drag to pan in lightbox
@@ -250,14 +249,13 @@ export function MermaidDiagram({ chart, fontSize = 14 }: MermaidDiagramProps) {
       {zoomOpen &&
         createPortal(
           <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/55 backdrop-blur-sm"
             onClick={handleZoomClose}
           >
             <div
               ref={lightboxContentRef}
-              className="relative max-w-[90vw] max-h-[90vh] overflow-hidden rounded-lg bg-white p-6 shadow-2xl select-none"
+              className="relative w-[96vw] h-[96vh] overflow-auto rounded-xl bg-white p-8 shadow-2xl select-none"
               onClick={(e) => e.stopPropagation()}
-              onWheel={handleLightboxWheel}
               onMouseDown={handlePanStart}
               onMouseMove={handlePanMove}
               onMouseUp={handlePanEnd}
@@ -265,9 +263,26 @@ export function MermaidDiagram({ chart, fontSize = 14 }: MermaidDiagramProps) {
               style={{ cursor: zoomScale > 1 ? "grab" : "default" }}
             >
               <div className="absolute top-3 right-3 flex gap-2 z-10">
-                <span className="px-2 py-1 rounded text-[11px] font-mono text-ink-ghost select-none">
+                <button
+                  type="button"
+                  onClick={handleZoomOut}
+                  className="w-7 h-7 flex items-center justify-center rounded text-[14px] font-mono bg-paper-deep/40 text-ink-soft hover:bg-paper-deep/60 transition-all cursor-pointer"
+                  title={t("mermaid.zoomOut", { defaultValue: "缩小" })}
+                >
+                  −
+                </button>
+                <span className="px-1.5 py-1 rounded text-[11px] font-mono text-ink-ghost select-none leading-snug">
                   {Math.round(zoomScale * 100)}%
                 </span>
+                <button
+                  type="button"
+                  onClick={handleZoomIn}
+                  className="w-7 h-7 flex items-center justify-center rounded text-[14px] font-mono bg-paper-deep/40 text-ink-soft hover:bg-paper-deep/60 transition-all cursor-pointer"
+                  title={t("mermaid.zoomIn", { defaultValue: "放大" })}
+                >
+                  +
+                </button>
+                <div className="w-px h-5 bg-paper-deep/30 self-center mx-0.5" />
                 <button
                   type="button"
                   onClick={handleSvgDownload}
@@ -291,10 +306,12 @@ export function MermaidDiagram({ chart, fontSize = 14 }: MermaidDiagramProps) {
                 </button>
               </div>
               <div
-                className="flex justify-center min-w-[300px]"
+                className="flex justify-center"
                 style={{
                   transform: `translate(${panOffset.x}px, ${panOffset.y}px) scale(${zoomScale})`,
                   transformOrigin: "center center",
+                  minWidth: zoomScale > 1 ? "max-content" : "100%",
+                  minHeight: zoomScale > 1 ? "max-content" : "100%",
                 }}
                 // biome-ignore lint/security/noDangerouslySetInnerHtml: trusted SVG from mermaid
                 dangerouslySetInnerHTML={{ __html: svg }}

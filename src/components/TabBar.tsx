@@ -134,7 +134,7 @@ export function TabBar({
               {isDirty && (
                 <span className="w-1.5 h-1.5 rounded-full bg-bamboo mr-1.5 shrink-0" />
               )}
-              <span className="text-[11.5px] truncate leading-none">
+              <span className="text-[11.5px] truncate leading-snug">
                 {getDisplayTitle(tab.title)}
               </span>
               <button
