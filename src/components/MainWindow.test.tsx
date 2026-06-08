@@ -76,6 +76,29 @@ describe("MainWindow settings", () => {
   });
 });
 
+describe("MainWindow tab management", () => {
+  test("renders the tab bar with new tab button", () => {
+    const markup = renderToStaticMarkup(<MainWindow />);
+
+    // The new tab button should be present with its aria label
+    expect(markup).toContain("新建标签页");
+  });
+
+  test("renders no tab items when no notes are open", () => {
+    const markup = renderToStaticMarkup(<MainWindow />);
+
+    // The tab scroll container should be present but empty (no data-tab-id attributes)
+    expect(markup).not.toContain('data-tab-id=');
+  });
+
+  test("renders tab scroll container", () => {
+    const markup = renderToStaticMarkup(<MainWindow />);
+
+    // Tab bar should contain overflow-x-hidden for scroll area
+    expect(markup).toContain("overflow-x-hidden");
+  });
+});
+
 describe("MainWindow editor undo", () => {
   test("renders undo as an icon before save in the editor action bar", () => {
     const markup = renderToStaticMarkup(<MainWindow />);
