@@ -297,5 +297,18 @@
   },
   "tile": {
     "empty": "Empty"
+  },
+  "tabs": {
+    "close": "Close",
+    "newTab": "New Tab",
+    "unsavedConfirm": "\"{{title}}\" has unsaved changes. Close it?",
+    "unsavedMultipleConfirm": "{{count}} tab(s) have unsaved changes. Save all and close?",
+    "contextMenu": {
+      "close": "Close",
+      "closeOthers": "Close Others",
+      "closeRight": "Close to the Right",
+      "closeAll": "Close All",
+      "closeSaved": "Close Saved"
+    }
   }
 }

@@ -297,5 +297,18 @@
   },
   "tile": {
     "empty": "空"
+  },
+  "tabs": {
+    "close": "关闭",
+    "newTab": "新建标签页",
+    "unsavedConfirm": "\"{{title}}\" 有未保存的更改，是否关闭？",
+    "unsavedMultipleConfirm": "有 {{count}} 个标签页有未保存的更改，是否全部保存并关闭？",
+    "contextMenu": {
+      "close": "关闭",
+      "closeOthers": "关闭其他",
+      "closeRight": "关闭右侧",
+      "closeAll": "关闭所有",
+      "closeSaved": "关闭已保存"
+    }
   }
 }
