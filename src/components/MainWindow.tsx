@@ -26,6 +26,8 @@ import { MarkdownEditor } from "./MarkdownEditor";
 import type { MarkdownEditorHandle } from "./MarkdownEditor";
 import { SettingsPanel } from "./SettingsPanel";
 import { SlidingButtonGroup } from "./SlidingButtonGroup";
+import { TabBar } from "./TabBar";
+import type { TabMenuAction } from "./TabBar";
 import {
   createNote,
   createCategory,
@@ -335,6 +337,19 @@ export function MainWindow({
   const [notes, setNotes] = useState<NoteMetadata[]>([]);
   const [externalFiles, setExternalFiles] = useState<ExternalFile[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // --- Tab state ---
+  interface TabState {
+    noteId: string;
+    title: string;
+    content: string;
+    contentFormat: string; // "markdown" | "html"
+    saveState: SaveState;
+  }
+
+  const [tabs, setTabs] = useState<TabState[]>([]);
+  const [activeTabId, setActiveTabId] = useState<string | null>(null);
+
   const [searchQuery, setSearchQuery] = useState("");
   const [viewMode, setViewMode] = useState<ViewMode>(
     normalizeViewMode(initialConfig?.defaultViewMode ?? "split"),
@@ -650,16 +665,6 @@ export function MainWindow({
   );
   const charCount = useMemo(() => countNoteChars(content), [content]);
 
-  const applyNote = useCallback((note: Note) => {
-    setSelectedId(note.id);
-    setTitle(note.title);
-    setContent(note.content);
-    setContentFormat(note.fileFormat && note.fileFormat !== "md" ? "html" : "markdown");
-    setSaveState("saved");
-    setErrorMessage(null);
-    setNoteTransitionKey((k) => k + 1);
-  }, []);
-
   const replaceNoteMetadata = useCallback((note: Note) => {
     const metadata = metadataFromNote(note);
     setNotes((current) => {
@@ -669,6 +674,205 @@ export function MainWindow({
         : [metadata, ...current];
       return [...next].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt));
     });
+  }, []);
+
+  // === Tab helpers ===
+
+  /** Find a tab by noteId */
+  const findTab = useCallback(
+    (noteId: string): TabState | undefined => tabs.find((t) => t.noteId === noteId),
+    [tabs],
+  );
+
+  /** Persist current editor state into the active tab */
+  const flushActiveTab = useCallback(() => {
+    if (!activeTabId) return;
+    setTabs((prev) =>
+      prev.map((t) =>
+        t.noteId === activeTabId
+          ? { ...t, content, contentFormat, title, saveState }
+          : t,
+      ),
+    );
+  }, [activeTabId, content, contentFormat, title, saveState]);
+
+  /** Open a note as a tab (or activate if already open) */
+  const openTab = useCallback(
+    async (noteId: string) => {
+      // If tab already exists, just activate
+      const existing = findTab(noteId);
+      if (existing) {
+        flushActiveTab();
+        setActiveTabId(noteId);
+        setContent(existing.content);
+        setContentFormat(existing.contentFormat);
+        setTitle(existing.title);
+        setSaveState(existing.saveState);
+        setSelectedId(noteId);
+        setNoteTransitionKey((k) => k + 1);
+        return;
+      }
+
+      // Load note from backend
+      setIsLoading(true);
+      setErrorMessage(null);
+      try {
+        const note = await getNote(noteId);
+        flushActiveTab();
+        const newTab: TabState = {
+          noteId: note.id,
+          title: note.title,
+          content: note.content,
+          contentFormat: note.fileFormat && note.fileFormat !== "md" ? "html" : "markdown",
+          saveState: "saved" as SaveState,
+        };
+        setTabs((prev) => [...prev, newTab]);
+        setActiveTabId(note.id);
+        setSelectedId(note.id);
+        setContent(note.content);
+        setContentFormat(newTab.contentFormat);
+        setTitle(note.title);
+        setSaveState("saved");
+        setNoteTransitionKey((k) => k + 1);
+        replaceNoteMetadata(note);
+      } catch (error) {
+        setErrorMessage(getErrorMessage(error));
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [findTab, flushActiveTab, replaceNoteMetadata],
+  );
+
+  /** Close a tab by noteId */
+  const closeTab = useCallback(
+    async (noteId: string) => {
+      const tab = findTab(noteId);
+      if (!tab) return;
+
+      if (tab.saveState === "dirty") {
+        const confirmed = window.confirm(
+          t("tabs.unsavedConfirm", {
+            defaultValue: `"${tab.title || "无标题"}" 有未保存的更改，是否关闭？`,
+          }),
+        );
+        if (!confirmed) return;
+      }
+
+      setTabs((prev) => prev.filter((t) => t.noteId !== noteId));
+
+      if (noteId === activeTabId) {
+        // Need to compute from the updated tabs — use a local snapshot
+        const remaining = tabs.filter((t) => t.noteId !== noteId);
+        if (remaining.length > 0) {
+          const idx = tabs.findIndex((t) => t.noteId === noteId);
+          const next = remaining[Math.min(idx, remaining.length - 1)];
+          setActiveTabId(next.noteId);
+          setSelectedId(next.noteId);
+          setContent(next.content);
+          setContentFormat(next.contentFormat);
+          setTitle(next.title);
+          setSaveState(next.saveState);
+          setNoteTransitionKey((k) => k + 1);
+        } else {
+          setActiveTabId(null);
+          setSelectedId(null);
+          setContent("");
+          setContentFormat("markdown");
+          setTitle("");
+          setSaveState("idle");
+        }
+      }
+    },
+    [activeTabId, findTab, t, tabs],
+  );
+
+  /** Handle tab menu actions (batch close) */
+  const handleTabMenuAction = useCallback(
+    async (action: TabMenuAction, noteId: string) => {
+      let toClose: string[] = [];
+
+      switch (action) {
+        case "close":
+          toClose = [noteId];
+          break;
+        case "closeOthers":
+          toClose = tabs.filter((t) => t.noteId !== noteId).map((t) => t.noteId);
+          break;
+        case "closeRight": {
+          const idx = tabs.findIndex((t) => t.noteId === noteId);
+          toClose = tabs.slice(idx + 1).map((t) => t.noteId);
+          break;
+        }
+        case "closeAll":
+          toClose = tabs.map((t) => t.noteId);
+          break;
+        case "closeSaved":
+          toClose = tabs.filter((t) => t.saveState !== "dirty").map((t) => t.noteId);
+          break;
+      }
+
+      // Check if any dirty tabs are being closed
+      const dirtyClosing = toClose.filter(
+        (id) => tabs.find((t) => t.noteId === id)?.saveState === "dirty",
+      );
+      if (dirtyClosing.length > 0) {
+        const confirmed = window.confirm(
+          t("tabs.unsavedMultipleConfirm", {
+            defaultValue: `有 ${dirtyClosing.length} 个标签页有未保存的更改，是否全部保存并关闭？`,
+          }),
+        );
+        if (!confirmed) {
+          toClose = toClose.filter((id) => !dirtyClosing.includes(id));
+        }
+      }
+
+      // Close tabs
+      for (const id of toClose) {
+        setTabs((prev) => prev.filter((t) => t.noteId !== id));
+      }
+
+      // If active tab was among closed, switch to a remaining one
+      if (activeTabId && toClose.includes(activeTabId)) {
+        const remaining = tabs.filter((t) => !toClose.includes(t.noteId));
+        if (remaining.length > 0) {
+          const next = remaining[0];
+          setActiveTabId(next.noteId);
+          setSelectedId(next.noteId);
+          setContent(next.content);
+          setContentFormat(next.contentFormat);
+          setTitle(next.title);
+          setSaveState(next.saveState);
+          setNoteTransitionKey((k) => k + 1);
+        } else {
+          setActiveTabId(null);
+          setSelectedId(null);
+          setContent("");
+          setContentFormat("markdown");
+          setTitle("");
+          setSaveState("idle");
+        }
+      }
+    },
+    [activeTabId, t, tabs],
+  );
+
+  // Sync saveState changes back to active tab
+  useEffect(() => {
+    if (!activeTabId) return;
+    setTabs((prev) =>
+      prev.map((t) => (t.noteId === activeTabId ? { ...t, saveState } : t)),
+    );
+  }, [activeTabId, saveState]);
+
+  const applyNote = useCallback((note: Note) => {
+    setSelectedId(note.id);
+    setTitle(note.title);
+    setContent(note.content);
+    setContentFormat(note.fileFormat && note.fileFormat !== "md" ? "html" : "markdown");
+    setSaveState("saved");
+    setErrorMessage(null);
+    setNoteTransitionKey((k) => k + 1);
   }, []);
 
   const loadNote = useCallback(
@@ -986,6 +1190,9 @@ export function MainWindow({
         const mtime = await getFileModifiedTime(selectedExternalFile.filePath);
         externalFileMtimeRef.current = mtime;
         setSaveState("saved");
+        setTabs((prev) =>
+          prev.map((t) => (t.noteId === selectedId ? { ...t, title, saveState: "saved" as SaveState } : t)),
+        );
         setErrorMessage(null);
         return { id: selectedId, title, content } as Note;
       } catch (error) {
@@ -1001,6 +1208,9 @@ export function MainWindow({
       const note = await updateNote(selectedId, { title, content, category });
       replaceNoteMetadata(note);
       setSaveState("saved");
+      setTabs((prev) =>
+        prev.map((t) => (t.noteId === note.id ? { ...t, title: note.title, saveState: "saved" as SaveState } : t)),
+      );
       setErrorMessage(null);
       return note;
     } catch (error) {
@@ -1060,7 +1270,23 @@ export function MainWindow({
     try {
       const note = await createNote({ title: "", content: "", category: activeCategory });
       replaceNoteMetadata(note);
-      applyNote(note);
+      // Open as new tab
+      flushActiveTab();
+      const newTab: TabState = {
+        noteId: note.id,
+        title: note.title,
+        content: note.content,
+        contentFormat: "markdown",
+        saveState: "saved",
+      };
+      setTabs((prev) => [...prev, newTab]);
+      setActiveTabId(note.id);
+      setSelectedId(note.id);
+      setContent(note.content);
+      setContentFormat("markdown");
+      setTitle(note.title);
+      setSaveState("saved");
+      setNoteTransitionKey((k) => k + 1);
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
     }
@@ -1170,7 +1396,7 @@ export function MainWindow({
   };
 
   const handleSelectNote = async (id: string) => {
-    if (id === selectedId) return;
+    if (id === activeTabId) return;
     setDeleteConfirm(false);
     if (saveState === "dirty") {
       await saveCurrentNote();
@@ -1193,14 +1419,8 @@ export function MainWindow({
       return;
     }
 
-    setIsLoading(true);
-    try {
-      await loadNote(id);
-    } catch (error) {
-      setErrorMessage(getErrorMessage(error));
-    } finally {
-      setIsLoading(false);
-    }
+    flushActiveTab();
+    await openTab(id);
   };
 
   const handleSelectExternalFile = async (id: string) => {
@@ -1275,11 +1495,20 @@ export function MainWindow({
     setErrorMessage(null);
     try {
       await deleteNote(noteId);
+      // Close tab for deleted note
+      setTabs((prev) => prev.filter((t) => t.noteId !== noteId));
       const remaining = await refreshNotes();
-      if (noteId === selectedId && remaining[0]) {
-        await loadNote(remaining[0].id);
-      } else if (noteId === selectedId) {
-        clearCurrentNote();
+      if (noteId === activeTabId) {
+        if (remaining[0]) {
+          await openTab(remaining[0].id);
+        } else {
+          setActiveTabId(null);
+          setSelectedId(null);
+          setContent("");
+          setContentFormat("markdown");
+          setTitle("");
+          setSaveState("idle");
+        }
       }
     } catch (error) {
       setErrorMessage(getErrorMessage(error));
@@ -1698,6 +1927,18 @@ export function MainWindow({
             </button>
           </div>
         </div>
+
+        <TabBar
+          tabs={tabs.map((t) => ({ noteId: t.noteId, title: t.title, saveState: t.saveState }))}
+          activeTabId={activeTabId}
+          onSelectTab={(noteId) => {
+            flushActiveTab();
+            void openTab(noteId);
+          }}
+          onCloseTab={(noteId) => void closeTab(noteId)}
+          onNewTab={() => void handleNewNote()}
+          onTabMenuAction={(action, noteId) => void handleTabMenuAction(action, noteId)}
+        />
 
         <div className="relative z-10 flex flex-1 min-h-0">
           <div
