@@ -37,4 +37,8 @@ export interface AppConfig {
   backgroundPositionX?: number;
   backgroundPositionY?: number;
   hiddenCategories?: string[];
+  /** Tab management: persisted tab list (noteId array) */
+  openTabs?: string[];
+  /** Tab management: last active tab id */
+  activeTabId?: string;
 }

@@ -865,6 +865,18 @@ export function MainWindow({
     );
   }, [activeTabId, saveState]);
 
+  // Persist tabs to config (debounced)
+  useEffect(() => {
+    if (!settingsConfig) return;
+    const timer = window.setTimeout(() => {
+      const updated = { ...settingsConfig };
+      updated.openTabs = tabs.map((t) => t.noteId);
+      updated.activeTabId = activeTabId ?? undefined;
+      void saveConfig(updated);
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [tabs, activeTabId, settingsConfig]);
+
   const applyNote = useCallback((note: Note) => {
     setSelectedId(note.id);
     setTitle(note.title);
@@ -979,7 +991,44 @@ export function MainWindow({
         setNotes(loadedNotes);
         setCategories(loadedCategories);
         setCollapsedCategories(new Set(loadedCategories));
-        if (loadedNotes[0]) {
+
+        // Restore persisted tabs, or fall back to loading the first note
+        const persistedTabs = loadedConfig.openTabs;
+        if (persistedTabs && persistedTabs.length > 0) {
+          const restoredTabs: TabState[] = [];
+          for (const tabId of persistedTabs) {
+            const meta = loadedNotes.find((n) => n.id === tabId);
+            if (!meta) continue;
+            try {
+              const note = await getNote(tabId);
+              restoredTabs.push({
+                noteId: note.id,
+                title: note.title,
+                content: note.content,
+                contentFormat:
+                  note.fileFormat && note.fileFormat !== "md" ? "html" : "markdown",
+                saveState: "saved" as SaveState,
+              });
+            } catch {
+              // Note may have been deleted — skip
+            }
+          }
+          if (restoredTabs.length > 0 && !cancelled) {
+            setTabs(restoredTabs);
+            const restoreActiveId =
+              loadedConfig.activeTabId &&
+              restoredTabs.some((t) => t.noteId === loadedConfig.activeTabId)
+                ? loadedConfig.activeTabId
+                : restoredTabs[0].noteId;
+            const activeTab = restoredTabs.find((t) => t.noteId === restoreActiveId)!;
+            setActiveTabId(activeTab.noteId);
+            setSelectedId(activeTab.noteId);
+            setContent(activeTab.content);
+            setContentFormat(activeTab.contentFormat);
+            setTitle(activeTab.title);
+            setSaveState("saved");
+          }
+        } else if (loadedNotes[0]) {
           const note = await getNote(loadedNotes[0].id);
           if (!cancelled) applyNote(note);
         } else {
