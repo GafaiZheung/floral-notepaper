@@ -342,6 +342,7 @@ export function MainWindow({
   interface TabState {
     noteId: string;
     title: string;
+    fileStem: string;
     content: string;
     contentFormat: string; // "markdown" | "html"
     saveState: SaveState;
@@ -699,7 +700,7 @@ export function MainWindow({
   /** Open a note as a tab (or activate if already open) */
   const openTab = useCallback(
     async (noteId: string) => {
-      // If tab already exists, just activate
+      // If tab already exists, just activate (fast path — instant switch)
       const existing = findTab(noteId);
       if (existing) {
         flushActiveTab();
@@ -713,22 +714,27 @@ export function MainWindow({
         return;
       }
 
-      // Load note from backend
+      // New tab: immediately show loading state so UI responds instantly
+      flushActiveTab();
+      setSelectedId(noteId);
+      setActiveTabId(noteId);
+      setContent("");
+      setTitle("");
+      setSaveState("idle");
       setIsLoading(true);
       setErrorMessage(null);
+
       try {
         const note = await getNote(noteId);
-        flushActiveTab();
         const newTab: TabState = {
           noteId: note.id,
           title: note.title,
+          fileStem: note.fileStem,
           content: note.content,
           contentFormat: note.fileFormat && note.fileFormat !== "md" ? "html" : "markdown",
           saveState: "saved" as SaveState,
         };
         setTabs((prev) => [...prev, newTab]);
-        setActiveTabId(note.id);
-        setSelectedId(note.id);
         setContent(note.content);
         setContentFormat(newTab.contentFormat);
         setTitle(note.title);
@@ -737,6 +743,12 @@ export function MainWindow({
         replaceNoteMetadata(note);
       } catch (error) {
         setErrorMessage(getErrorMessage(error));
+        // Clean up on error: remove from tabs and reset selection
+        setTabs((prev) => prev.filter((t) => t.noteId !== noteId));
+        setActiveTabId(null);
+        setSelectedId(null);
+        setContent("");
+        setTitle("");
       } finally {
         setIsLoading(false);
       }
@@ -1004,6 +1016,7 @@ export function MainWindow({
               restoredTabs.push({
                 noteId: note.id,
                 title: note.title,
+                fileStem: note.fileStem,
                 content: note.content,
                 contentFormat:
                   note.fileFormat && note.fileFormat !== "md" ? "html" : "markdown",
@@ -1183,6 +1196,16 @@ export function MainWindow({
     });
   }, [selectedId]);
 
+  // Trigger tab-switch animation on the editor container without re-mounting
+  useEffect(() => {
+    const el = splitContainerRef.current;
+    if (!el || !selectedId) return;
+    el.classList.remove("animate-tab-switch");
+    // Force reflow to restart the animation
+    void (el as HTMLElement).offsetWidth;
+    el.classList.add("animate-tab-switch");
+  }, [noteTransitionKey]);
+
   useEffect(() => {
     function closeMenus() {
       setNoteMenuClosing(true);
@@ -1324,6 +1347,7 @@ export function MainWindow({
       const newTab: TabState = {
         noteId: note.id,
         title: note.title,
+        fileStem: note.fileStem,
         content: note.content,
         contentFormat: "markdown",
         saveState: "saved",
@@ -1976,18 +2000,6 @@ export function MainWindow({
             </button>
           </div>
         </div>
-
-        <TabBar
-          tabs={tabs.map((t) => ({ noteId: t.noteId, title: t.title, saveState: t.saveState }))}
-          activeTabId={activeTabId}
-          onSelectTab={(noteId) => {
-            flushActiveTab();
-            void openTab(noteId);
-          }}
-          onCloseTab={(noteId) => void closeTab(noteId)}
-          onNewTab={() => void handleNewNote()}
-          onTabMenuAction={(action, noteId) => void handleTabMenuAction(action, noteId)}
-        />
 
         <div className="relative z-10 flex flex-1 min-h-0">
           <div
@@ -2754,6 +2766,17 @@ export function MainWindow({
           )}
 
           <div className="flex-1 flex flex-col min-w-0">
+            <TabBar
+              tabs={tabs.map((t) => ({ noteId: t.noteId, title: t.fileStem || t.title, saveState: t.saveState }))}
+              activeTabId={activeTabId}
+              onSelectTab={(noteId) => {
+                flushActiveTab();
+                void openTab(noteId);
+              }}
+              onCloseTab={(noteId) => void closeTab(noteId)}
+              onNewTab={() => void handleNewNote()}
+              onTabMenuAction={(action, noteId) => void handleTabMenuAction(action, noteId)}
+            />
             <div className="flex items-center justify-between px-4 h-10 border-b border-paper-deep/20 shrink-0 bg-paper/20">
               <div className="flex items-center gap-1">
                 <button
@@ -3057,6 +3080,27 @@ export function MainWindow({
               {!selectedId && !isLoading ? (
                 <div className="flex-1 flex items-center justify-center text-[13px] text-ink-ghost">
                   {t("main.editor.emptyHint", { defaultValue: "选择或新建一篇笔记" })}
+                </div>
+              ) : isLoading && selectedId ? (
+                <div className="flex-1 flex flex-col gap-3 px-6 pt-5 pb-4 animate-fade-in">
+                  {/* Loading skeleton — mimics title + content layout */}
+                  <div className="space-y-3">
+                    <div className="h-7 w-2/5 rounded bg-ink-ghost/15 animate-pulse" />
+                    <div className="flex items-center gap-3">
+                      <div className="h-3 w-24 rounded bg-ink-ghost/10 animate-pulse" />
+                      <div className="h-3 w-16 rounded bg-ink-ghost/10 animate-pulse" />
+                      <div className="h-3 w-16 rounded bg-ink-ghost/10 animate-pulse" />
+                    </div>
+                  </div>
+                  <div className="border-t border-paper-deep/15 pt-4 space-y-2.5">
+                    {Array.from({ length: 8 }).map((_, i) => (
+                      <div
+                        key={i}
+                        className="h-4 rounded bg-ink-ghost/10 animate-pulse"
+                        style={{ width: `${60 + Math.random() * 35}%` }}
+                      />
+                    ))}
+                  </div>
                 </div>
               ) : (
                 <>

@@ -95,7 +95,7 @@ export function TabBar({
   };
 
   return (
-    <div className="relative flex items-center bg-paper/50 border-b border-paper-deep/20 shrink-0 select-none h-9">
+    <div className="relative flex items-center shrink-0 select-none h-9 px-1 border-b border-paper-deep/15">
       {/* Left fade */}
       {showLeftFade && (
         <div className="absolute left-0 top-0 bottom-0 w-6 bg-gradient-to-r from-paper/70 to-transparent z-10 pointer-events-none" />
