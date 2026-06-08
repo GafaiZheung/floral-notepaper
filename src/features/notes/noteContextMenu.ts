@@ -1,6 +1,6 @@
 import { t, type TFunction } from "i18next";
 
-export type NoteContextMenuAction = "export" | "move" | "delete";
+export type NoteContextMenuAction = "export" | "move" | "delete" | "openFileLocation";
 
 export interface NoteContextMenuItem {
   action: NoteContextMenuAction;
@@ -17,6 +17,10 @@ export function getNoteContextMenuItems(translate: TFunction = t): NoteContextMe
     {
       action: "move",
       label: translate("noteMenu.moveToCategory", { defaultValue: "移动到分类…" }),
+    },
+    {
+      action: "openFileLocation",
+      label: translate("noteMenu.openFileLocation", { defaultValue: "打开文件位置" }),
     },
     {
       action: "delete",

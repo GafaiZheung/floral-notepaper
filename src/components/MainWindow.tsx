@@ -3,6 +3,7 @@ import type { MouseEvent } from "react";
 import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
 import { emit, listen } from "@tauri-apps/api/event";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { exportMarkdownNote, importMarkdownNote } from "../features/importExport/api";
 import { MarkdownPreview } from "../features/markdown/MarkdownPreview";
 import { extractHeadings } from "../features/markdown/extractHeadings";
@@ -1635,6 +1636,19 @@ export function MainWindow({
 
     if (action === "move") {
       setNoteMenuMode("move");
+      return;
+    }
+
+    if (action === "openFileLocation") {
+      setNoteMenuClosing(true);
+      const notesDir = savedNotesDir || settingsConfig?.notesDir;
+      if (!notesDir) return;
+      const filePath = note.category
+        ? `${notesDir}/${note.category}/${note.fileName}`
+        : `${notesDir}/${note.fileName}`;
+      revealItemInDir(filePath).catch((err) => {
+        setErrorMessage(getErrorMessage(err));
+      });
       return;
     }
 
