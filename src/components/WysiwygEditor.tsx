@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useDeferredValue, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { MarkdownEditor } from "./MarkdownEditor";
 import type { MarkdownEditorHandle } from "./MarkdownEditor";
@@ -26,6 +26,8 @@ export interface WysiwygEditorProps {
   placeholder?: string;
   /** Called when content changes (for dirty tracking in parent) */
   onDirty?: () => void;
+  /** Hide the first heading block (used when title is shown in a separate input) */
+  hideFirstHeading?: boolean;
 }
 
 export function WysiwygEditor({
@@ -36,13 +38,21 @@ export function WysiwygEditor({
   className,
   placeholder,
   onDirty,
+  hideFirstHeading = false,
 }: WysiwygEditorProps) {
   const { t } = useTranslation();
   const [mode, setMode] = useState<WysiwygMode>("reading");
   const [editingBlockIndex, setEditingBlockIndex] = useState<number | null>(null);
   const sourceEditorRef = useRef<MarkdownEditorHandle>(null);
 
-  const blocks = useMemo(() => parseBlocks(content), [content]);
+  const deferredContent = useDeferredValue(content);
+  const allBlocks = useMemo(() => parseBlocks(deferredContent), [deferredContent]);
+  const blocks = useMemo(() => {
+    if (hideFirstHeading && allBlocks.length > 0 && allBlocks[0].type === "heading") {
+      return allBlocks.slice(1);
+    }
+    return allBlocks;
+  }, [allBlocks, hideFirstHeading]);
 
   const modeSwitchOptions = useMemo(
     () => [
@@ -101,7 +111,7 @@ export function WysiwygEditor({
   );
 
   return (
-    <div className={className}>
+    <div className={`flex flex-col flex-1 min-h-0 ${className ?? ""}`}>
       {/* Toolbar */}
       <div className="flex items-center justify-between px-4 pt-2 pb-1 shrink-0">
         <div className="flex items-center gap-0.5">

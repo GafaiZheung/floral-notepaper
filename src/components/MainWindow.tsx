@@ -2668,6 +2668,7 @@ export function MainWindow({
                     defaultValue: "开始写作……",
                   })}
                   onDirty={markDirty}
+                  hideFirstHeading={!!title.trim()}
                 />
               )}
             </div>
