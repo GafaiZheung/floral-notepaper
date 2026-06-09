@@ -2196,7 +2196,10 @@ export function MainWindow({
                     </div>
                   )}
 
-                  <div className="flex-1 overflow-y-auto px-2 pb-2">
+                  <div
+                    className="flex-1 overflow-y-auto px-2 pb-2"
+                    style={{ scrollbarGutter: "stable" }}
+                  >
                     <div className="space-y-0.5">
                       {externalFiles.length > 0 && (
                         <>
@@ -2397,14 +2400,14 @@ export function MainWindow({
                         const isCollapsed = collapsedCategories.has(group.category);
 
                         return (
-                          <div key={group.category} className="px-2 mb-0.5">
+                          <div key={group.category} className="mb-0.5">
                             <div
-                              className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg group/cat cursor-pointer select-none transition-all duration-200 ${
+                              className={`flex items-center gap-1.5 pl-2 pr-3 py-2 rounded-xl group/cat cursor-pointer select-none transition-all duration-[600ms] ${
                                 dragOverCategory === group.category
-                                  ? "bg-bamboo/15 border border-bamboo/40 ring-1 ring-bamboo/20"
+                                  ? "bg-bamboo/10 ring-1 ring-bamboo/20"
                                   : isCollapsed
-                                    ? "bg-transparent border border-bamboo/15"
-                                    : "bg-bamboo/8 border border-bamboo/15 rounded-b-none"
+                                    ? "hover:bg-paper-warm/70"
+                                    : "bg-bamboo-mist/30"
                               }`}
                               onClick={() => toggleCategoryCollapse(group.category)}
                               onContextMenu={(e) => {
@@ -2485,7 +2488,7 @@ export function MainWindow({
 
                             <div className={`category-body ${isCollapsed ? "" : "expanded"}`}>
                               <div
-                                className="category-body-inner bg-bamboo/[0.03] border border-t-0 border-bamboo/10 rounded-b-lg pb-1 pt-1"
+                                className="category-body-inner relative ml-[14px] pl-3 border-l-[1.5px] border-bamboo/15 pt-0.5 pb-0.5"
                                 onDragOver={(e) => {
                                   e.preventDefault();
                                   e.dataTransfer.dropEffect = "move";
@@ -2504,7 +2507,7 @@ export function MainWindow({
                                 }}
                               >
                                 {group.notes.length === 0 ? (
-                                  <div className="px-3 py-3 text-center text-[11px] text-ink-ghost/50">
+                                  <div className="px-2 py-3 text-center text-[11px] text-ink-ghost/50">
                                     {t("main.category.emptyFolder", { defaultValue: "空文件夹" })}
                                   </div>
                                 ) : (
@@ -2526,14 +2529,13 @@ export function MainWindow({
                                         }
                                         onMouseEnter={() => setHoveredId(note.id)}
                                         onMouseLeave={() => setHoveredId(null)}
-                                        className={`w-full text-left rounded-lg mx-1 px-2.5 py-2 transition-all duration-[600ms] cursor-pointer group relative ${
+                                        className={`w-full text-left rounded-xl px-3 py-2.5 transition-all duration-[600ms] cursor-pointer group relative ${
                                           isSelected
                                             ? "bg-bamboo-mist/70"
                                             : isHovered
                                               ? "bg-paper-warm/70"
                                               : "bg-transparent"
                                         }`}
-                                        style={{ width: "calc(100% - 8px)" }}
                                       >
                                         <div
                                           className={`absolute left-0 top-1/2 -translate-y-1/2 w-[3px] rounded-r-full bg-bamboo/60 transition-all duration-[600ms] ${
