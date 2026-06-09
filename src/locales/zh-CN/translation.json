@@ -12,7 +12,9 @@
     "untitledNote": "无标题笔记",
     "untitledFile": "未命名文件",
     "wordCount": "{{count}} 字",
-    "wordCountUnit": "字"
+    "wordCountUnit": "字",
+    "retry": "重试",
+    "refresh": "刷新"
   },
   "contextMenu": {
     "edit": {
@@ -117,7 +119,8 @@
       "newNote": "新建笔记",
       "searchPlaceholder": "搜索笔记…",
       "tabDirectory": "目录",
-      "tabOutline": "大纲"
+      "tabOutline": "大纲",
+      "tabGit": "Git 版本管理"
     },
     "outline": {
       "empty": "当前文档暂无标题"
@@ -311,6 +314,34 @@
   },
   "tile": {
     "empty": "空"
+  },
+  "git": {
+    "checking": "检查中…",
+    "commit": "提交",
+    "committing": "提交中…",
+    "commitMessagePlaceholder": "输入提交信息…",
+    "downloadGit": "下载 Git →",
+    "error": "获取 Git 状态失败",
+    "initDescription": "初始化后可通过 Git 管理笔记的版本历史",
+    "initializing": "初始化中…",
+    "initRepo": "初始化 Git 仓库",
+    "noChanges": "没有待提交的变更",
+    "noCommits": "暂无提交记录",
+    "notAGitRepo": "当前目录尚未初始化 Git 仓库",
+    "notInstalled": "未检测到 Git",
+    "notInstalledHint": "请先安装 Git 后再使用版本管理功能",
+    "revert": "还原",
+    "showChanges": "变更",
+    "showLog": "历史",
+    "stage": "暂存",
+    "stageAll": "全部暂存",
+    "stageAllShort": "全部暂存",
+    "stagedChanges": "已暂存 ({{count}})",
+    "unstage": "取消暂存",
+    "unstageAll": "全部取消暂存",
+    "unstagedChanges": "未暂存 ({{count}})",
+    "untrackedFiles": "未跟踪 ({{count}})",
+    "workingTreeClean": "工作目录干净"
   },
   "tabs": {
     "close": "关闭",

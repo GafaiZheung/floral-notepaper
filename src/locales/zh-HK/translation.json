@@ -12,7 +12,9 @@
     "untitledNote": "無標題筆記",
     "untitledFile": "未命名檔案",
     "wordCount": "{{count}} 字",
-    "wordCountUnit": "字"
+    "wordCountUnit": "字",
+    "retry": "重試",
+    "refresh": "重新整理"
   },
   "contextMenu": {
     "edit": {
@@ -117,7 +119,8 @@
       "newNote": "新增筆記",
       "searchPlaceholder": "搜尋筆記…",
       "tabDirectory": "目錄",
-      "tabOutline": "大綱"
+      "tabOutline": "大綱",
+      "tabGit": "Git 版本管理"
     },
     "outline": {
       "empty": "目前文件暫無標題"
@@ -285,5 +288,33 @@
   },
   "tile": {
     "empty": "空"
+  },
+  "git": {
+    "checking": "檢查中…",
+    "commit": "提交",
+    "committing": "提交中…",
+    "commitMessagePlaceholder": "輸入提交訊息…",
+    "downloadGit": "下載 Git →",
+    "error": "取得 Git 狀態失敗",
+    "initDescription": "初始化後可透過 Git 管理筆記的版本歷史",
+    "initializing": "初始化中…",
+    "initRepo": "初始化 Git 倉庫",
+    "noChanges": "沒有待提交的變更",
+    "noCommits": "暫無提交記錄",
+    "notAGitRepo": "目前目錄尚未初始化 Git 倉庫",
+    "notInstalled": "未檢測到 Git",
+    "notInstalledHint": "請先安裝 Git 後再使用版本管理功能",
+    "revert": "還原",
+    "showChanges": "變更",
+    "showLog": "歷史",
+    "stage": "暫存",
+    "stageAll": "全部暫存",
+    "stageAllShort": "全部暫存",
+    "stagedChanges": "已暫存 ({{count}})",
+    "unstage": "取消暫存",
+    "unstageAll": "全部取消暫存",
+    "unstagedChanges": "未暫存 ({{count}})",
+    "untrackedFiles": "未追蹤 ({{count}})",
+    "workingTreeClean": "工作目錄乾淨"
   }
 }

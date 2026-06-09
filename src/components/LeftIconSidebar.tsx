@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 
-export type SidebarPanel = "directory" | "outline";
+export type SidebarPanel = "directory" | "outline" | "git";
 
 interface LeftIconSidebarProps {
   activePanel: SidebarPanel;
@@ -63,6 +63,34 @@ export function LeftIconSidebar({ activePanel, onSelectPanel, onSettings }: Left
           <line x1="3" y1="6" x2="3.01" y2="6" />
           <line x1="3" y1="12" x2="3.01" y2="12" />
           <line x1="3" y1="18" x2="3.01" y2="18" />
+        </svg>
+      </button>
+
+      {/* Git icon */}
+      <button
+        onClick={() => onSelectPanel("git")}
+        className={`w-9 h-9 flex items-center justify-center rounded-lg mb-1 transition-all cursor-pointer ${
+          activePanel === "git"
+            ? "text-bamboo bg-bamboo-mist/60 shadow-sm"
+            : "text-ink-ghost hover:text-ink-faint hover:bg-paper-warm"
+        }`}
+        title={t("main.sidebar.tabGit", { defaultValue: "Git 版本管理" })}
+      >
+        <svg
+          width="18"
+          height="18"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <circle cx="12" cy="18" r="3" />
+          <circle cx="6" cy="6" r="3" />
+          <circle cx="18" cy="6" r="3" />
+          <path d="M18 9v1a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V9" />
+          <path d="M12 3v4" />
         </svg>
       </button>
 

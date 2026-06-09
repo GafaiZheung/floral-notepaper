@@ -3,6 +3,7 @@ pub mod locales;
 pub mod services;
 
 use locales::Locale;
+use services::git;
 use services::notes::{
     default_store, AppConfig, AppError, Note, NoteMetadata, OpenedFileClassification,
     SaveNoteRequest,
@@ -514,6 +515,55 @@ fn one_drive_synced_paths(svc: tauri::State<'_, OneDriveService>) -> Result<Vec<
     Ok(svc.get_synced_paths())
 }
 
+// ---------------------------------------------------------------------------
+// Git commands
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+fn git_check_installed() -> Result<bool, AppError> {
+    Ok(git::check_git_installed())
+}
+
+#[tauri::command]
+fn git_is_repo(path: String) -> Result<bool, AppError> {
+    Ok(git::is_git_repo(std::path::Path::new(&path)))
+}
+
+#[tauri::command]
+fn git_init(path: String) -> Result<String, AppError> {
+    git::git_init(std::path::Path::new(&path))
+}
+
+#[tauri::command]
+fn git_status(path: String) -> Result<git::GitStatus, AppError> {
+    git::git_status(std::path::Path::new(&path))
+}
+
+#[tauri::command]
+fn git_stage_files(path: String, files: Vec<String>) -> Result<String, AppError> {
+    git::git_stage_files(std::path::Path::new(&path), &files)
+}
+
+#[tauri::command]
+fn git_unstage_files(path: String, files: Vec<String>) -> Result<String, AppError> {
+    git::git_unstage_files(std::path::Path::new(&path), &files)
+}
+
+#[tauri::command]
+fn git_commit(path: String, message: String) -> Result<String, AppError> {
+    git::git_commit(std::path::Path::new(&path), &message)
+}
+
+#[tauri::command]
+fn git_log(path: String, count: Option<u32>) -> Result<Vec<git::GitCommit>, AppError> {
+    git::git_log(std::path::Path::new(&path), count)
+}
+
+#[tauri::command]
+fn git_revert_file(path: String, file: String) -> Result<String, AppError> {
+    git::git_revert_file(std::path::Path::new(&path), &file)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -586,7 +636,17 @@ pub fn run() {
             one_drive_remove_sync_folder,
             one_drive_sync_status,
             one_drive_synced_paths,
-            one_drive_logout
+            one_drive_logout,
+            // Git
+            git_check_installed,
+            git_is_repo,
+            git_init,
+            git_status,
+            git_stage_files,
+            git_unstage_files,
+            git_commit,
+            git_log,
+            git_revert_file
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

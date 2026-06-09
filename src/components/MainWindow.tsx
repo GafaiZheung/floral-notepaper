@@ -22,6 +22,7 @@ import { displayPathLabel, parentDirFromFilePath } from "../features/settings/no
 import { normalizeTileColor } from "../features/settings/tileColor";
 import { BackgroundLayer } from "./BackgroundLayer";
 import { LeftIconSidebar } from "./LeftIconSidebar";
+import { GitPanel } from "./GitPanel";
 import { SettingsTab } from "./SettingsTab";
 import { TabBar } from "./TabBar";
 import type { TabMenuAction } from "./TabBar";
@@ -132,7 +133,7 @@ export function MainWindow({
 
   const [searchQuery, setSearchQuery] = useState("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [sidebarTab, setSidebarTab] = useState<"directory" | "outline">("directory");
+  const [sidebarTab, setSidebarTab] = useState<"directory" | "outline" | "git">("directory");
   const [content, setContent] = useState("");
   const [contentFormat, setContentFormat] = useState<string>("markdown");
   const [title, setTitle] = useState("");
@@ -2747,6 +2748,17 @@ export function MainWindow({
                   headings={headings}
                   onJumpTo={handleJumpToHeading}
                   emptyText={t("main.outline.empty", { defaultValue: "当前文档暂无标题" })}
+                />
+              </div>
+            )}
+
+            {sidebarTab === "git" && savedNotesDir && (
+              <div key="git" className="flex flex-col flex-1 min-h-0 animate-view-fade">
+                <GitPanel
+                  repoPath={savedNotesDir}
+                  onRefresh={() => {
+                    void refreshNotes();
+                  }}
                 />
               </div>
             )}

@@ -12,7 +12,9 @@
     "untitledNote": "Untitled Note",
     "untitledFile": "Untitled File",
     "wordCount": "{{count}} characters",
-    "wordCountUnit": "characters"
+    "wordCountUnit": "characters",
+    "retry": "Retry",
+    "refresh": "Refresh"
   },
   "contextMenu": {
     "edit": {
@@ -117,7 +119,8 @@
       "newNote": "New Note",
       "searchPlaceholder": "Search notes…",
       "tabDirectory": "Directory",
-      "tabOutline": "Outline"
+      "tabOutline": "Outline",
+      "tabGit": "Git"
     },
     "outline": {
       "empty": "No headings in this document"
@@ -311,6 +314,34 @@
   },
   "tile": {
     "empty": "Empty"
+  },
+  "git": {
+    "checking": "Checking…",
+    "commit": "Commit",
+    "committing": "Committing…",
+    "commitMessagePlaceholder": "Enter commit message…",
+    "downloadGit": "Download Git →",
+    "error": "Failed to fetch Git status",
+    "initDescription": "Initialize to manage note version history with Git",
+    "initializing": "Initializing…",
+    "initRepo": "Initialize Git Repository",
+    "noChanges": "No changes to commit",
+    "noCommits": "No commits yet",
+    "notAGitRepo": "This directory is not a Git repository",
+    "notInstalled": "Git not detected",
+    "notInstalledHint": "Please install Git to use version control features",
+    "revert": "Revert",
+    "showChanges": "Changes",
+    "showLog": "Log",
+    "stage": "Stage",
+    "stageAll": "Stage All",
+    "stageAllShort": "Stage All",
+    "stagedChanges": "Staged ({{count}})",
+    "unstage": "Unstage",
+    "unstageAll": "Unstage All",
+    "unstagedChanges": "Unstaged ({{count}})",
+    "untrackedFiles": "Untracked ({{count}})",
+    "workingTreeClean": "Working tree clean"
   },
   "tabs": {
     "close": "Close",
