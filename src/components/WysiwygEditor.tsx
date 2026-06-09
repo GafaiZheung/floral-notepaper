@@ -1,4 +1,12 @@
-import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
+import {
+  forwardRef,
+  useCallback,
+  useEffect,
+  useImperativeHandle,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { MarkdownEditor } from "./MarkdownEditor";
 import type { MarkdownEditorHandle } from "./MarkdownEditor";
@@ -36,10 +44,7 @@ export interface WysiwygEditorProps {
 }
 
 /** Compute which heading is at or above the top of the scroll container */
-function computeActiveHeadingFromDOM(
-  container: HTMLElement,
-  headings: Heading[],
-): number | null {
+function computeActiveHeadingFromDOM(container: HTMLElement, headings: Heading[]): number | null {
   const headingEls = container.querySelectorAll("h1, h2, h3, h4");
   if (headingEls.length === 0 || headings.length === 0) return null;
 
@@ -163,7 +168,10 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
           const headingEls = container.querySelectorAll("h1, h2, h3, h4");
           for (const el of headingEls) {
             if (el.textContent?.trim() === target.text) {
-              el.scrollIntoView({ behavior: "smooth", block: "start" });
+              const containerRect = container.getBoundingClientRect();
+              const elRect = (el as HTMLElement).getBoundingClientRect();
+              const scrollTarget = container.scrollTop + elRect.top - containerRect.top - 16;
+              container.scrollTo({ top: Math.max(0, scrollTarget), behavior: "smooth" });
               return;
             }
           }
@@ -174,24 +182,80 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
 
     const modeSwitchOptions = useMemo(
       () => [
-        { value: "reading" as WysiwygMode, label: t("settings.defaultView.wysiwyg", { defaultValue: "阅读编辑" }) },
-        { value: "source" as WysiwygMode, label: t("settings.defaultView.source", { defaultValue: "源码编辑" }) },
+        {
+          value: "reading" as WysiwygMode,
+          label: t("settings.defaultView.wysiwyg", { defaultValue: "阅读编辑" }),
+        },
+        {
+          value: "source" as WysiwygMode,
+          label: t("settings.defaultView.source", { defaultValue: "源码编辑" }),
+        },
       ],
       [t],
     );
 
     const toolbarButtons = useMemo<ToolbarButton[]>(
       () => [
-        { label: "B", title: t("main.toolbar.bold", { defaultValue: "粗体" }), style: "font-bold", action: "bold" },
-        { label: "I", title: t("main.toolbar.italic", { defaultValue: "斜体" }), style: "italic", action: "italic" },
-        { label: "H", title: t("main.toolbar.heading", { defaultValue: "标题" }), style: "font-bold", action: "heading" },
-        { label: "—", title: t("main.toolbar.hr", { defaultValue: "分割线" }), style: "", action: "hr" },
-        { label: "•", title: t("main.toolbar.ul", { defaultValue: "无序列表" }), style: "", action: "ul" },
-        { label: "1.", title: t("main.toolbar.ol", { defaultValue: "有序列表" }), style: "font-mono text-[9px]", action: "ol" },
-        { label: "<>", title: t("main.toolbar.code", { defaultValue: "代码" }), style: "font-mono text-[9px]", action: "code" },
-        { label: "❝", title: t("main.toolbar.quote", { defaultValue: "引用" }), style: "", action: "quote" },
-        { label: "∑", title: t("main.toolbar.inlineMath", { defaultValue: "行内公式" }), style: "font-mono text-[11px]", action: "inlineMath" },
-        { label: "∫", title: t("main.toolbar.blockMath", { defaultValue: "块级公式" }), style: "font-mono text-[11px]", action: "blockMath" },
+        {
+          label: "B",
+          title: t("main.toolbar.bold", { defaultValue: "粗体" }),
+          style: "font-bold",
+          action: "bold",
+        },
+        {
+          label: "I",
+          title: t("main.toolbar.italic", { defaultValue: "斜体" }),
+          style: "italic",
+          action: "italic",
+        },
+        {
+          label: "H",
+          title: t("main.toolbar.heading", { defaultValue: "标题" }),
+          style: "font-bold",
+          action: "heading",
+        },
+        {
+          label: "—",
+          title: t("main.toolbar.hr", { defaultValue: "分割线" }),
+          style: "",
+          action: "hr",
+        },
+        {
+          label: "•",
+          title: t("main.toolbar.ul", { defaultValue: "无序列表" }),
+          style: "",
+          action: "ul",
+        },
+        {
+          label: "1.",
+          title: t("main.toolbar.ol", { defaultValue: "有序列表" }),
+          style: "font-mono text-[9px]",
+          action: "ol",
+        },
+        {
+          label: "<>",
+          title: t("main.toolbar.code", { defaultValue: "代码" }),
+          style: "font-mono text-[9px]",
+          action: "code",
+        },
+        {
+          label: "❝",
+          title: t("main.toolbar.quote", { defaultValue: "引用" }),
+          style: "",
+          action: "quote",
+        },
+        {
+          label: "∑",
+          title: t("main.toolbar.inlineMath", { defaultValue: "行内公式" }),
+          style: "font-mono text-[11px]",
+          action: "inlineMath",
+        },
+        {
+          label: "∫",
+          title: t("main.toolbar.blockMath", { defaultValue: "块级公式" }),
+          style: "font-mono text-[11px]",
+          action: "blockMath",
+        },
       ],
       [t],
     );
@@ -268,7 +332,8 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
             <div ref={readingScrollRef} className="overflow-y-auto h-full">
               {blocks.length === 0 ? (
                 <p className="text-ink-ghost leading-[1.9] text-center pt-8">
-                  {placeholder || t("main.editor.contentPlaceholder", { defaultValue: "开始写作……" })}
+                  {placeholder ||
+                    t("main.editor.contentPlaceholder", { defaultValue: "开始写作……" })}
                 </p>
               ) : (
                 blocks.map((block, index) => (

@@ -205,8 +205,6 @@ export function MainWindow({
     return extractHeadings(content);
   }, [content]);
 
-  const [activeHeadingLine, setActiveHeadingLine] = useState<number | null>(null);
-
   // Jump to heading: delegate to WysiwygEditor's ref API
   const handleJumpToHeading = useCallback((lineNumber: number) => {
     wysiwygRef.current?.scrollToHeading(lineNumber);
@@ -1447,7 +1445,7 @@ export function MainWindow({
 
   return (
     <div className="w-full h-screen flex flex-col">
-      <div className="relative noise-bg bg-cloud flex flex-col flex-1">
+      <div className="relative noise-bg bg-cloud flex flex-col flex-1 min-h-0">
         <BackgroundLayer config={settingsConfig} />
         <div
           className="relative z-20 flex items-center justify-between pr-0 h-11 bg-paper/55 backdrop-blur-[1px] border-b border-paper-deep/30 shrink-0 select-none cursor-default"
@@ -2582,7 +2580,6 @@ export function MainWindow({
               <div key="outline" className="flex flex-col flex-1 min-h-0 animate-view-fade">
                 <OutlinePanel
                   headings={headings}
-                  activeLineNumber={activeHeadingLine ?? undefined}
                   onJumpTo={handleJumpToHeading}
                   emptyText={t("main.outline.empty", { defaultValue: "当前文档暂无标题" })}
                 />
@@ -2604,7 +2601,7 @@ export function MainWindow({
             </div>
           )}
 
-          <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+          <div className="flex-1 flex flex-col min-w-0">
             {settingsConfig?.tabLayout === "default" && (
               <TabBar
                 tabs={displayTabs}
@@ -2961,7 +2958,6 @@ export function MainWindow({
                       })}
                       onDirty={markDirty}
                       hideFirstHeading={!!title.trim()}
-                      onActiveHeadingChange={setActiveHeadingLine}
                     />
                   )}
                 </div>
