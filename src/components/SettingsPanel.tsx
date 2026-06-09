@@ -528,14 +528,20 @@ export interface ToggleRowProps {
 
 export function ToggleRow({ label, checked, onChange }: ToggleRowProps) {
   return (
-    <label className="flex items-center justify-between h-9 rounded-lg px-2.5 bg-paper-warm/45 border border-paper-deep/25 cursor-pointer">
+    <div
+      role="switch"
+      aria-checked={checked}
+      tabIndex={0}
+      className="flex items-center justify-between h-9 rounded-lg px-2.5 bg-paper-warm/45 border border-paper-deep/25 cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-bamboo/40"
+      onClick={() => onChange(!checked)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onChange(!checked);
+        }
+      }}
+    >
       <span className="text-[12px] text-ink-soft">{label}</span>
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(event) => onChange(event.target.checked)}
-        className="sr-only"
-      />
       <div
         className={`relative w-8 h-[18px] rounded-full transition-colors duration-250 ease-[cubic-bezier(0.22,1,0.36,1)] ${
           checked ? "bg-bamboo" : "bg-paper-deep/50"
@@ -547,7 +553,7 @@ export function ToggleRow({ label, checked, onChange }: ToggleRowProps) {
           }`}
         />
       </div>
-    </label>
+    </div>
   );
 }
 

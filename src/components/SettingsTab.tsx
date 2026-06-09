@@ -262,10 +262,25 @@ export function SettingsTab({ config, onChange, onChooseNotesDir }: SettingsTabP
                 checked={config.autostart}
                 onChange={(checked) => setConfigValue("autostart", checked)}
               />
-              <ToggleRow
-                label={t("settings.tabsInTitlebar", { defaultValue: "标签页集成到标题栏" })}
-                checked={config.tabsInTitlebar ?? true}
-                onChange={(checked) => setConfigValue("tabsInTitlebar", checked)}
+            </section>
+
+            <section className="space-y-2">
+              <label className="block text-[11px] font-body text-ink-faint">
+                {t("settings.tabLayout.label", { defaultValue: "标签页布局" })}
+              </label>
+              <SlidingButtonGroup
+                options={[
+                  {
+                    value: "compact" as const,
+                    label: t("settings.tabLayout.compact", { defaultValue: "紧凑" }),
+                  },
+                  {
+                    value: "default" as const,
+                    label: t("settings.tabLayout.default", { defaultValue: "默认" }),
+                  },
+                ]}
+                value={config.tabLayout ?? "compact"}
+                onChange={(v) => setConfigValue("tabLayout", v)}
               />
             </section>
           </div>

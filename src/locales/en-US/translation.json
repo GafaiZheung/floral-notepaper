@@ -234,7 +234,11 @@
     "quickNoteShortcut": "Quick Note shortcut",
     "rememberSurfaceSize": "Remember surface size",
     "tabIndentSize": "Tab indent width",
-    "tabsInTitlebar": "Show tabs in title bar",
+    "tabLayout": {
+      "label": "Tab layout",
+      "compact": "Compact",
+      "default": "Default"
+    },
     "selectFolder": "Select Folder",
     "shortcut": {
       "cancelHint": "Esc to cancel",

@@ -234,7 +234,11 @@
     "quickNoteShortcut": "快捷记录快捷键",
     "rememberSurfaceSize": "记住小窗尺寸",
     "tabIndentSize": "Tab 缩进宽度",
-    "tabsInTitlebar": "标签页集成到标题栏",
+    "tabLayout": {
+      "label": "标签页布局",
+      "compact": "紧凑",
+      "default": "默认"
+    },
     "selectFolder": "选择文件夹",
     "shortcut": {
       "cancelHint": "Esc 取消",

@@ -236,6 +236,24 @@ export function MainWindow({
     }),
     [t],
   );
+
+  // Derived tab list: inject settings as a virtual tab when active
+  const displayTabs = useMemo(() => {
+    const noteTabs = tabs.map((t) => ({
+      noteId: t.noteId,
+      title: t.fileStem || t.title,
+      saveState: t.saveState as "idle" | "dirty" | "saving" | "saved" | "error",
+    }));
+    if (settingsTabActive) {
+      noteTabs.push({
+        noteId: "__settings__",
+        title: t("settings.title", { defaultValue: "应用设置" }),
+        saveState: "idle" as const,
+      });
+    }
+    return noteTabs;
+  }, [tabs, settingsTabActive, t]);
+
   const filteredNotes = useMemo(() => filterNotes(notes, searchQuery), [notes, searchQuery]);
 
   const categoryGroups = useMemo(
@@ -937,10 +955,8 @@ export function MainWindow({
   };
 
   const toggleSettingsTab = useCallback(async () => {
-    if (settingsTabActive) {
-      setSettingsTabActive(false);
-      return;
-    }
+    // Always open settings; never toggle-close. Close via tab or note selection.
+    if (settingsTabActive) return;
     setSettingsTabActive(true);
     if (settingsConfig) return;
 
@@ -981,7 +997,12 @@ export function MainWindow({
         };
         try {
           const savedConfig = await saveConfig(normalizedConfig);
-          setSettingsConfig(savedConfig);
+          // Merge back frontend-only fields that the Rust backend may not return
+          const merged: AppConfig = {
+            ...savedConfig,
+            tabLayout: normalizedConfig.tabLayout,
+          };
+          setSettingsConfig(merged);
           setSavedNotesDir(savedConfig.notesDir);
 
           const notesDirChanged = savedConfig.notesDir !== previousNotesDir;
@@ -1437,20 +1458,23 @@ export function MainWindow({
             <span className="text-[13px] font-display font-medium text-ink-soft tracking-wide shrink-0">
               花笺
             </span>
-            {settingsConfig?.tabsInTitlebar !== false ? (
+            {settingsConfig?.tabLayout !== "default" ? (
               <TabBar
-                tabs={tabs.map((t) => ({
-                  noteId: t.noteId,
-                  title: t.fileStem || t.title,
-                  saveState: t.saveState,
-                }))}
-                activeTabId={activeTabId}
+                tabs={displayTabs}
+                activeTabId={settingsTabActive ? "__settings__" : activeTabId}
                 onSelectTab={(noteId) => {
+                  if (noteId === "__settings__") return;
                   setSettingsTabActive(false);
                   flushActiveTab();
                   void openTab(noteId);
                 }}
-                onCloseTab={(noteId) => void closeTab(noteId)}
+                onCloseTab={(noteId) => {
+                  if (noteId === "__settings__") {
+                    setSettingsTabActive(false);
+                    return;
+                  }
+                  void closeTab(noteId);
+                }}
                 onNewTab={() => void handleNewNote()}
                 onTabMenuAction={(action, noteId) => void handleTabMenuAction(action, noteId)}
                 inTitlebar
@@ -1489,29 +1513,6 @@ export function MainWindow({
               >
                 <path d="M4 4h16v14H7l-3 3V4z" />
                 <path d="M8 9h8M8 13h5" />
-              </svg>
-            </button>
-            <button
-              onClick={() => void toggleSettingsTab()}
-              className={`w-10 h-11 flex items-center justify-center transition-all cursor-pointer ${
-                settingsTabActive
-                  ? "text-bamboo bg-bamboo-mist/50"
-                  : "text-ink-ghost hover:text-ink-faint hover:bg-paper-warm"
-              }`}
-              title={t("main.window.settings", { defaultValue: "设置" })}
-            >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <circle cx="12" cy="12" r="3" />
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
               </svg>
             </button>
 
@@ -1585,7 +1586,6 @@ export function MainWindow({
             activePanel={sidebarTab}
             onSelectPanel={setSidebarTab}
             onSettings={() => void toggleSettingsTab()}
-            settingsActive={settingsTabActive}
           />
           <div
             className={`border-r border-paper-deep/30 bg-paper/40 flex flex-col shrink-0 ${
@@ -2325,20 +2325,23 @@ export function MainWindow({
           )}
 
           <div className="flex-1 flex flex-col min-w-0">
-            {settingsConfig?.tabsInTitlebar === false && (
+            {settingsConfig?.tabLayout === "default" && (
               <TabBar
-                tabs={tabs.map((t) => ({
-                  noteId: t.noteId,
-                  title: t.fileStem || t.title,
-                  saveState: t.saveState,
-                }))}
-                activeTabId={activeTabId}
+                tabs={displayTabs}
+                activeTabId={settingsTabActive ? "__settings__" : activeTabId}
                 onSelectTab={(noteId) => {
+                  if (noteId === "__settings__") return;
                   setSettingsTabActive(false);
                   flushActiveTab();
                   void openTab(noteId);
                 }}
-                onCloseTab={(noteId) => void closeTab(noteId)}
+                onCloseTab={(noteId) => {
+                  if (noteId === "__settings__") {
+                    setSettingsTabActive(false);
+                    return;
+                  }
+                  void closeTab(noteId);
+                }}
                 onNewTab={() => void handleNewNote()}
                 onTabMenuAction={(action, noteId) => void handleTabMenuAction(action, noteId)}
               />

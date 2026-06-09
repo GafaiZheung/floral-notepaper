@@ -6,15 +6,9 @@ interface LeftIconSidebarProps {
   activePanel: SidebarPanel;
   onSelectPanel: (panel: SidebarPanel) => void;
   onSettings: () => void;
-  settingsActive?: boolean;
 }
 
-export function LeftIconSidebar({
-  activePanel,
-  onSelectPanel,
-  onSettings,
-  settingsActive = false,
-}: LeftIconSidebarProps) {
+export function LeftIconSidebar({ activePanel, onSelectPanel, onSettings }: LeftIconSidebarProps) {
   const { t } = useTranslation();
 
   return (
@@ -78,11 +72,7 @@ export function LeftIconSidebar({
       {/* Settings icon at bottom */}
       <button
         onClick={onSettings}
-        className={`w-9 h-9 flex items-center justify-center rounded-lg transition-all cursor-pointer ${
-          settingsActive
-            ? "text-bamboo bg-bamboo-mist/60 shadow-sm"
-            : "text-ink-ghost hover:text-ink-faint hover:bg-paper-warm"
-        }`}
+        className="w-9 h-9 flex items-center justify-center rounded-lg transition-all cursor-pointer text-ink-ghost hover:text-ink-faint hover:bg-paper-warm"
         title={t("main.window.settings", { defaultValue: "设置" })}
       >
         <svg
