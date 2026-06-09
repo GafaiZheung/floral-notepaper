@@ -1,4 +1,4 @@
-import { useCallback, useDeferredValue, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { MarkdownEditor } from "./MarkdownEditor";
 import type { MarkdownEditorHandle } from "./MarkdownEditor";
@@ -45,8 +45,7 @@ export function WysiwygEditor({
   const [editingBlockIndex, setEditingBlockIndex] = useState<number | null>(null);
   const sourceEditorRef = useRef<MarkdownEditorHandle>(null);
 
-  const deferredContent = useDeferredValue(content);
-  const allBlocks = useMemo(() => parseBlocks(deferredContent), [deferredContent]);
+  const allBlocks = useMemo(() => parseBlocks(content), [content]);
   const blocks = useMemo(() => {
     if (hideFirstHeading && allBlocks.length > 0 && allBlocks[0].type === "heading") {
       return allBlocks.slice(1);
