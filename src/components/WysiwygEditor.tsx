@@ -177,9 +177,14 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
           const targetIndex = headings.findIndex((h) => h.lineNumber === lineNumber);
           if (targetIndex === -1) return;
 
-          // When the first heading is hidden, headings[0] has no DOM element.
+          // When the first heading is hidden (wysiwyg mode), headings[0] has no DOM element.
           const hiddenOffset =
-            hideFirstHeading && allBlocks.length > 0 && allBlocks[0].type === "heading" ? 1 : 0;
+            mode === "wysiwyg" &&
+            hideFirstHeading &&
+            allBlocks.length > 0 &&
+            allBlocks[0].type === "heading"
+              ? 1
+              : 0;
           const domIndex = targetIndex - hiddenOffset;
           if (domIndex < 0) return;
 
