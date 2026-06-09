@@ -67,7 +67,7 @@ function App() {
 
   return (
     <ContextMenuProvider>
-      <div className="app-window-shell h-screen font-body text-ink overflow-hidden">
+      <div className="app-window-shell h-screen font-body text-ink rounded-[var(--app-window-radius)] overflow-hidden">
         {activeView === "main" ? (
           <MainWindow />
         ) : activeView === "notepad" ? (
