@@ -43,6 +43,8 @@ export interface WysiwygEditorProps {
   onActiveHeadingChange?: (lineNumber: number | null) => void;
   /** Called with scrollTop (px) when the reading content is scrolled */
   onScrollTop?: (scrollTop: number) => void;
+  /** Initial editor mode — defaults to "wysiwyg" when undefined */
+  initialMode?: WysiwygMode;
 }
 
 /** Compute which heading is at or above the top of the scroll container */
@@ -88,11 +90,12 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
       hideFirstHeading = false,
       onActiveHeadingChange,
       onScrollTop,
+      initialMode = "wysiwyg",
     },
     ref,
   ) {
     const { t } = useTranslation();
-    const [mode, setMode] = useState<WysiwygMode>("wysiwyg");
+    const [mode, setMode] = useState<WysiwygMode>(initialMode);
     const [editingBlockIndex, setEditingBlockIndex] = useState<number | null>(null);
     const sourceEditorRef = useRef<MarkdownEditorHandle>(null);
     const readingScrollRef = useRef<HTMLDivElement>(null);

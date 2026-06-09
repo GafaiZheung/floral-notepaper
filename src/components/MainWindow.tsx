@@ -622,9 +622,10 @@ export function MainWindow({
           listCategories(),
         ]);
         if (cancelled) return;
-        // Restore frontend-only fields that the Rust backend does not store
+        // Normalize defaultViewMode through the same function used by persistSettings
         const patchedConfig: AppConfig = {
           ...loadedConfig,
+          defaultViewMode: normalizeViewMode(loadedConfig.defaultViewMode),
           tabLayout: (loadedConfig.tabLayout ??
             localStorage.getItem("fn:tabLayout") ??
             "compact") as "compact" | "default",
@@ -2992,6 +2993,9 @@ export function MainWindow({
                       onDirty={markDirty}
                       hideFirstHeading={!!title.trim()}
                       onScrollTop={handleEditorScroll}
+                      initialMode={
+                        settingsConfig?.defaultViewMode as "wysiwyg" | "source" | "read" | undefined
+                      }
                     />
                   )}
                 </div>
