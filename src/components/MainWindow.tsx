@@ -2657,6 +2657,7 @@ export function MainWindow({
                 </div>
               ) : (
                 <WysiwygEditor
+                  key={selectedId}
                   content={content}
                   onChange={(newValue) => {
                     setContent(newValue);
