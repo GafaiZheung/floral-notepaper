@@ -2572,7 +2572,7 @@ export function MainWindow({
             </div>
 
             <div
-              key={noteTransitionKey}
+              key={`title-${noteTransitionKey}`}
               className="animate-note-enter px-6 pt-4 pb-2 shrink-0 border-b border-paper-deep/15"
             >
               <input
@@ -2626,7 +2626,7 @@ export function MainWindow({
             </div>
 
             <div
-              key={noteTransitionKey}
+              key={`editor-${noteTransitionKey}`}
               ref={splitContainerRef}
               className="flex-1 flex flex-col min-h-0 animate-view-fade"
             >
