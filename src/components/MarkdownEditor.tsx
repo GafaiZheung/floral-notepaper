@@ -21,6 +21,14 @@ export interface MarkdownEditorHandle {
   getSelectionRange(): { from: number; to: number };
   setSelectionRange(from: number, to: number): void;
   insertAtCursor(text: string): void;
+  /** Replace text in [from,to) with insert, then select [selectorFrom, selectorTo) and focus. */
+  replaceRangeAndSelect(
+    from: number,
+    to: number,
+    insert: string,
+    selectorFrom: number,
+    selectorTo: number,
+  ): void;
   runUndo(): boolean;
 }
 
@@ -45,7 +53,18 @@ function isDarkTheme(): boolean {
 
 export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
   function MarkdownEditor(
-    { value, onChange, placeholder, disabled, fontSize = 14, className, onScroll, onKeyDown, autoHeight, onBlur },
+    {
+      value,
+      onChange,
+      placeholder,
+      disabled,
+      fontSize = 14,
+      className,
+      onScroll,
+      onKeyDown,
+      autoHeight,
+      onBlur,
+    },
     ref,
   ) {
     const containerRef = useRef<HTMLDivElement>(null);
@@ -245,6 +264,21 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
           const { from, to } = view.state.selection.main;
           view.dispatch({
             changes: { from, to, insert: text },
+          });
+          view.focus();
+        },
+        replaceRangeAndSelect(
+          from: number,
+          to: number,
+          insert: string,
+          selFrom: number,
+          selTo: number,
+        ): void {
+          const view = viewRef.current;
+          if (!view) return;
+          view.dispatch({
+            changes: { from, to, insert },
+            selection: { anchor: selFrom, head: selTo },
           });
           view.focus();
         },

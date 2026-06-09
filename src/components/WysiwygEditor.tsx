@@ -289,13 +289,13 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
         if (mode === "source") {
           const editor = sourceEditorRef.current;
           if (!editor) return;
-          applyFormat(editor, content, action, t, (newValue) => {
-            onChange(newValue);
-            onDirty?.();
-          });
+          // applyFormat directly dispatches to CodeMirror; the editor's own
+          // update-listener will call onChange, so we only need to mark dirty.
+          applyFormat(editor, content, action, t, () => undefined);
+          onDirty?.();
         }
       },
-      [mode, content, onChange, onDirty, t],
+      [mode, content, onDirty, t],
     );
 
     return (

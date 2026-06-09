@@ -13,157 +13,179 @@ export type FormatAction =
   | "inlineMath"
   | "blockMath";
 
+/**
+ * Apply a format action directly on the CodeMirror editor using replaceRangeAndSelect
+ * to avoid the string-build → onChange → React-render → document-sync → scroll-reset chain.
+ */
 export function applyFormat(
   editor: MarkdownEditorHandle,
-  currentValue: string,
+  _currentValue: string,
   action: FormatAction,
   translate: TFunction,
-  onCommit: (v: string) => void,
+  _onCommit: (v: string) => void,
 ) {
   const { from: start, to: end } = editor.getSelectionRange();
-  const selected = currentValue.slice(start, end);
-  const before = currentValue.slice(0, start);
-  const after = currentValue.slice(end);
+  const selected = _currentValue.slice(start, end);
+  const before = _currentValue.slice(0, start);
   const lineStart = before.lastIndexOf("\n") + 1;
   const currentLine = before.slice(lineStart);
 
-  let result: string;
-  let cursorStart: number;
-  let cursorEnd: number;
+  let from: number;
+  let to: number;
+  let insert: string;
+  let selFrom: number;
+  let selTo: number;
 
   switch (action) {
     case "bold": {
       const fallback = translate("main.formatSample.boldText", { defaultValue: "粗体文本" });
-      const wrapped = `**${selected || fallback}**`;
-      result = before + wrapped + after;
-      cursorStart = start + 2;
-      cursorEnd = cursorStart + (selected || fallback).length;
+      from = start;
+      to = end;
+      insert = `**${selected || fallback}**`;
+      selFrom = start + 2;
+      selTo = selFrom + (selected || fallback).length;
       break;
     }
     case "italic": {
       const fallback = translate("main.formatSample.italicText", { defaultValue: "斜体文本" });
-      const wrapped = `*${selected || fallback}*`;
-      result = before + wrapped + after;
-      cursorStart = start + 1;
-      cursorEnd = cursorStart + (selected || fallback).length;
+      from = start;
+      to = end;
+      insert = `*${selected || fallback}*`;
+      selFrom = start + 1;
+      selTo = selFrom + (selected || fallback).length;
       break;
     }
     case "heading": {
       const prefix = currentLine.match(/^(#{1,5})\s/);
       if (prefix) {
         const newLevel = prefix[1].length < 5 ? "#".repeat(prefix[1].length + 1) : "#";
-        const beforeLine = currentValue.slice(0, lineStart);
-        const afterPrefix = currentValue.slice(lineStart + prefix[0].length);
-        result = beforeLine + newLevel + " " + afterPrefix;
-        const offset = newLevel.length + 1 - prefix[0].length;
-        cursorStart = start + offset;
-        cursorEnd = end + offset;
+        from = lineStart;
+        to = lineStart + prefix[0].length;
+        insert = newLevel + " ";
+        selFrom = start + newLevel.length + 1 - prefix[0].length;
+        selTo = end + newLevel.length + 1 - prefix[0].length;
       } else if (currentLine.length > 0 && start === end) {
-        result = currentValue.slice(0, lineStart) + "## " + currentValue.slice(lineStart);
-        cursorStart = start + 3;
-        cursorEnd = cursorStart;
+        from = lineStart;
+        to = lineStart;
+        insert = "## ";
+        selFrom = start + 3;
+        selTo = selFrom;
       } else if (selected) {
-        result = before + `## ${selected}` + after;
-        cursorStart = start + 3;
-        cursorEnd = cursorStart + selected.length;
+        from = start;
+        to = end;
+        insert = `## ${selected}`;
+        selFrom = start + 3;
+        selTo = selFrom + selected.length;
       } else {
-        result =
-          before +
-          `## ${translate("main.formatSample.headingText", { defaultValue: "标题" })}` +
-          after;
-        cursorStart = start + 3;
-        cursorEnd = cursorStart + 2;
+        const fallback = translate("main.formatSample.headingText", { defaultValue: "标题" });
+        from = start;
+        to = end;
+        insert = `## ${fallback}`;
+        selFrom = start + 3;
+        selTo = selFrom + fallback.length;
       }
       break;
     }
     case "hr": {
       const newlineBefore = before.endsWith("\n") || before === "" ? "" : "\n";
-      const newlineAfter = after.startsWith("\n") || after === "" ? "" : "\n";
-      result = before + `${newlineBefore}---${newlineAfter}` + after;
-      cursorStart = cursorEnd = before.length + newlineBefore.length + 3;
+      const newlineAfter =
+        _currentValue.slice(end).startsWith("\n") || _currentValue.slice(end) === "" ? "" : "\n";
+      from = start;
+      to = end;
+      insert = `${newlineBefore}---${newlineAfter}`;
+      selFrom = selTo = from + newlineBefore.length + 3;
       break;
     }
     case "ul": {
+      from = start;
+      to = end;
       if (selected.includes("\n")) {
-        const lines = selected.split("\n").map((l) => `- ${l}`).join("\n");
-        result = before + lines + after;
-        cursorStart = start;
-        cursorEnd = start + lines.length;
+        insert = selected
+          .split("\n")
+          .map((l) => `- ${l}`)
+          .join("\n");
+        selFrom = start;
+        selTo = start + insert.length;
       } else {
         const fallback = translate("main.formatSample.listItem", { defaultValue: "列表项" });
-        const item = `- ${selected || fallback}`;
-        result = before + item + after;
-        cursorStart = start + 2;
-        cursorEnd = cursorStart + (selected || fallback).length;
+        insert = `- ${selected || fallback}`;
+        selFrom = start + 2;
+        selTo = selFrom + (selected || fallback).length;
       }
       break;
     }
     case "ol": {
+      from = start;
+      to = end;
       if (selected.includes("\n")) {
-        const lines = selected.split("\n").map((l, i) => `${i + 1}. ${l}`).join("\n");
-        result = before + lines + after;
-        cursorStart = start;
-        cursorEnd = start + lines.length;
+        insert = selected
+          .split("\n")
+          .map((l, i) => `${i + 1}. ${l}`)
+          .join("\n");
+        selFrom = start;
+        selTo = start + insert.length;
       } else {
         const fallback = translate("main.formatSample.listItem", { defaultValue: "列表项" });
-        const item = `1. ${selected || fallback}`;
-        result = before + item + after;
-        cursorStart = start + 3;
-        cursorEnd = cursorStart + (selected || fallback).length;
+        insert = `1. ${selected || fallback}`;
+        selFrom = start + 3;
+        selTo = selFrom + (selected || fallback).length;
       }
       break;
     }
     case "code": {
+      from = start;
+      to = end;
       if (selected.includes("\n")) {
-        const wrapped = "```\n" + selected + "\n```";
-        result = before + wrapped + after;
-        cursorStart = start + 4;
-        cursorEnd = cursorStart + selected.length;
+        insert = "```\n" + selected + "\n```";
+        selFrom = start + 4;
+        selTo = selFrom + selected.length;
       } else {
         const fallback = translate("main.formatSample.codeText", { defaultValue: "代码" });
-        const wrapped = `\`${selected || fallback}\``;
-        result = before + wrapped + after;
-        cursorStart = start + 1;
-        cursorEnd = cursorStart + (selected || fallback).length;
+        insert = `\`${selected || fallback}\``;
+        selFrom = start + 1;
+        selTo = selFrom + (selected || fallback).length;
       }
       break;
     }
     case "quote": {
+      from = start;
+      to = end;
       if (selected.includes("\n")) {
-        const lines = selected.split("\n").map((l) => `> ${l}`).join("\n");
-        result = before + lines + after;
-        cursorStart = start;
-        cursorEnd = start + lines.length;
+        insert = selected
+          .split("\n")
+          .map((l) => `> ${l}`)
+          .join("\n");
+        selFrom = start;
+        selTo = start + insert.length;
       } else {
         const fallback = translate("main.formatSample.quoteText", { defaultValue: "引用文本" });
-        const item = `> ${selected || fallback}`;
-        result = before + item + after;
-        cursorStart = start + 2;
-        cursorEnd = cursorStart + (selected || fallback).length;
+        insert = `> ${selected || fallback}`;
+        selFrom = start + 2;
+        selTo = selFrom + (selected || fallback).length;
       }
       break;
     }
     case "inlineMath": {
-      const wrapped = `$${selected || "E=mc^2"}$`;
-      result = before + wrapped + after;
-      cursorStart = start + 1;
-      cursorEnd = cursorStart + (selected || "E=mc^2").length;
+      const fallback = selected || "E=mc^2";
+      from = start;
+      to = end;
+      insert = `$${fallback}$`;
+      selFrom = start + 1;
+      selTo = selFrom + fallback.length;
       break;
     }
     case "blockMath": {
-      const wrapped = `\n$$\n${selected || "x^2 + y^2 = r^2"}\n$$\n`;
-      result = before + wrapped + after;
-      cursorStart = start + 4;
-      cursorEnd = cursorStart + (selected || "x^2 + y^2 = r^2").length;
+      const fallback = selected || "E=mc^2";
+      from = start;
+      to = end;
+      insert = `\n$$\n${fallback}\n$$\n`;
+      selFrom = start + 4;
+      selTo = selFrom + fallback.length;
       break;
     }
     default:
       return;
   }
 
-  onCommit(result);
-  requestAnimationFrame(() => {
-    editor.focus();
-    editor.setSelectionRange(cursorStart, cursorEnd);
-  });
+  editor.replaceRangeAndSelect(from, to, insert, selFrom, selTo);
 }
