@@ -81,8 +81,8 @@ describe("MainWindow tab management", () => {
   test("renders the tab bar with new tab button", () => {
     const markup = renderToStaticMarkup(<MainWindow />);
 
-    // The new tab button should be present with its aria label
-    expect(markup).toContain("新建标签页");
+    // The new-note action is present in the compact mode toolbar
+    expect(markup).toContain("新建笔记");
   });
 
   test("renders no tab items when no notes are open", () => {

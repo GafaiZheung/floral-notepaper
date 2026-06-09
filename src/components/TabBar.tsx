@@ -19,6 +19,8 @@ export interface TabBarProps {
   onTabMenuAction: (action: TabMenuAction, noteId: string) => void;
   /** When true, renders compact without border — for titlebar integration */
   inTitlebar?: boolean;
+  /** When true, hides the new-tab button */
+  hideNewTab?: boolean;
 }
 
 function getDisplayTitle(title: string): string {
@@ -33,6 +35,7 @@ export function TabBar({
   onNewTab,
   onTabMenuAction,
   inTitlebar = false,
+  hideNewTab = false,
 }: TabBarProps) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -162,29 +165,31 @@ export function TabBar({
       )}
 
       {/* New tab button */}
-      <button
-        onClick={onNewTab}
-        className="w-8 h-8 flex items-center justify-center text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 rounded-md transition-all shrink-0 mr-1 cursor-pointer"
-        title={t("tabs.newTab", { defaultValue: "新建标签页" })}
-      >
-        <svg
-          width="14"
-          height="14"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
+      {!hideNewTab && (
+        <button
+          onClick={onNewTab}
+          className="w-8 h-8 flex items-center justify-center text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 rounded-md transition-all shrink-0 mr-1 cursor-pointer"
+          title={t("tabs.newTab", { defaultValue: "新建标签页" })}
         >
-          <line x1="12" y1="5" x2="12" y2="19" />
-          <line x1="5" y1="12" x2="19" y2="12" />
-        </svg>
-      </button>
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+          >
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+        </button>
+      )}
 
       {/* Context menu */}
       {contextMenu && (
         <div
-          className="fixed z-[9999] min-w-[148px] py-1.5 bg-cloud/95 backdrop-blur-sm border border-paper-deep/50 rounded-lg overflow-hidden shadow-lg"
+          className="fixed z-[99999] min-w-[148px] py-1.5 bg-cloud/95 backdrop-blur-sm border border-paper-deep/50 rounded-lg overflow-hidden shadow-lg"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onMouseDown={(e) => e.stopPropagation()}
         >
