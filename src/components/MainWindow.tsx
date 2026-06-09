@@ -1859,7 +1859,7 @@ export function MainWindow({
           )}
         </div>
 
-        <div className="relative z-10 flex flex-1 min-h-0 overflow-hidden">
+        <div className="relative z-10 flex flex-1 min-h-0">
           <LeftIconSidebar
             activePanel={sidebarTab}
             onSelectPanel={setSidebarTab}
@@ -2604,7 +2604,7 @@ export function MainWindow({
             </div>
           )}
 
-          <div className="flex-1 flex flex-col min-w-0">
+          <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
             {settingsConfig?.tabLayout === "default" && (
               <TabBar
                 tabs={displayTabs}

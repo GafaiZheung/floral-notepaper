@@ -161,7 +161,11 @@ export function TabBar({
 
       {/* Right fade */}
       {showRightFade && (
-        <div className="absolute right-8 top-0 bottom-0 w-6 bg-gradient-to-l from-paper/70 to-transparent z-10 pointer-events-none" />
+        <div
+          className={`absolute top-0 bottom-0 w-6 bg-gradient-to-l from-paper/70 to-transparent z-10 pointer-events-none ${
+            hideNewTab ? "right-0" : "right-8"
+          }`}
+        />
       )}
 
       {/* New tab button */}
