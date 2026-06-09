@@ -1830,6 +1830,8 @@ mod tests {
             toggle_visibility_shortcut: "Ctrl+Shift+K".into(),
             open_at_cursor: true,
             hidden_categories: vec![],
+            tab_layout: "compact".into(),
+            auto_open_outline: false,
         };
 
         let error = match shortcut_bindings_from_config(&config) {
@@ -1882,6 +1884,8 @@ mod tests {
             toggle_visibility_shortcut: String::new(),
             open_at_cursor: true,
             hidden_categories: vec![],
+            tab_layout: "compact".into(),
+            auto_open_outline: false,
         };
         let next = AppConfig {
             locale: "en-US".into(),
@@ -1915,6 +1919,8 @@ mod tests {
             toggle_visibility_shortcut: "Ctrl+Shift+H".into(),
             open_at_cursor: true,
             hidden_categories: vec![],
+            tab_layout: "compact".into(),
+            auto_open_outline: false,
         };
 
         assert_eq!(

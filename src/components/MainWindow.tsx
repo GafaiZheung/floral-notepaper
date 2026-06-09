@@ -622,8 +622,17 @@ export function MainWindow({
           listCategories(),
         ]);
         if (cancelled) return;
-        setSettingsConfig(loadedConfig);
-        setSavedNotesDir(loadedConfig.notesDir);
+        // Restore frontend-only fields that the Rust backend does not store
+        const patchedConfig: AppConfig = {
+          ...loadedConfig,
+          tabLayout: (loadedConfig.tabLayout ??
+            localStorage.getItem("fn:tabLayout") ??
+            "compact") as "compact" | "default",
+          autoOpenOutline:
+            loadedConfig.autoOpenOutline ?? localStorage.getItem("fn:autoOpenOutline") === "1",
+        };
+        setSettingsConfig(patchedConfig);
+        setSavedNotesDir(patchedConfig.notesDir);
         setNotes(loadedNotes);
         setCategories(loadedCategories);
         setCollapsedCategories(new Set(loadedCategories));
@@ -1024,13 +1033,7 @@ export function MainWindow({
         };
         try {
           const savedConfig = await saveConfig(normalizedConfig);
-          // Merge back frontend-only fields that the Rust backend may not return
-          const merged: AppConfig = {
-            ...savedConfig,
-            tabLayout: normalizedConfig.tabLayout,
-            autoOpenOutline: normalizedConfig.autoOpenOutline,
-          };
-          setSettingsConfig(merged);
+          setSettingsConfig(savedConfig);
           setSavedNotesDir(savedConfig.notesDir);
 
           const notesDirChanged = savedConfig.notesDir !== previousNotesDir;

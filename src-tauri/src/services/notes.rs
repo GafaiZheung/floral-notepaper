@@ -80,6 +80,10 @@ pub struct AppConfig {
     pub open_at_cursor: bool,
     #[serde(default = "default_hidden_categories")]
     pub hidden_categories: Vec<String>,
+    #[serde(default = "default_tab_layout")]
+    pub tab_layout: String,
+    #[serde(default)]
+    pub auto_open_outline: bool,
 }
 
 fn default_hidden_categories() -> Vec<String> {
@@ -1045,6 +1049,8 @@ impl NoteStore {
             toggle_visibility_shortcut: default_toggle_visibility_shortcut(),
             open_at_cursor: default_open_at_cursor(),
             hidden_categories: default_hidden_categories(),
+            tab_layout: default_tab_layout(),
+            auto_open_outline: false,
         }
     }
 
@@ -1562,6 +1568,10 @@ fn default_open_at_cursor() -> bool {
     true
 }
 
+fn default_tab_layout() -> String {
+    "compact".into()
+}
+
 fn default_locale() -> String {
     "zh-CN".into()
 }
@@ -1717,6 +1727,8 @@ mod tests {
             toggle_visibility_shortcut: String::new(),
             open_at_cursor: true,
             hidden_categories: vec![],
+            tab_layout: "compact".into(),
+            auto_open_outline: false,
         };
 
         store.save_config(saved.clone()).expect("save config");
