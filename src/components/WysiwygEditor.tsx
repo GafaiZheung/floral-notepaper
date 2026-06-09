@@ -165,26 +165,32 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
             return;
           }
 
-          // Reading mode: find the heading in the scroll container by matching text
           const container = readingScrollRef.current;
           if (!container) return;
 
-          const target = headings.find((h) => h.lineNumber === lineNumber);
-          if (!target) return;
+          // Find heading by lineNumber in the flat headings list, then match
+          // by index to the corresponding DOM element (robust against text
+          // differences between raw Markdown and rendered HTML).
+          const targetIndex = headings.findIndex((h) => h.lineNumber === lineNumber);
+          if (targetIndex === -1) return;
+
+          // When the first heading is hidden, headings[0] has no DOM element.
+          const hiddenOffset =
+            hideFirstHeading && allBlocks.length > 0 && allBlocks[0].type === "heading" ? 1 : 0;
+          const domIndex = targetIndex - hiddenOffset;
+          if (domIndex < 0) return;
 
           const headingEls = container.querySelectorAll("h1, h2, h3, h4");
-          for (const el of headingEls) {
-            if (el.textContent?.trim() === target.text) {
-              const containerRect = container.getBoundingClientRect();
-              const elRect = (el as HTMLElement).getBoundingClientRect();
-              const scrollTarget = container.scrollTop + elRect.top - containerRect.top - 16;
-              container.scrollTo({ top: Math.max(0, scrollTarget), behavior: "smooth" });
-              return;
-            }
-          }
+          const el = headingEls[domIndex] as HTMLElement | undefined;
+          if (!el) return;
+
+          const containerRect = container.getBoundingClientRect();
+          const elRect = el.getBoundingClientRect();
+          const scrollTarget = container.scrollTop + elRect.top - containerRect.top - 16;
+          container.scrollTo({ top: Math.max(0, scrollTarget), behavior: "smooth" });
         },
       }),
-      [mode, headings],
+      [mode, headings, hideFirstHeading, allBlocks],
     );
 
     const modeSwitchOptions = useMemo(
