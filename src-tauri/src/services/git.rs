@@ -501,15 +501,22 @@ mod tests {
     #[test]
     fn porcelain_mixed_statuses() {
         let r = Repo::new();
+        // staged: committed then modified then staged again
         r.write("staged.md", "s");
-        run_git(r.path(), &["add", "staged.md"]).unwrap();
-        run_git(r.path(), &["commit", "-m", "add staged"]).unwrap();
+        git_stage_all(r.path()).unwrap();
+        git_commit(r.path(), "c1").unwrap();
         r.write("staged.md", "s2");
-        run_git(r.path(), &["add", "staged.md"]).unwrap();
+        git_stage_files(r.path(), &["staged.md".into()]).unwrap();
+        // unstaged: committed then modified without staging
         r.write("unstaged.md", "u");
-        run_git(r.path(), &["add", "unstaged.md"]).unwrap();
-        run_git(r.path(), &["commit", "-m", "add unstaged"]).unwrap();
+        git_stage_files(r.path(), &["unstaged.md".into()]).unwrap();
+        git_commit(r.path(), "c2").unwrap();
+        // Now c2 committed staged.md (s2) + unstaged.md (u).
+        // Modify both: stage only staged.md, leave unstaged.md unstaged.
+        r.write("staged.md", "s3");
         r.write("unstaged.md", "u2");
+        git_stage_files(r.path(), &["staged.md".into()]).unwrap();
+        // untracked
         r.write("untracked.md", "ut");
         let s = git_status(r.path()).unwrap();
         assert_eq!(
