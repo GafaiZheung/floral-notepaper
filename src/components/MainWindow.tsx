@@ -25,6 +25,7 @@ import { SettingsPanel } from "./SettingsPanel";
 import { TabBar } from "./TabBar";
 import type { TabMenuAction } from "./TabBar";
 import { WysiwygEditor } from "./WysiwygEditor";
+import type { WysiwygEditorHandle } from "./WysiwygEditor";
 import {
   createNote,
   createCategory,
@@ -161,6 +162,7 @@ export function MainWindow({
   const [sidebarWidth, setSidebarWidth] = useState(280);
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
   const splitContainerRef = useRef<HTMLDivElement>(null);
+  const wysiwygRef = useRef<WysiwygEditorHandle>(null);
   const [categoryMenu, setCategoryMenu] = useState<CategoryMenuState | null>(null);
   const [categoryMenuClosing, setCategoryMenuClosing] = useState(false);
   const [categoryMenuConfirmDelete, setCategoryMenuConfirmDelete] = useState(false);
@@ -206,16 +208,10 @@ export function MainWindow({
   const headingsRef = useRef(headings);
   headingsRef.current = headings;
 
-  // Scroll sync, computeActiveHeading, handleEditorScroll, handlePreviewScroll removed —
-  // WysiwygEditor manages its own scrolling internally.
-
-  // Jump to heading: simplified — outline jump-to-heading reimplemented in follow-up
-  const handleJumpToHeading = useCallback(
-    (_lineNumber: number) => {
-      // WysiwygEditor handles its own scrolling internally
-    },
-    [],
-  );
+  // Jump to heading: delegate to WysiwygEditor's ref API
+  const handleJumpToHeading = useCallback((lineNumber: number) => {
+    wysiwygRef.current?.scrollToHeading(lineNumber);
+  }, []);
 
   const selectedExternalFile = useMemo(
     () => externalFiles.find((f) => f.id === selectedId) ?? null,
@@ -2657,6 +2653,7 @@ export function MainWindow({
                 </div>
               ) : (
                 <WysiwygEditor
+                  ref={wysiwygRef}
                   key={selectedId}
                   content={content}
                   onChange={(newValue) => {
