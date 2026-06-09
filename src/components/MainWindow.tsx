@@ -128,6 +128,7 @@ export function MainWindow({
 
   const [tabs, setTabs] = useState<TabState[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
+  const [previewTabId, setPreviewTabId] = useState<string | null>(null);
 
   const [searchQuery, setSearchQuery] = useState("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -270,16 +271,18 @@ export function MainWindow({
       noteId: t.noteId,
       title: t.fileStem || t.title,
       saveState: t.saveState as "idle" | "dirty" | "saving" | "saved" | "error",
+      isPreview: t.noteId === previewTabId,
     }));
     if (settingsTabActive) {
       noteTabs.push({
         noteId: "__settings__",
         title: t("settings.title", { defaultValue: "应用设置" }),
         saveState: "idle" as const,
+        isPreview: false,
       });
     }
     return noteTabs;
-  }, [tabs, settingsTabActive, t]);
+  }, [tabs, settingsTabActive, previewTabId, t]);
 
   const filteredNotes = useMemo(() => filterNotes(notes, searchQuery), [notes, searchQuery]);
 
@@ -399,6 +402,11 @@ export function MainWindow({
       }
 
       setTabs((prev) => prev.filter((t) => t.noteId !== noteId));
+
+      // If closing the preview tab, clear the preview marker
+      if (previewTabId === noteId) {
+        setPreviewTabId(null);
+      }
 
       if (noteId === activeTabId) {
         // Need to compute from the updated tabs — use a local snapshot
@@ -909,6 +917,10 @@ export function MainWindow({
           t.noteId === note.id ? { ...t, title: note.title, saveState: "saved" as SaveState } : t,
         ),
       );
+      // Saving promotes preview tab to permanent
+      if (previewTabId === note.id) {
+        setPreviewTabId(null);
+      }
       setErrorMessage(null);
       return note;
     } catch (error) {
@@ -968,8 +980,9 @@ export function MainWindow({
     try {
       const note = await createNote({ title: "", content: "", category: activeCategory });
       replaceNoteMetadata(note);
-      // Open as new tab
+      // Open as new tab (permanent, not preview)
       flushActiveTab();
+      setPreviewTabId(null);
       const newTab: TabState = {
         noteId: note.id,
         title: note.title,
@@ -1111,6 +1124,103 @@ export function MainWindow({
       return;
     }
 
+    // Single click → preview tab (italic, reused).
+    // If the target note already has a permanent tab, just switch to it —
+    // keep the preview tab around for future single-click overwrites.
+    const existingTab = findTab(id);
+    if (existingTab && previewTabId !== id) {
+      flushActiveTab();
+      setActiveTabId(id);
+      setContent(existingTab.content);
+      setContentFormat(existingTab.contentFormat);
+      setTitle(existingTab.title);
+      setSaveState(existingTab.saveState);
+      setSelectedId(id);
+      setNoteTransitionKey((k) => k + 1);
+      return;
+    }
+
+    if (previewTabId) {
+      // Reuse the existing preview tab: replace its content with the new note
+      await replacePreviewTab(id);
+      return;
+    }
+
+    // No preview tab yet: open as preview
+    flushActiveTab();
+    await openTab(id);
+    setPreviewTabId(id);
+  };
+
+  /** Replace the current preview tab with a different note */
+  const replacePreviewTab = useCallback(
+    async (noteId: string) => {
+      flushActiveTab();
+      setIsLoading(true);
+      setErrorMessage(null);
+      try {
+        const note = await getNote(noteId);
+        setTabs((prev) =>
+          prev.map((t) =>
+            t.noteId === previewTabId
+              ? {
+                  noteId: note.id,
+                  title: note.title,
+                  fileStem: note.fileStem,
+                  content: note.content,
+                  contentFormat: note.fileFormat && note.fileFormat !== "md" ? "html" : "markdown",
+                  saveState: "saved" as SaveState,
+                }
+              : t,
+          ),
+        );
+        setPreviewTabId(note.id);
+        setActiveTabId(note.id);
+        setSelectedId(note.id);
+        setContent(note.content);
+        setContentFormat(note.fileFormat && note.fileFormat !== "md" ? "html" : "markdown");
+        setTitle(note.title);
+        setSaveState("saved");
+        setNoteTransitionKey((k) => k + 1);
+        replaceNoteMetadata(note);
+      } catch (error) {
+        setErrorMessage(getErrorMessage(error));
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [flushActiveTab, previewTabId, replaceNoteMetadata],
+  );
+
+  /** Double-click → permanent tab (or promote preview) */
+  const handleDoubleClickNote = async (id: string) => {
+    // If already the active permanent tab, nothing to do
+    if (id === activeTabId && previewTabId !== id) return;
+    setSettingsTabActive(false);
+    setDeleteConfirm(false);
+    if (saveState === "dirty") {
+      await saveCurrentNote();
+    }
+
+    // Non-md files: same as single click
+    const note = notes.find((n) => n.id === id);
+    if (note && isReadOnlyNote(note)) {
+      setErrorMessage(null);
+      setSelectedId(id);
+      setTitle(note.fileStem || note.title);
+      setContent("");
+      setSaveState("saved");
+      setNoteTransitionKey((k) => k + 1);
+      try {
+        await openNoteWithSystemApp(id);
+      } catch (error) {
+        setErrorMessage(getErrorMessage(error));
+      }
+      return;
+    }
+
+    // Double-click promotes preview → permanent (or opens as permanent)
+    setPreviewTabId(null);
     flushActiveTab();
     await openTab(id);
   };
@@ -2327,6 +2437,7 @@ export function MainWindow({
                                       e.dataTransfer.effectAllowed = "move";
                                     }}
                                     onClick={() => void handleSelectNote(note.id)}
+                                    onDoubleClick={() => void handleDoubleClickNote(note.id)}
                                     onContextMenu={(event) => handleOpenNoteMenu(event, note.id)}
                                     onMouseEnter={() => setHoveredId(note.id)}
                                     onMouseLeave={() => setHoveredId(null)}
@@ -2521,6 +2632,7 @@ export function MainWindow({
                                           e.dataTransfer.effectAllowed = "move";
                                         }}
                                         onClick={() => void handleSelectNote(note.id)}
+                                        onDoubleClick={() => void handleDoubleClickNote(note.id)}
                                         onContextMenu={(event) =>
                                           handleOpenNoteMenu(event, note.id)
                                         }

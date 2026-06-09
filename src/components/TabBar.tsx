@@ -5,6 +5,8 @@ export interface TabInfo {
   noteId: string;
   title: string;
   saveState: "idle" | "dirty" | "saving" | "saved" | "error";
+  /** When true, renders the tab title in italic to indicate a temporary preview tab */
+  isPreview?: boolean;
 }
 
 /** Menu action identifier for right-click context menu */
@@ -137,7 +139,9 @@ export function TabBar({
             >
               {/* Dirty indicator */}
               {isDirty && <span className="w-1.5 h-1.5 rounded-full bg-bamboo mr-1.5 shrink-0" />}
-              <span className="text-[11.5px] truncate leading-snug">
+              <span
+                className={`text-[11.5px] truncate leading-snug ${tab.isPreview ? "italic" : ""}`}
+              >
                 {getDisplayTitle(tab.title)}
               </span>
               <button
