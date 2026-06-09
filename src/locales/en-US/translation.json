@@ -202,6 +202,7 @@
       "note": "Auto-save notes",
       "surface": "Auto-save surface notes"
     },
+    "autoOpenOutline": "Auto-open outline on scroll",
     "autostart": "Launch on Startup",
     "closeTitle": "Close Settings",
     "closeToTray": "Close to Tray",

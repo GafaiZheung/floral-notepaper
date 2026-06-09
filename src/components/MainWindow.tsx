@@ -205,9 +205,38 @@ export function MainWindow({
     return extractHeadings(content);
   }, [content]);
 
-  // Jump to heading: delegate to WysiwygEditor's ref API
+  // Auto-open outline when user scrolls past a threshold.
+  // Only switch to directory when the user scrolls back to the very top (not on heading clicks).
+  const AUTO_OUTLINE_SCROLL_PX = 300;
+  const outlineTriggeredRef = useRef(false);
+  const headingJumpTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleEditorScroll = useCallback(
+    (scrollTop: number) => {
+      if (!settingsConfig?.autoOpenOutline) return;
+      if (settingsTabActive) return;
+      // Suppress revert while a heading-jump scroll animation is in flight
+      if (headingJumpTimerRef.current) return;
+      if (scrollTop > AUTO_OUTLINE_SCROLL_PX && !outlineTriggeredRef.current) {
+        setSidebarTab("outline");
+        outlineTriggeredRef.current = true;
+      } else if (scrollTop < 4 && outlineTriggeredRef.current) {
+        // Only switch back when the user manually scrolls to the absolute top
+        setSidebarTab("directory");
+        outlineTriggeredRef.current = false;
+      }
+    },
+    [settingsConfig?.autoOpenOutline, settingsTabActive],
+  );
+
+  // When clicking a heading, briefly suppress the scroll-to-top revert.
   const handleJumpToHeading = useCallback((lineNumber: number) => {
     wysiwygRef.current?.scrollToHeading(lineNumber);
+    if (outlineTriggeredRef.current) {
+      if (headingJumpTimerRef.current) clearTimeout(headingJumpTimerRef.current);
+      headingJumpTimerRef.current = setTimeout(() => {
+        headingJumpTimerRef.current = null;
+      }, 800);
+    }
   }, []);
 
   const selectedExternalFile = useMemo(
@@ -999,6 +1028,7 @@ export function MainWindow({
           const merged: AppConfig = {
             ...savedConfig,
             tabLayout: normalizedConfig.tabLayout,
+            autoOpenOutline: normalizedConfig.autoOpenOutline,
           };
           setSettingsConfig(merged);
           setSavedNotesDir(savedConfig.notesDir);
@@ -2958,6 +2988,7 @@ export function MainWindow({
                       })}
                       onDirty={markDirty}
                       hideFirstHeading={!!title.trim()}
+                      onScrollTop={handleEditorScroll}
                     />
                   )}
                 </div>

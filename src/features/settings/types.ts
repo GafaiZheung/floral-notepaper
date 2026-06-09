@@ -43,4 +43,6 @@ export interface AppConfig {
   activeTabId?: string;
   /** Tab layout mode: "compact" embeds tabs in the title bar, "default" places them below */
   tabLayout?: "compact" | "default";
+  /** Auto-open outline panel when scrolling past headings */
+  autoOpenOutline?: boolean;
 }

@@ -41,6 +41,8 @@ export interface WysiwygEditorProps {
   onDirty?: () => void;
   hideFirstHeading?: boolean;
   onActiveHeadingChange?: (lineNumber: number | null) => void;
+  /** Called with scrollTop (px) when the reading content is scrolled */
+  onScrollTop?: (scrollTop: number) => void;
 }
 
 /** Compute which heading is at or above the top of the scroll container */
@@ -85,6 +87,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
       onDirty,
       hideFirstHeading = false,
       onActiveHeadingChange,
+      onScrollTop,
     },
     ref,
   ) {
@@ -109,6 +112,8 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
     headingsRef.current = headings;
     const onActiveHeadingChangeRef = useRef(onActiveHeadingChange);
     onActiveHeadingChangeRef.current = onActiveHeadingChange;
+    const onScrollTopRef = useRef(onScrollTop);
+    onScrollTopRef.current = onScrollTop;
 
     // Reading mode: listen to scroll events on the reading container
     useEffect(() => {
@@ -119,6 +124,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
       const handleScroll = () => {
         const active = computeActiveHeadingFromDOM(container, headingsRef.current);
         onActiveHeadingChangeRef.current?.(active);
+        onScrollTopRef.current?.(container.scrollTop);
       };
 
       // Compute initial active heading
@@ -147,6 +153,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
         }
       }
       onActiveHeadingChangeRef.current?.(active);
+      onScrollTopRef.current?.(editor.getScrollTop());
     }, [content]);
 
     useImperativeHandle(

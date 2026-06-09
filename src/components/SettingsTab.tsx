@@ -319,6 +319,14 @@ export function SettingsTab({ config, onChange, onChooseNotesDir }: SettingsTabP
             </section>
 
             <section className="space-y-2">
+              <ToggleRow
+                label={t("settings.autoOpenOutline", { defaultValue: "下滑自动打开大纲" })}
+                checked={config.autoOpenOutline ?? false}
+                onChange={(checked) => setConfigValue("autoOpenOutline", checked)}
+              />
+            </section>
+
+            <section className="space-y-2">
               <label className="block text-[11px] font-body text-ink-faint">
                 {t("settings.fontSize.editor", { defaultValue: "编辑器字号" })}
               </label>

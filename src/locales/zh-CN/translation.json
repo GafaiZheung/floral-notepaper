@@ -202,6 +202,7 @@
       "note": "自动保存笔记",
       "surface": "小窗笔记自动保存"
     },
+    "autoOpenOutline": "下滑自动打开大纲",
     "autostart": "开机自启",
     "closeTitle": "关闭设置",
     "closeToTray": "关闭到托盘",
