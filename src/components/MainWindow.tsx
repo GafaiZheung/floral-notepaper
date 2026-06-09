@@ -1592,208 +1592,309 @@ export function MainWindow({
       <div className="relative noise-bg bg-cloud flex flex-col flex-1 min-h-0">
         <BackgroundLayer config={settingsConfig} />
         <div
-          className="relative z-20 flex items-center justify-between pr-0 h-11 bg-paper/55 backdrop-blur-[1px] border-b border-paper-deep/30 shrink-0 select-none cursor-default"
+          className="relative z-20 flex items-center pr-0 h-11 bg-paper/55 backdrop-blur-[1px] border-b border-paper-deep/30 shrink-0 select-none cursor-default"
           onMouseDown={handleTitleBarDrag}
           onDoubleClick={handleTitleBarDoubleClick}
         >
-          {settingsConfig?.tabLayout !== "default" ? (
-            <>
-              {/* Compact: window controls on far left, no "花笺" text */}
-              <div className="flex items-center shrink-0 pl-1">
-                <button
-                  onClick={handleClose}
-                  className="w-9 h-9 flex items-center justify-center rounded-full text-ink-ghost hover:text-red-500 hover:bg-danger-bg transition-all cursor-pointer"
-                  title={t("main.window.close", { defaultValue: "关闭" })}
+          {(() => {
+            const isCompact = (settingsConfig?.tabLayout as string) !== "default";
+            return (
+              <>
+                {/* LEFT: compact window controls — slide in/out */}
+                <div
+                  className={`shrink-0 min-w-0 overflow-hidden transition-[max-width,opacity] duration-300 ease-in-out ${
+                    isCompact ? "max-w-[132px] opacity-100" : "max-w-0 opacity-0"
+                  }`}
                 >
-                  <svg
-                    width="11"
-                    height="11"
-                    viewBox="0 0 12 12"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
-                  >
-                    <path d="M2 2l8 8M10 2l-8 8" />
-                  </svg>
-                </button>
-                <button
-                  onClick={handleMinimize}
-                  className="w-9 h-9 flex items-center justify-center rounded-full text-ink-ghost hover:text-ink-soft hover:bg-paper-warm transition-all cursor-pointer"
-                  title={t("main.window.minimize", { defaultValue: "最小化" })}
-                >
-                  <svg width="10" height="10" viewBox="0 0 12 12">
-                    <rect x="1" y="5.5" width="10" height="1" fill="currentColor" rx="0.5" />
-                  </svg>
-                </button>
-                <button
-                  onClick={handleMaximize}
-                  className="w-9 h-9 flex items-center justify-center rounded-full text-ink-ghost hover:text-ink-soft hover:bg-paper-warm transition-all cursor-pointer"
-                  title={
-                    isMaximized
-                      ? t("main.window.restore", { defaultValue: "还原" })
-                      : t("main.window.maximize", { defaultValue: "最大化" })
-                  }
-                >
-                  {isMaximized ? (
-                    <svg
-                      width="10"
-                      height="10"
-                      viewBox="0 0 12 12"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.2"
+                  <div className="flex items-center pl-1">
+                    <button
+                      onClick={handleClose}
+                      className="w-9 h-9 flex items-center justify-center rounded-full text-ink-ghost hover:text-red-500 hover:bg-danger-bg transition-all cursor-pointer"
+                      title={t("main.window.close", { defaultValue: "关闭" })}
                     >
-                      <rect x="3" y="3" width="7" height="7" rx="1" />
-                      <path d="M3 5H2V2a1 1 0 0 1 1-1h5v1" />
-                    </svg>
-                  ) : (
-                    <svg
-                      width="10"
-                      height="10"
-                      viewBox="0 0 12 12"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.2"
-                    >
-                      <rect x="1.5" y="1.5" width="9" height="9" rx="1.5" />
-                    </svg>
-                  )}
-                </button>
-              </div>
-
-              {/* Folder selector — right edge aligns with sidebar panel, window-ctrl padded out */}
-              <div
-                className="shrink-0 flex items-center"
-                style={{ width: `${Math.max(sidebarWidth - 76, 130)}px`, paddingLeft: 8 }}
-              >
-                {settingsConfig && (
-                  <div className="flex items-center gap-1.5 w-full">
-                    <div className="relative flex-1 min-w-0">
-                      <button
-                        onMouseDown={(e) => e.stopPropagation()}
-                        onClick={() => {
-                          setDeleteConfirmDir(null);
-                          setNotesDirDropdownOpen((prev) => !prev);
-                          void refreshOneDrivePaths();
-                        }}
-                        className="w-full flex items-center gap-1 h-7 rounded-lg text-[11px] font-body bg-paper-warm/80 border border-paper-deep/40 pl-2.5 pr-1.5 hover:border-bamboo/30 hover:bg-cloud transition-colors cursor-pointer"
-                        title={t("main.notesDir.select", { defaultValue: "切换笔记目录" })}
+                      <svg
+                        width="11"
+                        height="11"
+                        viewBox="0 0 12 12"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
                       >
-                        <span className="flex-1 truncate text-left text-ink-faint">
-                          {displayPathLabel(settingsConfig.notesDir)}
-                        </span>
+                        <path d="M2 2l8 8M10 2l-8 8" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={handleMinimize}
+                      className="w-9 h-9 flex items-center justify-center rounded-full text-ink-ghost hover:text-ink-soft hover:bg-paper-warm transition-all cursor-pointer"
+                      title={t("main.window.minimize", { defaultValue: "最小化" })}
+                    >
+                      <svg width="10" height="10" viewBox="0 0 12 12">
+                        <rect x="1" y="5.5" width="10" height="1" fill="currentColor" rx="0.5" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={handleMaximize}
+                      className="w-9 h-9 flex items-center justify-center rounded-full text-ink-ghost hover:text-ink-soft hover:bg-paper-warm transition-all cursor-pointer"
+                      title={
+                        isMaximized
+                          ? t("main.window.restore", { defaultValue: "还原" })
+                          : t("main.window.maximize", { defaultValue: "最大化" })
+                      }
+                    >
+                      {isMaximized ? (
                         <svg
                           width="10"
                           height="10"
-                          viewBox="0 0 24 24"
+                          viewBox="0 0 12 12"
                           fill="none"
                           stroke="currentColor"
-                          strokeWidth="2.5"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                          className={`text-ink-ghost shrink-0 transition-transform duration-200 ${notesDirDropdownOpen ? "rotate-180" : ""}`}
+                          strokeWidth="1.2"
                         >
-                          <polyline points="6 9 12 15 18 9" />
+                          <rect x="3" y="3" width="7" height="7" rx="1" />
+                          <path d="M3 5H2V2a1 1 0 0 1 1-1h5v1" />
                         </svg>
-                      </button>
-                      <div
-                        onMouseDown={(e) => e.stopPropagation()}
-                        className={`absolute top-full left-0 right-0 mt-1 z-[9999] bg-cloud border border-paper-deep/40 rounded-xl shadow-lg overflow-hidden py-1 transition-all duration-200 origin-top ${notesDirDropdownOpen ? "opacity-100 scale-y-100" : "opacity-0 scale-y-95 pointer-events-none"}`}
-                      >
-                        {(settingsConfig.notesDirs ?? [settingsConfig.notesDir]).map((dir) => {
-                          const isCurrent = dir === settingsConfig.notesDir;
-                          return (
-                            <div key={dir} className="flex items-center">
-                              {deleteConfirmDir === dir ? (
-                                <div className="flex-1">
-                                  <div className="px-3 py-1.5 text-[10px] font-body text-ink-faint border-b border-paper-deep/20">
-                                    {t("main.notesDir.confirmDelete", {
-                                      path: displayPathLabel(dir),
-                                      defaultValue: "确认删除「{{path}}」？",
-                                    })}
-                                  </div>
-                                  <div className="flex">
+                      ) : (
+                        <svg
+                          width="10"
+                          height="10"
+                          viewBox="0 0 12 12"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.2"
+                        >
+                          <rect x="1.5" y="1.5" width="9" height="9" rx="1.5" />
+                        </svg>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Folder selector (compact only) */}
+                {isCompact && (
+                  <div
+                    className="shrink-0 flex items-center"
+                    style={{ width: `${Math.max(sidebarWidth - 76, 130)}px`, paddingLeft: 8 }}
+                  >
+                    {settingsConfig && (
+                      <div className="flex items-center gap-1.5 w-full">
+                        <div className="relative flex-1 min-w-0">
+                          <button
+                            onMouseDown={(e) => e.stopPropagation()}
+                            onClick={() => {
+                              setDeleteConfirmDir(null);
+                              setNotesDirDropdownOpen((prev) => !prev);
+                              void refreshOneDrivePaths();
+                            }}
+                            className="w-full flex items-center gap-1 h-7 rounded-lg text-[11px] font-body bg-paper-warm/80 border border-paper-deep/40 pl-2.5 pr-1.5 hover:border-bamboo/30 hover:bg-cloud transition-colors cursor-pointer"
+                            title={t("main.notesDir.select", { defaultValue: "切换笔记目录" })}
+                          >
+                            <span className="flex-1 truncate text-left text-ink-faint">
+                              {displayPathLabel(settingsConfig.notesDir)}
+                            </span>
+                            <svg
+                              width="10"
+                              height="10"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2.5"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              className={`text-ink-ghost shrink-0 transition-transform duration-200 ${notesDirDropdownOpen ? "rotate-180" : ""}`}
+                            >
+                              <polyline points="6 9 12 15 18 9" />
+                            </svg>
+                          </button>
+                          <div
+                            onMouseDown={(e) => e.stopPropagation()}
+                            className={`absolute top-full left-0 right-0 mt-1 z-[9999] bg-cloud border border-paper-deep/40 rounded-xl shadow-lg overflow-hidden py-1 transition-all duration-200 origin-top ${notesDirDropdownOpen ? "opacity-100 scale-y-100" : "opacity-0 scale-y-95 pointer-events-none"}`}
+                          >
+                            {(settingsConfig.notesDirs ?? [settingsConfig.notesDir]).map((dir) => {
+                              const isCurrent = dir === settingsConfig.notesDir;
+                              return (
+                                <div key={dir} className="flex items-center">
+                                  {deleteConfirmDir === dir ? (
+                                    <div className="flex-1">
+                                      <div className="px-3 py-1.5 text-[10px] font-body text-ink-faint border-b border-paper-deep/20">
+                                        {t("main.notesDir.confirmDelete", {
+                                          path: displayPathLabel(dir),
+                                          defaultValue: "确认删除「{{path}}」？",
+                                        })}
+                                      </div>
+                                      <div className="flex">
+                                        <button
+                                          onClick={() => void handleDeleteNotesDir(dir)}
+                                          className="flex-1 text-center px-2 py-1.5 text-[11px] font-body text-red-400 hover:bg-danger-bg hover:text-red-500 transition-colors cursor-pointer"
+                                        >
+                                          {t("main.notesDir.confirmDeleteAction", {
+                                            defaultValue: "确认删除",
+                                          })}
+                                        </button>
+                                        <button
+                                          onClick={() => setDeleteConfirmDir(null)}
+                                          className="flex-1 text-center px-2 py-1.5 text-[11px] font-body text-ink-soft hover:bg-paper-warm transition-colors cursor-pointer"
+                                        >
+                                          {t("common.cancel", { defaultValue: "取消" })}
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : (
                                     <button
-                                      onClick={() => void handleDeleteNotesDir(dir)}
-                                      className="flex-1 text-center px-2 py-1.5 text-[11px] font-body text-red-400 hover:bg-danger-bg hover:text-red-500 transition-colors cursor-pointer"
+                                      onClick={() => {
+                                        setNotesDirDropdownOpen(false);
+                                        void switchNotesDir(dir);
+                                      }}
+                                      className={`flex-1 text-left truncate px-3 py-1.5 text-[11px] font-mono transition-colors cursor-pointer ${isCurrent ? "text-bamboo font-medium bg-bamboo-mist/30" : "text-ink-faint hover:text-ink-soft hover:bg-paper-warm/60"}`}
                                     >
-                                      {t("main.notesDir.confirmDeleteAction", {
-                                        defaultValue: "确认删除",
-                                      })}
+                                      <span className="flex items-center gap-1.5">
+                                        {oneDriveSyncedPaths.includes(dir) && (
+                                          <svg
+                                            width="11"
+                                            height="11"
+                                            viewBox="0 0 24 24"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            strokeWidth="1.7"
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                            className="shrink-0 opacity-60"
+                                          >
+                                            <path d="M6.5 17.5c-2.3-.5-4-2.5-4-4.9 0-3 2.3-5 5-4.8.8-2.7 3.3-4.5 6.1-4.1a5.2 5.2 0 0 1 3.6 2.1c2.7.2 4.8 2.6 4.8 5.3 0 2.3-1.3 4.2-3.2 5.1" />
+                                            <path d="M9 19a3 3 0 0 0 6 0" />
+                                            <path d="M12 16v3" />
+                                          </svg>
+                                        )}
+                                        {displayPathLabel(dir)}
+                                      </span>
                                     </button>
+                                  )}
+                                  {!isCurrent && deleteConfirmDir !== dir && (
                                     <button
-                                      onClick={() => setDeleteConfirmDir(null)}
-                                      className="flex-1 text-center px-2 py-1.5 text-[11px] font-body text-ink-soft hover:bg-paper-warm transition-colors cursor-pointer"
+                                      onClick={() => setDeleteConfirmDir(dir)}
+                                      className="shrink-0 w-6 h-6 flex items-center justify-center opacity-30 hover:opacity-100 text-ink-ghost hover:text-red-400 hover:bg-danger-bg rounded transition-all cursor-pointer mr-0.5"
+                                      title={t("common.delete", { defaultValue: "删除" })}
                                     >
-                                      {t("common.cancel", { defaultValue: "取消" })}
-                                    </button>
-                                  </div>
-                                </div>
-                              ) : (
-                                <button
-                                  onClick={() => {
-                                    setNotesDirDropdownOpen(false);
-                                    void switchNotesDir(dir);
-                                  }}
-                                  className={`flex-1 text-left truncate px-3 py-1.5 text-[11px] font-mono transition-colors cursor-pointer ${isCurrent ? "text-bamboo font-medium bg-bamboo-mist/30" : "text-ink-faint hover:text-ink-soft hover:bg-paper-warm/60"}`}
-                                >
-                                  <span className="flex items-center gap-1.5">
-                                    {oneDriveSyncedPaths.includes(dir) && (
                                       <svg
-                                        width="11"
-                                        height="11"
+                                        width="10"
+                                        height="10"
                                         viewBox="0 0 24 24"
                                         fill="none"
                                         stroke="currentColor"
-                                        strokeWidth="1.7"
+                                        strokeWidth="2.5"
                                         strokeLinecap="round"
-                                        strokeLinejoin="round"
-                                        className="shrink-0 opacity-60"
                                       >
-                                        <path d="M6.5 17.5c-2.3-.5-4-2.5-4-4.9 0-3 2.3-5 5-4.8.8-2.7 3.3-4.5 6.1-4.1a5.2 5.2 0 0 1 3.6 2.1c2.7.2 4.8 2.6 4.8 5.3 0 2.3-1.3 4.2-3.2 5.1" />
-                                        <path d="M9 19a3 3 0 0 0 6 0" />
-                                        <path d="M12 16v3" />
+                                        <path d="M18 6L6 18M6 6l12 12" />
                                       </svg>
-                                    )}
-                                    {displayPathLabel(dir)}
-                                  </span>
-                                </button>
-                              )}
-                              {!isCurrent && deleteConfirmDir !== dir && (
-                                <button
-                                  onClick={() => setDeleteConfirmDir(dir)}
-                                  className="shrink-0 w-6 h-6 flex items-center justify-center opacity-30 hover:opacity-100 text-ink-ghost hover:text-red-400 hover:bg-danger-bg rounded transition-all cursor-pointer mr-0.5"
-                                  title={t("common.delete", { defaultValue: "删除" })}
-                                >
-                                  <svg
-                                    width="10"
-                                    height="10"
-                                    viewBox="0 0 24 24"
-                                    fill="none"
-                                    stroke="currentColor"
-                                    strokeWidth="2.5"
-                                    strokeLinecap="round"
-                                  >
-                                    <path d="M18 6L6 18M6 6l12 12" />
-                                  </svg>
-                                </button>
-                              )}
-                            </div>
-                          );
-                        })}
+                                    </button>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => {
+                            void handleChooseNotesDir();
+                          }}
+                          className="h-7 w-7 flex items-center justify-center rounded-lg text-[10px] text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 transition-colors cursor-pointer shrink-0"
+                          title={t("main.notesDir.add", { defaultValue: "添加目录" })}
+                        >
+                          <svg
+                            width="12"
+                            height="12"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2.5"
+                            strokeLinecap="round"
+                          >
+                            <path d="M12 5v14M5 12h14" />
+                          </svg>
+                        </button>
                       </div>
-                    </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Compact TabBar (in titlebar) */}
+                <div className={`flex-1 min-w-0 overflow-hidden ${isCompact ? "" : "hidden"}`}>
+                  <TabBar
+                    tabs={displayTabs}
+                    activeTabId={settingsTabActive ? "__settings__" : activeTabId}
+                    onSelectTab={(noteId) => {
+                      if (noteId === "__settings__") return;
+                      setSettingsTabActive(false);
+                      flushActiveTab();
+                      void openTab(noteId);
+                    }}
+                    onCloseTab={(noteId) => {
+                      if (noteId === "__settings__") {
+                        setSettingsTabActive(false);
+                        return;
+                      }
+                      void closeTab(noteId);
+                    }}
+                    onNewTab={() => void handleNewNote()}
+                    onTabMenuAction={(action, noteId) => void handleTabMenuAction(action, noteId)}
+                    inTitlebar
+                    hideNewTab
+                  />
+                </div>
+
+                {/* Default title text — slide animation */}
+                <div
+                  className={`flex items-center gap-3 min-w-0 overflow-hidden transition-[max-width,opacity] duration-300 ease-in-out ${
+                    isCompact ? "max-w-0 opacity-0" : "max-w-[480px] opacity-100 flex-1"
+                  }`}
+                >
+                  <span className="text-[13px] font-display font-medium text-ink-soft tracking-wide shrink-0 pl-5">
+                    花笺
+                  </span>
+                  <span className="text-[11px] text-ink-ghost font-body shrink-0">—</span>
+                  <span className="text-[11px] text-ink-faint font-body truncate">
+                    {title ||
+                      selectedNote?.preview ||
+                      t("common.untitledNote", { defaultValue: "无标题笔记" })}
+                  </span>
+                </div>
+
+                {/* Compact toolbar buttons (right) */}
+                {isCompact && (
+                  <div className="flex items-center shrink-0 pr-2">
+                    {errorMessage && (
+                      <span className="max-w-[160px] truncate text-[11px] text-red-400 mr-2">
+                        {errorMessage}
+                      </span>
+                    )}
                     <button
-                      onClick={() => {
-                        void handleChooseNotesDir();
-                      }}
-                      className="h-7 w-7 flex items-center justify-center rounded-lg text-[10px] text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 transition-colors cursor-pointer shrink-0"
-                      title={t("main.notesDir.add", { defaultValue: "添加目录" })}
+                      onClick={() => void handleImportNote()}
+                      className="w-9 h-9 flex items-center justify-center text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 rounded-lg transition-all cursor-pointer"
+                      title={t("main.sidebar.importMarkdown", { defaultValue: "导入 Markdown" })}
                     >
                       <svg
-                        width="12"
-                        height="12"
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2.2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M12 3v12" />
+                        <path d="m7 10 5 5 5-5" />
+                        <path d="M5 21h14" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={handleNewNote}
+                      className="w-9 h-9 flex items-center justify-center text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 rounded-lg transition-all cursor-pointer"
+                      title={t("main.sidebar.newNote", { defaultValue: "新建笔记" })}
+                    >
+                      <svg
+                        width="14"
+                        height="14"
                         viewBox="0 0 24 24"
                         fill="none"
                         stroke="currentColor"
@@ -1803,202 +1904,125 @@ export function MainWindow({
                         <path d="M12 5v14M5 12h14" />
                       </svg>
                     </button>
+                    <button
+                      onClick={() => void handleOpenNotepad()}
+                      className="w-9 h-9 flex items-center justify-center text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 rounded-lg transition-all cursor-pointer"
+                      title={t("main.window.quickNotepad", { defaultValue: "快捷便签" })}
+                    >
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M4 4h16v14H7l-3 3V4z" />
+                        <path d="M8 9h8M8 13h5" />
+                      </svg>
+                    </button>
                   </div>
                 )}
-              </div>
 
-              <TabBar
-                tabs={displayTabs}
-                activeTabId={settingsTabActive ? "__settings__" : activeTabId}
-                onSelectTab={(noteId) => {
-                  if (noteId === "__settings__") return;
-                  setSettingsTabActive(false);
-                  flushActiveTab();
-                  void openTab(noteId);
-                }}
-                onCloseTab={(noteId) => {
-                  if (noteId === "__settings__") {
-                    setSettingsTabActive(false);
-                    return;
-                  }
-                  void closeTab(noteId);
-                }}
-                onNewTab={() => void handleNewNote()}
-                onTabMenuAction={(action, noteId) => void handleTabMenuAction(action, noteId)}
-                inTitlebar
-                hideNewTab
-              />
-
-              {/* Compact: toolbar buttons on the right */}
-              <div className="flex items-center shrink-0 pr-2">
-                {errorMessage && (
-                  <span className="max-w-[160px] truncate text-[11px] text-red-400 mr-2">
-                    {errorMessage}
-                  </span>
-                )}
-                <button
-                  onClick={() => void handleImportNote()}
-                  className="w-9 h-9 flex items-center justify-center text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 rounded-lg transition-all cursor-pointer"
-                  title={t("main.sidebar.importMarkdown", { defaultValue: "导入 Markdown" })}
+                {/* RIGHT: default window controls — slide animation */}
+                <div
+                  className={`shrink-0 ml-auto overflow-hidden transition-[max-width,opacity] duration-300 ease-in-out ${
+                    isCompact ? "max-w-0 opacity-0" : "max-w-[172px] opacity-100"
+                  }`}
                 >
-                  <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2.2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <path d="M12 3v12" />
-                    <path d="m7 10 5 5 5-5" />
-                    <path d="M5 21h14" />
-                  </svg>
-                </button>
-                <button
-                  onClick={handleNewNote}
-                  className="w-9 h-9 flex items-center justify-center text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 rounded-lg transition-all cursor-pointer"
-                  title={t("main.sidebar.newNote", { defaultValue: "新建笔记" })}
-                >
-                  <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2.5"
-                    strokeLinecap="round"
-                  >
-                    <path d="M12 5v14M5 12h14" />
-                  </svg>
-                </button>
-                <button
-                  onClick={() => void handleOpenNotepad()}
-                  className="w-9 h-9 flex items-center justify-center text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 rounded-lg transition-all cursor-pointer"
-                  title={t("main.window.quickNotepad", { defaultValue: "快捷便签" })}
-                >
-                  <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <path d="M4 4h16v14H7l-3 3V4z" />
-                    <path d="M8 9h8M8 13h5" />
-                  </svg>
-                </button>
-              </div>
-            </>
-          ) : (
-            <>
-              {/* Default mode: original layout */}
-              <div className="flex items-center gap-3 min-w-0 flex-1 pl-5">
-                <span className="text-[13px] font-display font-medium text-ink-soft tracking-wide shrink-0">
-                  花笺
-                </span>
-                <span className="text-[11px] text-ink-ghost font-body shrink-0">—</span>
-                <span className="text-[11px] text-ink-faint font-body truncate max-w-[240px]">
-                  {title ||
-                    selectedNote?.preview ||
-                    t("common.untitledNote", { defaultValue: "无标题笔记" })}
-                </span>
-              </div>
-              <div className="flex items-center">
-                {errorMessage && (
-                  <span className="max-w-[200px] truncate text-[11px] text-red-400 mr-2">
-                    {errorMessage}
-                  </span>
-                )}
-                <button
-                  onClick={() => void handleOpenNotepad()}
-                  className="w-10 h-11 flex items-center justify-center text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 transition-all cursor-pointer"
-                  title={t("main.window.quickNotepad", { defaultValue: "快捷便签" })}
-                >
-                  <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <path d="M4 4h16v14H7l-3 3V4z" />
-                    <path d="M8 9h8M8 13h5" />
-                  </svg>
-                </button>
-
-                <div className="w-px h-4 bg-paper-deep/30 mx-0.5" />
-
-                <button
-                  onClick={handleMinimize}
-                  className="w-11 h-11 flex items-center justify-center text-ink-ghost hover:text-ink-soft hover:bg-paper-warm transition-all cursor-pointer"
-                  title={t("main.window.minimize", { defaultValue: "最小化" })}
-                >
-                  <svg width="12" height="12" viewBox="0 0 12 12">
-                    <rect x="1" y="5.5" width="10" height="1" fill="currentColor" rx="0.5" />
-                  </svg>
-                </button>
-                <button
-                  onClick={handleMaximize}
-                  className="w-11 h-11 flex items-center justify-center text-ink-ghost hover:text-ink-soft hover:bg-paper-warm transition-all cursor-pointer"
-                  title={
-                    isMaximized
-                      ? t("main.window.restore", { defaultValue: "还原" })
-                      : t("main.window.maximize", { defaultValue: "最大化" })
-                  }
-                >
-                  {isMaximized ? (
-                    <svg
-                      width="12"
-                      height="12"
-                      viewBox="0 0 12 12"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.2"
+                  <div className="flex items-center">
+                    {errorMessage && !isCompact && (
+                      <span className="max-w-[200px] truncate text-[11px] text-red-400 mr-2">
+                        {errorMessage}
+                      </span>
+                    )}
+                    <button
+                      onClick={() => void handleOpenNotepad()}
+                      className="w-10 h-11 flex items-center justify-center text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 transition-all cursor-pointer"
+                      title={t("main.window.quickNotepad", { defaultValue: "快捷便签" })}
                     >
-                      <rect x="3" y="3" width="7" height="7" rx="1" />
-                      <path d="M3 5H2V2a1 1 0 0 1 1-1h5v1" />
-                    </svg>
-                  ) : (
-                    <svg
-                      width="12"
-                      height="12"
-                      viewBox="0 0 12 12"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.2"
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M4 4h16v14H7l-3 3V4z" />
+                        <path d="M8 9h8M8 13h5" />
+                      </svg>
+                    </button>
+                    <div className="w-px h-4 bg-paper-deep/30 mx-0.5" />
+                    <button
+                      onClick={handleMinimize}
+                      className="w-11 h-11 flex items-center justify-center text-ink-ghost hover:text-ink-soft hover:bg-paper-warm transition-all cursor-pointer"
+                      title={t("main.window.minimize", { defaultValue: "最小化" })}
                     >
-                      <rect x="1.5" y="1.5" width="9" height="9" rx="1.5" />
-                    </svg>
-                  )}
-                </button>
-                <button
-                  onClick={handleClose}
-                  className="w-11 h-11 flex items-center justify-center text-ink-ghost hover:text-red-500 hover:bg-danger-bg transition-all cursor-pointer"
-                  title={t("main.window.close", { defaultValue: "关闭" })}
-                >
-                  <svg
-                    width="12"
-                    height="12"
-                    viewBox="0 0 12 12"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
-                  >
-                    <path d="M2 2l8 8M10 2l-8 8" />
-                  </svg>
-                </button>
-              </div>
-            </>
-          )}
+                      <svg width="12" height="12" viewBox="0 0 12 12">
+                        <rect x="1" y="5.5" width="10" height="1" fill="currentColor" rx="0.5" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={handleMaximize}
+                      className="w-11 h-11 flex items-center justify-center text-ink-ghost hover:text-ink-soft hover:bg-paper-warm transition-all cursor-pointer"
+                      title={
+                        isMaximized
+                          ? t("main.window.restore", { defaultValue: "还原" })
+                          : t("main.window.maximize", { defaultValue: "最大化" })
+                      }
+                    >
+                      {isMaximized ? (
+                        <svg
+                          width="12"
+                          height="12"
+                          viewBox="0 0 12 12"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.2"
+                        >
+                          <rect x="3" y="3" width="7" height="7" rx="1" />
+                          <path d="M3 5H2V2a1 1 0 0 1 1-1h5v1" />
+                        </svg>
+                      ) : (
+                        <svg
+                          width="12"
+                          height="12"
+                          viewBox="0 0 12 12"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.2"
+                        >
+                          <rect x="1.5" y="1.5" width="9" height="9" rx="1.5" />
+                        </svg>
+                      )}
+                    </button>
+                    <button
+                      onClick={handleClose}
+                      className="w-11 h-11 flex items-center justify-center text-ink-ghost hover:text-red-500 hover:bg-danger-bg transition-all cursor-pointer"
+                      title={t("main.window.close", { defaultValue: "关闭" })}
+                    >
+                      <svg
+                        width="12"
+                        height="12"
+                        viewBox="0 0 12 12"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                      >
+                        <path d="M2 2l8 8M10 2l-8 8" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              </>
+            );
+          })()}
         </div>
 
         <div className="relative z-10 flex flex-1 min-h-0">
@@ -2743,27 +2767,34 @@ export function MainWindow({
           )}
 
           <div className="flex-1 flex flex-col min-w-0">
-            {settingsConfig?.tabLayout === "default" && (
-              <TabBar
-                tabs={displayTabs}
-                activeTabId={settingsTabActive ? "__settings__" : activeTabId}
-                onSelectTab={(noteId) => {
-                  if (noteId === "__settings__") return;
-                  setSettingsTabActive(false);
-                  flushActiveTab();
-                  void openTab(noteId);
-                }}
-                onCloseTab={(noteId) => {
-                  if (noteId === "__settings__") {
+            <div
+              className="grid transition-[grid-template-rows] duration-300 ease-in-out"
+              style={{
+                gridTemplateRows: settingsConfig?.tabLayout === "default" ? "1fr" : "0fr",
+              }}
+            >
+              <div className="overflow-hidden">
+                <TabBar
+                  tabs={displayTabs}
+                  activeTabId={settingsTabActive ? "__settings__" : activeTabId}
+                  onSelectTab={(noteId) => {
+                    if (noteId === "__settings__") return;
                     setSettingsTabActive(false);
-                    return;
-                  }
-                  void closeTab(noteId);
-                }}
-                onNewTab={() => void handleNewNote()}
-                onTabMenuAction={(action, noteId) => void handleTabMenuAction(action, noteId)}
-              />
-            )}
+                    flushActiveTab();
+                    void openTab(noteId);
+                  }}
+                  onCloseTab={(noteId) => {
+                    if (noteId === "__settings__") {
+                      setSettingsTabActive(false);
+                      return;
+                    }
+                    void closeTab(noteId);
+                  }}
+                  onNewTab={() => void handleNewNote()}
+                  onTabMenuAction={(action, noteId) => void handleTabMenuAction(action, noteId)}
+                />
+              </div>
+            </div>
             {settingsTabActive && settingsConfig ? (
               <SettingsTab
                 config={settingsConfig}
