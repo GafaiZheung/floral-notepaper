@@ -205,8 +205,7 @@ export function MainWindow({
     return extractHeadings(content);
   }, [content]);
 
-  const headingsRef = useRef(headings);
-  headingsRef.current = headings;
+  const [activeHeadingLine, setActiveHeadingLine] = useState<number | null>(null);
 
   // Jump to heading: delegate to WysiwygEditor's ref API
   const handleJumpToHeading = useCallback((lineNumber: number) => {
@@ -2306,6 +2305,7 @@ export function MainWindow({
               <div key="outline" className="flex flex-col flex-1 min-h-0 animate-view-fade">
                 <OutlinePanel
                   headings={headings}
+                  activeLineNumber={activeHeadingLine ?? undefined}
                   onJumpTo={handleJumpToHeading}
                   emptyText={t("main.outline.empty", { defaultValue: "当前文档暂无标题" })}
                 />
@@ -2667,6 +2667,7 @@ export function MainWindow({
                   })}
                   onDirty={markDirty}
                   hideFirstHeading={!!title.trim()}
+                  onActiveHeadingChange={setActiveHeadingLine}
                 />
               )}
             </div>

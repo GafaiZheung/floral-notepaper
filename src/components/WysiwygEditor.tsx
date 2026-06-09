@@ -1,4 +1,4 @@
-import { forwardRef, useCallback, useImperativeHandle, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { MarkdownEditor } from "./MarkdownEditor";
 import type { MarkdownEditorHandle } from "./MarkdownEditor";
@@ -8,6 +8,7 @@ import { parseBlocks, updateBlock } from "../features/markdown/markdownBlocks";
 import { applyFormat } from "../features/editor/formatActions";
 import type { FormatAction } from "../features/editor/formatActions";
 import { extractHeadings } from "../features/markdown/extractHeadings";
+import type { Heading } from "../features/markdown/extractHeadings";
 
 type WysiwygMode = "reading" | "source";
 
@@ -31,6 +32,40 @@ export interface WysiwygEditorProps {
   placeholder?: string;
   onDirty?: () => void;
   hideFirstHeading?: boolean;
+  onActiveHeadingChange?: (lineNumber: number | null) => void;
+}
+
+/** Compute which heading is at or above the top of the scroll container */
+function computeActiveHeadingFromDOM(
+  container: HTMLElement,
+  headings: Heading[],
+): number | null {
+  const headingEls = container.querySelectorAll("h1, h2, h3, h4");
+  if (headingEls.length === 0 || headings.length === 0) return null;
+
+  const scrollTop = container.scrollTop;
+
+  // Find the last heading element whose top is at or above the scroll position
+  let activeEl: Element | null = null;
+  for (const el of headingEls) {
+    const elTop = (el as HTMLElement).offsetTop;
+    if (elTop <= scrollTop + 8) {
+      // +8px tolerance
+      activeEl = el;
+    } else {
+      break;
+    }
+  }
+
+  if (!activeEl) {
+    // All headings are below — use the first one
+    return headings[0]?.lineNumber ?? null;
+  }
+
+  // Match DOM heading text to extractHeadings result
+  const activeText = activeEl.textContent?.trim() ?? "";
+  const match = headings.find((h) => h.text === activeText);
+  return match?.lineNumber ?? null;
 }
 
 export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>(
@@ -44,6 +79,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
       placeholder,
       onDirty,
       hideFirstHeading = false,
+      onActiveHeadingChange,
     },
     ref,
   ) {
@@ -61,6 +97,53 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
       return allBlocks;
     }, [allBlocks, hideFirstHeading]);
 
+    const headings = useMemo(() => extractHeadings(content), [content]);
+
+    // Track active heading from scroll position
+    const headingsRef = useRef(headings);
+    headingsRef.current = headings;
+    const onActiveHeadingChangeRef = useRef(onActiveHeadingChange);
+    onActiveHeadingChangeRef.current = onActiveHeadingChange;
+
+    // Reading mode: listen to scroll events on the reading container
+    useEffect(() => {
+      if (mode !== "reading") return;
+      const container = readingScrollRef.current;
+      if (!container) return;
+
+      const handleScroll = () => {
+        const active = computeActiveHeadingFromDOM(container, headingsRef.current);
+        onActiveHeadingChangeRef.current?.(active);
+      };
+
+      // Compute initial active heading
+      handleScroll();
+
+      container.addEventListener("scroll", handleScroll, { passive: true });
+      return () => container.removeEventListener("scroll", handleScroll);
+    }, [mode, content]);
+
+    // Source mode: listen to scroll events via onScroll prop
+    const handleSourceScroll = useCallback(() => {
+      const editor = sourceEditorRef.current;
+      if (!editor) return;
+      const maxScroll = editor.getMaxScrollTop();
+      if (maxScroll <= 0) return;
+      const ratio = editor.getScrollTop() / maxScroll;
+      const lines = content.split("\n");
+      const estimatedLine = Math.floor(ratio * (lines.length - 1));
+      const hds = headingsRef.current;
+      let active: number | null = hds[0]?.lineNumber ?? null;
+      for (const h of hds) {
+        if (h.lineNumber <= estimatedLine) {
+          active = h.lineNumber;
+        } else {
+          break;
+        }
+      }
+      onActiveHeadingChangeRef.current?.(active);
+    }, [content]);
+
     useImperativeHandle(
       ref,
       () => ({
@@ -74,7 +157,6 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
           const container = readingScrollRef.current;
           if (!container) return;
 
-          const headings = extractHeadings(content);
           const target = headings.find((h) => h.lineNumber === lineNumber);
           if (!target) return;
 
@@ -87,7 +169,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
           }
         },
       }),
-      [mode, content],
+      [mode, headings],
     );
 
     const modeSwitchOptions = useMemo(
@@ -176,6 +258,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
             <MarkdownEditor
               ref={sourceEditorRef}
               value={content}
+              onScroll={handleSourceScroll}
               onChange={handleSourceChange}
               placeholder={placeholder}
               disabled={disabled}
