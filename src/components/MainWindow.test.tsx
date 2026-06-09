@@ -33,7 +33,8 @@ describe("MainWindow settings", () => {
       />,
     );
 
-    expect(markup).toContain("应用设置");
+    expect(markup).toContain("通用");
+    expect(markup).toContain("编辑器");
     expect(markup).toContain("D:\\Notes\\花笺");
   });
 
@@ -88,7 +89,7 @@ describe("MainWindow tab management", () => {
     const markup = renderToStaticMarkup(<MainWindow />);
 
     // The tab scroll container should be present but empty (no data-tab-id attributes)
-    expect(markup).not.toContain('data-tab-id=');
+    expect(markup).not.toContain("data-tab-id=");
   });
 
   test("renders tab scroll container", () => {
@@ -110,7 +111,10 @@ describe("MainWindow editor undo", () => {
   });
 
   test("runEditorUndo returns false (undo handled by CodeMirror natively)", () => {
-    const editor = { focus: vi.fn(), runUndo: vi.fn(() => true) } as unknown as import("./MarkdownEditor").MarkdownEditorHandle;
+    const editor = {
+      focus: vi.fn(),
+      runUndo: vi.fn(() => true),
+    } as unknown as import("./MarkdownEditor").MarkdownEditorHandle;
 
     const undone = runEditorUndo(editor);
 

@@ -50,3 +50,7 @@ src-tauri/icons/macOS
 ## Temp
 temp/
 .superpowers/
+
+package-lock.json
+yarn.lock  
+cargo.lock 

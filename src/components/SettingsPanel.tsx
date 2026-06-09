@@ -520,13 +520,13 @@ export function SettingsPanel({ config, onChange, onChooseNotesDir, onClose }: S
   );
 }
 
-interface ToggleRowProps {
+export interface ToggleRowProps {
   label: string;
   checked: boolean;
   onChange: (checked: boolean) => void;
 }
 
-function ToggleRow({ label, checked, onChange }: ToggleRowProps) {
+export function ToggleRow({ label, checked, onChange }: ToggleRowProps) {
   return (
     <label className="flex items-center justify-between h-9 rounded-lg px-2.5 bg-paper-warm/45 border border-paper-deep/25 cursor-pointer">
       <span className="text-[12px] text-ink-soft">{label}</span>
@@ -561,7 +561,7 @@ interface RangeRowProps {
   onChange: (value: number) => void;
 }
 
-function RangeRow({ label, value, min, max, step, format, onChange }: RangeRowProps) {
+export function RangeRow({ label, value, min, max, step, format, onChange }: RangeRowProps) {
   return (
     <div className="flex items-center gap-3 h-9 rounded-lg px-2.5 bg-paper-warm/45 border border-paper-deep/25">
       <span className="w-9 text-[11px] text-ink-faint">{label}</span>
@@ -588,7 +588,7 @@ interface ShortcutRecorderProps {
 
 type ShortcutMsg = { key: string; params?: Record<string, string> } | { raw: string };
 
-function ShortcutRecorder({ value, onChange }: ShortcutRecorderProps) {
+export function ShortcutRecorder({ value, onChange }: ShortcutRecorderProps) {
   const { t } = useTranslation();
   const [heldKeys, setHeldKeys] = useState<string[]>([]);
   const [checkState, setCheckState] = useState<"idle" | "checking" | "ok" | "warning" | "error">(

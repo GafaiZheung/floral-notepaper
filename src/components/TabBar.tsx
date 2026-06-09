@@ -8,12 +8,7 @@ export interface TabInfo {
 }
 
 /** Menu action identifier for right-click context menu */
-export type TabMenuAction =
-  | "close"
-  | "closeOthers"
-  | "closeRight"
-  | "closeAll"
-  | "closeSaved";
+export type TabMenuAction = "close" | "closeOthers" | "closeRight" | "closeAll" | "closeSaved";
 
 export interface TabBarProps {
   tabs: TabInfo[];
@@ -22,6 +17,8 @@ export interface TabBarProps {
   onCloseTab: (noteId: string) => void;
   onNewTab: () => void;
   onTabMenuAction: (action: TabMenuAction, noteId: string) => void;
+  /** When true, renders compact without border — for titlebar integration */
+  inTitlebar?: boolean;
 }
 
 function getDisplayTitle(title: string): string {
@@ -35,6 +32,7 @@ export function TabBar({
   onCloseTab,
   onNewTab,
   onTabMenuAction,
+  inTitlebar = false,
 }: TabBarProps) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -95,7 +93,11 @@ export function TabBar({
   };
 
   return (
-    <div className="relative flex items-center shrink-0 select-none h-9 px-1 border-b border-paper-deep/15">
+    <div
+      className={`relative flex items-center shrink-0 select-none px-1 ${
+        inTitlebar ? "h-full flex-1 min-w-0" : "h-9 border-b border-paper-deep/15"
+      }`}
+    >
       {/* Left fade */}
       {showLeftFade && (
         <div className="absolute left-0 top-0 bottom-0 w-6 bg-gradient-to-r from-paper/70 to-transparent z-10 pointer-events-none" />
@@ -131,9 +133,7 @@ export function TabBar({
               title={getDisplayTitle(tab.title)}
             >
               {/* Dirty indicator */}
-              {isDirty && (
-                <span className="w-1.5 h-1.5 rounded-full bg-bamboo mr-1.5 shrink-0" />
-              )}
+              {isDirty && <span className="w-1.5 h-1.5 rounded-full bg-bamboo mr-1.5 shrink-0" />}
               <span className="text-[11.5px] truncate leading-snug">
                 {getDisplayTitle(tab.title)}
               </span>

@@ -41,4 +41,6 @@ export interface AppConfig {
   openTabs?: string[];
   /** Tab management: last active tab id */
   activeTabId?: string;
+  /** Display tabs inside the title bar instead of below it */
+  tabsInTitlebar?: boolean;
 }

@@ -205,6 +205,14 @@
     "autostart": "Launch on Startup",
     "closeTitle": "Close Settings",
     "closeToTray": "Close to Tray",
+    "category": {
+      "general": "General",
+      "editor": "Editor",
+      "appearance": "Appearance",
+      "shortcuts": "Shortcuts",
+      "sync": "Sync",
+      "about": "About"
+    },
     "defaultView": {
       "label": "Default view",
       "wysiwyg": "Reading",
@@ -226,6 +234,7 @@
     "quickNoteShortcut": "Quick Note shortcut",
     "rememberSurfaceSize": "Remember surface size",
     "tabIndentSize": "Tab indent width",
+    "tabsInTitlebar": "Show tabs in title bar",
     "selectFolder": "Select Folder",
     "shortcut": {
       "cancelHint": "Esc to cancel",

@@ -205,6 +205,14 @@
     "autostart": "开机自启",
     "closeTitle": "关闭设置",
     "closeToTray": "关闭到托盘",
+    "category": {
+      "general": "通用",
+      "editor": "编辑器",
+      "appearance": "外观",
+      "shortcuts": "快捷键",
+      "sync": "同步",
+      "about": "关于"
+    },
     "defaultView": {
       "label": "默认视图",
       "wysiwyg": "阅读编辑",
@@ -226,6 +234,7 @@
     "quickNoteShortcut": "快捷记录快捷键",
     "rememberSurfaceSize": "记住小窗尺寸",
     "tabIndentSize": "Tab 缩进宽度",
+    "tabsInTitlebar": "标签页集成到标题栏",
     "selectFolder": "选择文件夹",
     "shortcut": {
       "cancelHint": "Esc 取消",
