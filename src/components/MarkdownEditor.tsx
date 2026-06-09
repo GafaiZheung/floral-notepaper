@@ -33,6 +33,10 @@ export interface MarkdownEditorProps {
   className?: string;
   onScroll?: () => void;
   onKeyDown?: (event: KeyboardEvent) => void;
+  /** Auto-size height to content instead of filling container */
+  autoHeight?: boolean;
+  /** Called when the editor loses focus */
+  onBlur?: () => void;
 }
 
 function isDarkTheme(): boolean {
@@ -41,7 +45,7 @@ function isDarkTheme(): boolean {
 
 export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorProps>(
   function MarkdownEditor(
-    { value, onChange, placeholder, disabled, fontSize = 14, className, onScroll, onKeyDown },
+    { value, onChange, placeholder, disabled, fontSize = 14, className, onScroll, onKeyDown, autoHeight, onBlur },
     ref,
   ) {
     const containerRef = useRef<HTMLDivElement>(null);
@@ -52,6 +56,8 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
     onScrollRef.current = onScroll;
     const onKeyDownRef = useRef(onKeyDown);
     onKeyDownRef.current = onKeyDown;
+    const onBlurRef = useRef(onBlur);
+    onBlurRef.current = onBlur;
     const isUpdatingRef = useRef(false);
 
     // Compartments for dynamic theme switching
@@ -87,6 +93,20 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
         updateListener,
       ];
 
+      // Auto-height: sync container height to CodeMirror's contentHeight
+      if (autoHeight) {
+        const autoHeightListener = EditorView.updateListener.of((update) => {
+          if (update.docChanged || update.viewportChanged) {
+            const c = containerRef.current;
+            const v = viewRef.current;
+            if (c && v) {
+              c.style.height = `${v.contentHeight}px`;
+            }
+          }
+        });
+        extensions.push(autoHeightListener);
+      }
+
       if (placeholder) {
         extensions.push(placeholderExt(placeholder));
       }
@@ -113,9 +133,14 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
       const handleKeyDown = (event: KeyboardEvent) => onKeyDownRef.current?.(event);
       contentDom.addEventListener("keydown", handleKeyDown);
 
+      // Forward blur events for typora-style inline editing
+      const handleBlur = () => onBlurRef.current?.();
+      contentDom.addEventListener("blur", handleBlur);
+
       return () => {
         scrollDom.removeEventListener("scroll", handleScroll);
         contentDom.removeEventListener("keydown", handleKeyDown);
+        contentDom.removeEventListener("blur", handleBlur);
         view.destroy();
         viewRef.current = null;
       };
@@ -234,7 +259,7 @@ export const MarkdownEditor = forwardRef<MarkdownEditorHandle, MarkdownEditorPro
 
     const containerStyle: React.CSSProperties = {
       fontSize: `${fontSize}px`,
-      height: "100%",
+      height: autoHeight ? "auto" : "100%",
       width: "100%",
     };
 
