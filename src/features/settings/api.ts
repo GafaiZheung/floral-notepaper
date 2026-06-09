@@ -40,7 +40,7 @@ export async function chooseBackgroundImage(): Promise<string | null> {
 }
 
 export function normalizeViewMode(value: string): ViewMode {
-  if (value === "wysiwyg" || value === "source") {
+  if (value === "wysiwyg" || value === "source" || value === "read") {
     return value;
   }
   // Migrate legacy values

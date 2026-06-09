@@ -1,4 +1,4 @@
-export type ViewMode = "wysiwyg" | "source";
+export type ViewMode = "wysiwyg" | "source" | "read";
 
 export type ThemeOption = "light" | "dark" | "system";
 

@@ -217,7 +217,8 @@
     "defaultView": {
       "label": "默认视图",
       "wysiwyg": "阅读编辑",
-      "source": "源码编辑"
+      "source": "源码编辑",
+      "read": "阅读"
     },
     "fontSize": {
       "editor": "编辑器字号",

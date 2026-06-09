@@ -217,7 +217,8 @@
     "defaultView": {
       "label": "Default view",
       "wysiwyg": "Reading",
-      "source": "Source"
+      "source": "Source",
+      "read": "Read"
     },
     "fontSize": {
       "editor": "Editor font size",

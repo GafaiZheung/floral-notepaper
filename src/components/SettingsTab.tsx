@@ -65,6 +65,7 @@ export function SettingsTab({ config, onChange, onChooseNotesDir }: SettingsTabP
     () => [
       { value: "wysiwyg", label: t("settings.defaultView.wysiwyg", { defaultValue: "阅读编辑" }) },
       { value: "source", label: t("settings.defaultView.source", { defaultValue: "源码编辑" }) },
+      { value: "read", label: t("settings.defaultView.read", { defaultValue: "阅读" }) },
     ],
     [t],
   );
