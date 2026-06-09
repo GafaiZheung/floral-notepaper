@@ -545,6 +545,11 @@ fn git_stage_files(path: String, files: Vec<String>) -> Result<String, AppError>
 }
 
 #[tauri::command]
+fn git_stage_all(path: String) -> Result<String, AppError> {
+    git::git_stage_all(std::path::Path::new(&path))
+}
+
+#[tauri::command]
 fn git_unstage_files(path: String, files: Vec<String>) -> Result<String, AppError> {
     git::git_unstage_files(std::path::Path::new(&path), &files)
 }
@@ -643,6 +648,7 @@ pub fn run() {
             git_init,
             git_status,
             git_stage_files,
+            git_stage_all,
             git_unstage_files,
             git_commit,
             git_log,

@@ -9,6 +9,7 @@ import {
   isGitRepo,
   revertFile,
   stageFiles,
+  stageAll,
   unstageFiles,
 } from "../features/git/api";
 import type { GitCommit, GitFileStatus, GitStatus } from "../features/git/types";
@@ -129,16 +130,15 @@ export function GitPanel({ repoPath, onRefresh }: GitPanelProps) {
   };
 
   const handleStageAll = async () => {
-    if (!status) return;
-    const all = [
-      ...status.files
-        .filter(
-          (f) => f.status === "modified" || f.status === "untracked" || f.status === "deleted",
-        )
-        .map((f) => f.path),
-    ];
-    if (all.length === 0) return;
-    await handleStageFiles(all);
+    setLoading(true);
+    try {
+      await stageAll(repoPath);
+      await refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
   };
 
   const handleUnstageAll = async () => {

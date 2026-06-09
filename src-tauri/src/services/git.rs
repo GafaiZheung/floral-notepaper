@@ -124,7 +124,10 @@ pub fn git_status(path: &Path) -> Result<GitStatus, AppError> {
     // Get ahead/behind counts
     let (ahead, behind) = get_ahead_behind(path);
 
-    let output = run_git(path, &["status", "--porcelain"])?;
+    let output = run_git(
+        path,
+        &["-c", "core.quotePath=false", "status", "--porcelain"],
+    )?;
     let mut files: Vec<GitFileStatus> = Vec::new();
 
     for line in output.lines() {
@@ -203,10 +206,22 @@ pub fn git_status(path: &Path) -> Result<GitStatus, AppError> {
 
 /// Stage files (git add).
 pub fn git_stage_files(path: &Path, files: &[String]) -> Result<String, AppError> {
+    if files.is_empty() {
+        return Err(AppError {
+            code: "gitEmptyPaths".into(),
+            message: "No files to stage".into(),
+            details: Default::default(),
+        });
+    }
     let mut args: Vec<&str> = vec!["add", "--"];
     let file_strs: Vec<&str> = files.iter().map(String::as_str).collect();
     args.extend(&file_strs);
     run_git(path, &args)
+}
+
+/// Stage all changes (git add -A). Safer than passing individual paths.
+pub fn git_stage_all(path: &Path) -> Result<String, AppError> {
+    run_git(path, &["add", "-A"])
 }
 
 /// Unstage files (git reset --).
@@ -229,22 +244,44 @@ pub fn git_commit(path: &Path, message: &str) -> Result<String, AppError> {
     run_git(path, &["commit", "-m", message.trim()])
 }
 
-/// Get commit log.
+/// Get commit log. Returns empty vec when there are no commits yet.
 pub fn git_log(path: &Path, count: Option<u32>) -> Result<Vec<GitCommit>, AppError> {
     let n = count.unwrap_or(50).min(500);
     let n_str = n.to_string();
-    let output = run_git(
-        path,
-        &[
+
+    // In a fresh repo with no commits, `git log` exits non-zero.
+    // Treat that as an empty history instead of an error.
+    let output = Command::new("git")
+        .args([
             "log",
             &format!("-{n_str}"),
             "--format=%H%x00%s%x00%an%x00%ad",
             "--date=format:%Y-%m-%d %H:%M",
-        ],
-    )?;
+        ])
+        .current_dir(path)
+        .output()
+        .map_err(|e| AppError {
+            code: "gitNotInstalled".into(),
+            message: format!("Git is not installed or not in PATH: {e}"),
+            details: Default::default(),
+        })?;
 
+    if !output.status.success() {
+        // "fatal: your current branch ... does not have any commits yet" → empty
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        if stderr.contains("does not have any commits") || stderr.contains("No commits yet") {
+            return Ok(Vec::new());
+        }
+        return Err(AppError {
+            code: "git".into(),
+            message: stderr.trim().to_string(),
+            details: Default::default(),
+        });
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
     let mut commits = Vec::new();
-    for line in output.lines() {
+    for line in stdout.lines() {
         let fields: Vec<&str> = line.split('\0').collect();
         if fields.len() >= 4 {
             commits.push(GitCommit {
@@ -268,8 +305,35 @@ pub fn git_revert_file(path: &Path, file: &str) -> Result<String, AppError> {
 // ---------------------------------------------------------------------------
 
 fn get_current_branch(path: &Path) -> Result<String, AppError> {
-    let output = run_git(path, &["rev-parse", "--abbrev-ref", "HEAD"])?;
-    Ok(output.trim().to_string())
+    // `git rev-parse --abbrev-ref HEAD` fails in an empty repo (no commits yet).
+    // Fall back to checking .git/HEAD for the default branch name.
+    let output = Command::new("git")
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .current_dir(path)
+        .output()
+        .map_err(|e| AppError {
+            code: "gitNotInstalled".into(),
+            message: format!("Git is not installed or not in PATH: {e}"),
+            details: Default::default(),
+        })?;
+
+    if output.status.success() {
+        let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !name.is_empty() && name != "HEAD" {
+            return Ok(name);
+        }
+    }
+
+    // Fallback: read HEAD file to get the unborn branch name
+    let head_file = path.join(".git").join("HEAD");
+    if let Ok(contents) = std::fs::read_to_string(&head_file) {
+        let trimmed = contents.trim();
+        if let Some(branch) = trimmed.strip_prefix("ref: refs/heads/") {
+            return Ok(branch.to_string());
+        }
+    }
+
+    Ok("main".into())
 }
 
 fn get_ahead_behind(path: &Path) -> (u32, u32) {

@@ -7,6 +7,7 @@ const T_CMD = {
   init: "git_init",
   status: "git_status",
   stageFiles: "git_stage_files",
+  stageAll: "git_stage_all",
   unstageFiles: "git_unstage_files",
   commit: "git_commit",
   log: "git_log",
@@ -16,6 +17,10 @@ const T_CMD = {
 function parseError(e: unknown): Error {
   if (e instanceof Error) return e;
   if (typeof e === "string") return new Error(e);
+  // Tauri v2 wraps command errors as plain objects with a `message` field.
+  if (e && typeof e === "object" && "message" in (e as Record<string, unknown>)) {
+    return new Error(String((e as Record<string, unknown>).message));
+  }
   return new Error("Unknown git error");
 }
 
@@ -54,6 +59,14 @@ export async function getStatus(path: string): Promise<GitStatus> {
 export async function stageFiles(path: string, files: string[]): Promise<void> {
   try {
     await invoke<string>(T_CMD.stageFiles, { path, files });
+  } catch (e) {
+    throw parseError(e);
+  }
+}
+
+export async function stageAll(path: string): Promise<void> {
+  try {
+    await invoke<string>(T_CMD.stageAll, { path });
   } catch (e) {
     throw parseError(e);
   }
