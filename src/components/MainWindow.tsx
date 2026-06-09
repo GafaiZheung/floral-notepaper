@@ -2196,10 +2196,7 @@ export function MainWindow({
                     </div>
                   )}
 
-                  <div
-                    className="flex-1 overflow-y-auto px-2 pb-2"
-                    style={{ scrollbarGutter: "stable" }}
-                  >
+                  <div className="flex-1 overflow-y-scroll px-2 pb-2">
                     <div className="space-y-0.5">
                       {externalFiles.length > 0 && (
                         <>
