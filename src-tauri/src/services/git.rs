@@ -52,7 +52,9 @@ fn run_git(repo_path: &Path, args: &[&str]) -> Result<String, AppError> {
         })?;
 
     if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        let stderr = String::from_utf8_lossy(&output.stderr)
+            .trim_end()
+            .to_string();
         return Err(AppError {
             code: "git".into(),
             message: stderr,
@@ -60,7 +62,9 @@ fn run_git(repo_path: &Path, args: &[&str]) -> Result<String, AppError> {
         });
     }
 
-    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+    Ok(String::from_utf8_lossy(&output.stdout)
+        .trim_end()
+        .to_string())
 }
 
 // ---------------------------------------------------------------------------
@@ -131,15 +135,17 @@ pub fn git_status(path: &Path) -> Result<GitStatus, AppError> {
     let mut files: Vec<GitFileStatus> = Vec::new();
 
     for line in output.lines() {
-        let line = line.trim();
+        // MUST NOT trim leading space — it carries the index-status column.
+        // " M file.md" = unstaged; "M  file.md" = staged.
+        let line = line.trim_end();
         if line.is_empty() {
             continue;
         }
 
         // Porcelain format: XY filename, where X = index status, Y = worktree status
         // Renamed files: "R  old -> new"
-        let (status_code, file_info) = if line.len() >= 3 {
-            (&line[..2], line[3..].trim())
+        let (status_code, file_info) = if line.len() >= 2 {
+            (&line[..2], line[2..].trim_start())
         } else {
             continue;
         };
@@ -153,8 +159,8 @@ pub fn git_status(path: &Path) -> Result<GitStatus, AppError> {
                 if let Some((old, new)) = file_info.split_once(" -> ") {
                     (
                         "renamed",
-                        new.trim().to_string(),
-                        Some(old.trim().to_string()),
+                        new.trim_end().to_string(),
+                        Some(old.trim_end().to_string()),
                     )
                 } else {
                     ("renamed", file_info.to_string(), None)
@@ -274,12 +280,14 @@ pub fn git_log(path: &Path, count: Option<u32>) -> Result<Vec<GitCommit>, AppErr
         }
         return Err(AppError {
             code: "git".into(),
-            message: stderr.trim().to_string(),
+            message: stderr.trim_end().to_string(),
             details: Default::default(),
         });
     }
 
-    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let stdout = String::from_utf8_lossy(&output.stdout)
+        .trim_end()
+        .to_string();
     let mut commits = Vec::new();
     for line in stdout.lines() {
         let fields: Vec<&str> = line.split('\0').collect();
@@ -318,7 +326,9 @@ fn get_current_branch(path: &Path) -> Result<String, AppError> {
         })?;
 
     if output.status.success() {
-        let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        let name = String::from_utf8_lossy(&output.stdout)
+            .trim_end()
+            .to_string();
         if !name.is_empty() && name != "HEAD" {
             return Ok(name);
         }
@@ -355,5 +365,336 @@ fn get_ahead_behind(path: &Path) -> (u32, u32) {
             }
         }
         Err(_) => (0, 0), // No upstream configured
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tests
+// ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs;
+    use std::io::Write;
+
+    struct Repo {
+        dir: tempfile::TempDir,
+    }
+
+    impl Repo {
+        fn new() -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            git_init(dir.path()).unwrap();
+            // Initial commit so we can test modifications on tracked files
+            let keep = dir.path().join(".gitkeep");
+            fs::write(&keep, "").unwrap();
+            run_git(dir.path(), &["add", "-A"]).unwrap();
+            run_git(dir.path(), &["commit", "-m", "initial"]).unwrap();
+            Self { dir }
+        }
+
+        fn path(&self) -> &Path {
+            self.dir.path()
+        }
+
+        fn write(&self, name: &str, content: &str) {
+            let p = self.dir.path().join(name);
+            if let Some(parent) = p.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(&p, content).unwrap();
+        }
+
+        fn append(&self, name: &str, content: &str) {
+            let p = self.dir.path().join(name);
+            let mut f = fs::OpenOptions::new().append(true).open(&p).unwrap();
+            f.write_all(content.as_bytes()).unwrap();
+        }
+    }
+
+    #[test]
+    fn porcelain_untracked_file() {
+        let r = Repo::new();
+        r.write("new.md", "hello");
+        let s = git_status(r.path()).unwrap();
+        let f = s.files.iter().find(|f| f.path == "new.md").unwrap();
+        assert_eq!(f.status, "untracked");
+    }
+
+    #[test]
+    fn porcelain_unstaged_modification() {
+        let r = Repo::new();
+        r.write("readme.md", "v1");
+        run_git(r.path(), &["add", "readme.md"]).unwrap();
+        run_git(r.path(), &["commit", "-m", "add readme"]).unwrap();
+        r.write("readme.md", "v2");
+        let s = git_status(r.path()).unwrap();
+        let f = s.files.iter().find(|f| f.path == "readme.md").unwrap();
+        assert_eq!(f.status, "modified");
+    }
+
+    #[test]
+    fn porcelain_staged_file() {
+        let r = Repo::new();
+        r.write("readme.md", "v1");
+        run_git(r.path(), &["add", "readme.md"]).unwrap();
+        run_git(r.path(), &["commit", "-m", "add readme"]).unwrap();
+        r.write("readme.md", "v2");
+        run_git(r.path(), &["add", "readme.md"]).unwrap();
+        let s = git_status(r.path()).unwrap();
+        let f = s.files.iter().find(|f| f.path == "readme.md").unwrap();
+        assert_eq!(f.status, "staged");
+    }
+
+    #[test]
+    fn porcelain_unstaged_deletion() {
+        let r = Repo::new();
+        r.write("gone.md", "bye");
+        run_git(r.path(), &["add", "gone.md"]).unwrap();
+        run_git(r.path(), &["commit", "-m", "add gone"]).unwrap();
+        fs::remove_file(r.path().join("gone.md")).unwrap();
+        let s = git_status(r.path()).unwrap();
+        let f = s.files.iter().find(|f| f.path == "gone.md").unwrap();
+        assert_eq!(f.status, "deleted");
+    }
+
+    #[test]
+    fn porcelain_chinese_filename_untracked() {
+        let r = Repo::new();
+        r.write("前端桌面端菜单与架构概览.md", "# 架构");
+        let s = git_status(r.path()).unwrap();
+        assert!(s.files.iter().any(|f| f.path.contains("前端")));
+        let f = s.files.iter().find(|f| f.path.contains("前端")).unwrap();
+        assert_eq!(f.status, "untracked");
+    }
+
+    #[test]
+    fn porcelain_chinese_filename_staged() {
+        let r = Repo::new();
+        r.write("中文笔记.md", "# 测试");
+        run_git(r.path(), &["add", "中文笔记.md"]).unwrap();
+        let s = git_status(r.path()).unwrap();
+        let f = s
+            .files
+            .iter()
+            .find(|f| f.path.contains("中文笔记"))
+            .unwrap();
+        assert_eq!(f.status, "staged");
+    }
+
+    #[test]
+    fn porcelain_chinese_filename_unstaged_modify() {
+        let r = Repo::new();
+        r.write("中文笔记.md", "v1");
+        run_git(r.path(), &["add", "中文笔记.md"]).unwrap();
+        run_git(r.path(), &["commit", "-m", "add"]).unwrap();
+        r.append("中文笔记.md", "\nv2");
+        let s = git_status(r.path()).unwrap();
+        let f = s
+            .files
+            .iter()
+            .find(|f| f.path.contains("中文笔记"))
+            .unwrap();
+        assert_eq!(f.status, "modified");
+    }
+
+    #[test]
+    fn porcelain_mixed_statuses() {
+        let r = Repo::new();
+        r.write("staged.md", "s");
+        run_git(r.path(), &["add", "staged.md"]).unwrap();
+        run_git(r.path(), &["commit", "-m", "add staged"]).unwrap();
+        r.write("staged.md", "s2");
+        run_git(r.path(), &["add", "staged.md"]).unwrap();
+        r.write("unstaged.md", "u");
+        run_git(r.path(), &["add", "unstaged.md"]).unwrap();
+        run_git(r.path(), &["commit", "-m", "add unstaged"]).unwrap();
+        r.write("unstaged.md", "u2");
+        r.write("untracked.md", "ut");
+        let s = git_status(r.path()).unwrap();
+        assert_eq!(
+            s.files
+                .iter()
+                .find(|f| f.path == "staged.md")
+                .unwrap()
+                .status,
+            "staged"
+        );
+        assert_eq!(
+            s.files
+                .iter()
+                .find(|f| f.path == "unstaged.md")
+                .unwrap()
+                .status,
+            "modified"
+        );
+        assert_eq!(
+            s.files
+                .iter()
+                .find(|f| f.path == "untracked.md")
+                .unwrap()
+                .status,
+            "untracked"
+        );
+    }
+
+    #[test]
+    fn stage_single_file() {
+        let r = Repo::new();
+        r.write("a.md", "one");
+        r.write("b.md", "two");
+        git_stage_files(r.path(), &["a.md".into()]).unwrap();
+        let s = git_status(r.path()).unwrap();
+        assert!(s
+            .files
+            .iter()
+            .any(|f| f.path == "a.md" && f.status == "staged"));
+        assert!(s
+            .files
+            .iter()
+            .any(|f| f.path == "b.md" && f.status == "untracked"));
+    }
+
+    #[test]
+    fn stage_all_works() {
+        let r = Repo::new();
+        r.write("a.md", "one");
+        r.write("b.md", "two");
+        git_stage_all(r.path()).unwrap();
+        let s = git_status(r.path()).unwrap();
+        assert_eq!(s.files.iter().filter(|f| f.status == "staged").count(), 2);
+    }
+
+    #[test]
+    fn unstage_file_works() {
+        let r = Repo::new();
+        r.write("a.md", "one");
+        run_git(r.path(), &["add", "a.md"]).unwrap();
+        git_unstage_files(r.path(), &["a.md".into()]).unwrap();
+        let s = git_status(r.path()).unwrap();
+        let f = s.files.iter().find(|f| f.path == "a.md").unwrap();
+        assert_eq!(f.status, "untracked");
+    }
+
+    #[test]
+    fn commit_creates_history() {
+        let r = Repo::new();
+        r.write("a.md", "one");
+        git_stage_all(r.path()).unwrap();
+        git_commit(r.path(), "first commit").unwrap();
+        let log = git_log(r.path(), None).unwrap();
+        assert!(log.iter().any(|c| c.message.contains("first commit")));
+    }
+
+    #[test]
+    fn commit_fails_empty_message() {
+        let r = Repo::new();
+        let err = git_commit(r.path(), "   ").unwrap_err();
+        assert!(err.message.contains("empty"));
+    }
+
+    #[test]
+    fn log_empty_repo_returns_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        git_init(dir.path()).unwrap();
+        let log = git_log(dir.path(), None).unwrap();
+        assert!(log.is_empty());
+    }
+
+    #[test]
+    fn revert_file_restores_content() {
+        let r = Repo::new();
+        r.write("readme.md", "v1");
+        run_git(r.path(), &["add", "readme.md"]).unwrap();
+        run_git(r.path(), &["commit", "-m", "add"]).unwrap();
+        r.write("readme.md", "v2");
+        git_revert_file(r.path(), "readme.md").unwrap();
+        let content = fs::read_to_string(r.path().join("readme.md")).unwrap();
+        assert_eq!(content, "v1");
+    }
+
+    #[test]
+    fn is_git_repo_positive() {
+        let r = Repo::new();
+        assert!(is_git_repo(r.path()));
+    }
+
+    #[test]
+    fn is_git_repo_negative() {
+        let dir = tempfile::tempdir().unwrap();
+        assert!(!is_git_repo(dir.path()));
+    }
+
+    #[test]
+    fn git_init_creates_dot_git_and_gitignore() {
+        let dir = tempfile::tempdir().unwrap();
+        git_init(dir.path()).unwrap();
+        assert!(dir.path().join(".git").is_dir());
+        assert!(dir.path().join(".gitignore").is_file());
+    }
+
+    #[test]
+    fn git_init_preserves_existing_gitignore() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(".gitignore"), "custom\n").unwrap();
+        git_init(dir.path()).unwrap();
+        let content = fs::read_to_string(dir.path().join(".gitignore")).unwrap();
+        assert_eq!(content, "custom\n");
+    }
+
+    #[test]
+    fn porcelain_clean_tree_empty() {
+        let r = Repo::new();
+        let s = git_status(r.path()).unwrap();
+        assert!(s.files.is_empty());
+    }
+
+    #[test]
+    fn branch_name_empty_repo_not_head() {
+        let dir = tempfile::tempdir().unwrap();
+        git_init(dir.path()).unwrap();
+        let s = git_status(dir.path()).unwrap();
+        assert!(!s.branch.is_empty());
+        assert_ne!(s.branch, "HEAD");
+    }
+
+    #[test]
+    fn check_git_installed_no_panic() {
+        let _ = check_git_installed();
+    }
+
+    #[test]
+    fn stage_files_empty_list_error() {
+        let r = Repo::new();
+        let err = git_stage_files(r.path(), &[]).unwrap_err();
+        assert!(err.message.contains("No files"));
+    }
+
+    #[test]
+    fn porcelain_staged_then_modified() {
+        let r = Repo::new();
+        r.write("dup.md", "v1");
+        run_git(r.path(), &["add", "dup.md"]).unwrap();
+        run_git(r.path(), &["commit", "-m", "add"]).unwrap();
+        r.write("dup.md", "v2");
+        run_git(r.path(), &["add", "dup.md"]).unwrap();
+        r.write("dup.md", "v3");
+        let s = git_status(r.path()).unwrap();
+        let matches: Vec<_> = s.files.iter().filter(|f| f.path == "dup.md").collect();
+        assert_eq!(matches.len(), 1, "MM yields one entry");
+        assert_eq!(matches[0].status, "modified");
+    }
+
+    #[test]
+    fn porcelain_depth_first_line_is_unstaged() {
+        // Catches the .trim() bug: leading space on first porcelain line
+        let r = Repo::new();
+        r.write("aaa.md", "v1");
+        run_git(r.path(), &["add", "aaa.md"]).unwrap();
+        run_git(r.path(), &["commit", "-m", "add aaa"]).unwrap();
+        r.write("aaa.md", "v2");
+        let s = git_status(r.path()).unwrap();
+        let f = s.files.iter().find(|f| f.path == "aaa.md").unwrap();
+        assert_eq!(f.status, "modified");
     }
 }
