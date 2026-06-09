@@ -206,10 +206,9 @@
     "closeTitle": "關閉設定",
     "closeToTray": "關閉至系統匣",
     "defaultView": {
-      "edit": "編輯",
       "label": "預設檢視",
-      "preview": "預覽",
-      "split": "分欄"
+      "wysiwyg": "閱讀編輯",
+      "source": "源碼編輯"
     },
     "fontSize": {
       "editor": "編輯器字級",

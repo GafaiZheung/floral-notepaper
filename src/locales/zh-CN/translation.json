@@ -206,10 +206,9 @@
     "closeTitle": "关闭设置",
     "closeToTray": "关闭到托盘",
     "defaultView": {
-      "edit": "编辑",
       "label": "默认视图",
-      "preview": "预览",
-      "split": "分栏"
+      "wysiwyg": "阅读编辑",
+      "source": "源码编辑"
     },
     "fontSize": {
       "editor": "编辑器字号",

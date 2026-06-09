@@ -104,11 +104,14 @@ describe("settings api", () => {
     });
   });
 
-  test("normalizes supported view modes and falls back to split", () => {
-    expect(normalizeViewMode("edit")).toBe("edit");
-    expect(normalizeViewMode("split")).toBe("split");
-    expect(normalizeViewMode("preview")).toBe("preview");
-    expect(normalizeViewMode("unknown")).toBe("split");
+  test("normalizes supported view modes and migrates legacy values", () => {
+    expect(normalizeViewMode("wysiwyg")).toBe("wysiwyg");
+    expect(normalizeViewMode("source")).toBe("source");
+    // Legacy migrations
+    expect(normalizeViewMode("edit")).toBe("source");
+    expect(normalizeViewMode("split")).toBe("source");
+    expect(normalizeViewMode("preview")).toBe("wysiwyg");
+    expect(normalizeViewMode("unknown")).toBe("wysiwyg");
   });
 
   test("chooses a notes directory through the folder picker", async () => {

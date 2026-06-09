@@ -206,10 +206,9 @@
     "closeTitle": "Close Settings",
     "closeToTray": "Close to Tray",
     "defaultView": {
-      "edit": "Edit",
       "label": "Default view",
-      "preview": "Preview",
-      "split": "Split"
+      "wysiwyg": "Reading",
+      "source": "Source"
     },
     "fontSize": {
       "editor": "Editor font size",

@@ -40,11 +40,17 @@ export async function chooseBackgroundImage(): Promise<string | null> {
 }
 
 export function normalizeViewMode(value: string): ViewMode {
-  if (value === "edit" || value === "split" || value === "preview") {
+  if (value === "wysiwyg" || value === "source") {
     return value;
   }
-
-  return "split";
+  // Migrate legacy values
+  if (value === "edit" || value === "split") {
+    return "source";
+  }
+  if (value === "preview") {
+    return "wysiwyg";
+  }
+  return "wysiwyg";
 }
 
 export interface OpenedFileClassification {
