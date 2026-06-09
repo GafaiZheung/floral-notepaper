@@ -2454,8 +2454,8 @@ export function MainWindow({
                                         isSelected ? "h-5 opacity-100" : "h-0 opacity-0"
                                       }`}
                                     />
-                                    <div className="flex items-baseline justify-between mb-0.5">
-                                      <div className="min-w-0 flex-1 pr-2">
+                                    <div className="flex items-baseline mb-0.5">
+                                      <div className="min-w-0 flex-1">
                                         <span
                                           className={`text-[13px] font-display font-medium block truncate transition-colors flex items-center gap-1.5 ${
                                             isSelected ? "text-bamboo" : "text-ink-soft"
@@ -2478,9 +2478,6 @@ export function MainWindow({
                                             </span>
                                           )}
                                       </div>
-                                      <span className="text-[10px] text-ink-ghost font-mono tabular-nums shrink-0">
-                                        {formatShortDate(note.updatedAt)}
-                                      </span>
                                     </div>
                                     <p className="text-[11px] text-ink-ghost leading-relaxed line-clamp-2 group-hover:text-ink-faint transition-colors">
                                       {note.preview ||
@@ -2488,6 +2485,7 @@ export function MainWindow({
                                     </p>
                                     <div className="flex items-center gap-2 mt-1">
                                       <span className="text-[10px] text-ink-ghost/60 font-mono tabular-nums">
+                                        {formatShortDate(note.updatedAt)}{" "}
                                         {formatTime(note.updatedAt)}
                                       </span>
                                       <span className="text-[10px] text-ink-ghost/40">·</span>
@@ -2652,8 +2650,8 @@ export function MainWindow({
                                           }`}
                                         />
 
-                                        <div className="flex items-baseline justify-between mb-0.5">
-                                          <div className="min-w-0 flex-1 pr-2">
+                                        <div className="flex items-baseline mb-0.5">
+                                          <div className="min-w-0 flex-1">
                                             <span
                                               className={`text-[13px] font-display font-medium block truncate transition-colors flex items-center gap-1.5 ${
                                                 isSelected ? "text-bamboo" : "text-ink-soft"
@@ -2676,9 +2674,6 @@ export function MainWindow({
                                                 </span>
                                               )}
                                           </div>
-                                          <span className="text-[10px] text-ink-ghost font-mono tabular-nums shrink-0">
-                                            {formatShortDate(note.updatedAt)}
-                                          </span>
                                         </div>
 
                                         <p className="text-[11px] text-ink-ghost leading-relaxed line-clamp-2 group-hover:text-ink-faint transition-colors">
@@ -2688,6 +2683,7 @@ export function MainWindow({
 
                                         <div className="flex items-center gap-2 mt-1">
                                           <span className="text-[10px] text-ink-ghost/60 font-mono tabular-nums">
+                                            {formatShortDate(note.updatedAt)}{" "}
                                             {formatTime(note.updatedAt)}
                                           </span>
                                           <span className="text-[10px] text-ink-ghost/40">·</span>
