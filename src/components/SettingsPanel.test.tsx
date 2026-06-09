@@ -56,8 +56,7 @@ describe("SettingsPanel", () => {
     expect(markup).toContain("HarmonyOS Sans SC");
     expect(markup).toContain("HarmonyOS Sans Fonts License Agreement");
     expect(markup).toContain("默认视图");
-    expect(markup).toContain("编辑");
-    expect(markup).toContain("分栏");
-    expect(markup).toContain("预览");
+    expect(markup).toContain("阅读编辑");
+    expect(markup).toContain("源码编辑");
   });
 });

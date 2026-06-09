@@ -63,11 +63,11 @@ describe("MainWindow settings", () => {
     expect(markup).not.toContain('d="m7 8 5-5 5 5"');
   });
 
-  test("renders the CodeMirror markdown editor", () => {
+  test("renders the WysiwygEditor with mode switch", () => {
     const markup = renderToStaticMarkup(<MainWindow />);
 
-    expect(markup).toContain('data-codemirror-editor="true"');
-    expect(markup).not.toContain("<textarea");
+    expect(markup).toContain("阅读编辑");
+    expect(markup).toContain("源码编辑");
   });
 
   test("labels the pin button as a toggle", () => {
@@ -109,16 +109,13 @@ describe("MainWindow editor undo", () => {
     expect(markup.indexOf('aria-label="撤销"')).toBeLessThan(markup.indexOf(">保存<"));
   });
 
-  test("focuses the editor and runs undo via ref API", () => {
-    const focus = vi.fn();
-    const runUndo = vi.fn(() => true);
-    const editor = { focus, runUndo } as unknown as import("./MarkdownEditor").MarkdownEditorHandle;
+  test("runEditorUndo returns false (undo handled by CodeMirror natively)", () => {
+    const editor = { focus: vi.fn(), runUndo: vi.fn(() => true) } as unknown as import("./MarkdownEditor").MarkdownEditorHandle;
 
     const undone = runEditorUndo(editor);
 
-    expect(undone).toBe(true);
-    expect(focus).toHaveBeenCalledOnce();
-    expect(runUndo).toHaveBeenCalledOnce();
+    // Undo is now handled natively by CodeMirror in source mode
+    expect(undone).toBe(false);
   });
 
   test("returns false for null editor", () => {
