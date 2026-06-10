@@ -1,5 +1,13 @@
 import { invoke } from "@tauri-apps/api/core";
-import type { GitBranch, GitCommit, GitRemote, GitStashEntry, GitStatus } from "./types";
+import type {
+  GitBranch,
+  GitCommit,
+  GitCreateRepoRequest,
+  GitGraphNode,
+  GitRemote,
+  GitStashEntry,
+  GitStatus,
+} from "./types";
 
 const T_CMD = {
   checkInstalled: "git_check_installed",
@@ -41,6 +49,10 @@ const T_CMD = {
   abortMerge: "git_abort_merge",
   readGitignore: "git_read_gitignore",
   writeGitignore: "git_write_gitignore",
+  // Graph
+  graph: "git_graph",
+  // Remote repo creation
+  createRemoteRepo: "git_create_remote_repo",
 } as const;
 
 function parseError(e: unknown): Error {
@@ -340,6 +352,30 @@ export async function readGitignore(path: string): Promise<string> {
 export async function writeGitignore(path: string, content: string): Promise<void> {
   try {
     await invoke<null>(T_CMD.writeGitignore, { path, content });
+  } catch (e) {
+    throw parseError(e);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Git graph
+// ---------------------------------------------------------------------------
+
+export async function gitGraph(path: string, count?: number): Promise<GitGraphNode[]> {
+  try {
+    return await invoke<GitGraphNode[]>(T_CMD.graph, { path, count });
+  } catch (e) {
+    throw parseError(e);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Remote repository creation
+// ---------------------------------------------------------------------------
+
+export async function createRemoteRepo(request: GitCreateRepoRequest): Promise<string> {
+  try {
+    return await invoke<string>(T_CMD.createRemoteRepo, { request });
   } catch (e) {
     throw parseError(e);
   }

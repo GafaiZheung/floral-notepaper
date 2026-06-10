@@ -715,6 +715,20 @@ fn git_write_gitignore(path: String, content: String) -> Result<(), AppError> {
     git::git_write_gitignore(std::path::Path::new(&path), &content)
 }
 
+// --- Graph command ---
+
+#[tauri::command]
+fn git_graph(path: String, count: Option<u32>) -> Result<Vec<git::GitGraphNode>, AppError> {
+    git::git_graph(std::path::Path::new(&path), count)
+}
+
+// --- Remote repo creation ---
+
+#[tauri::command]
+fn git_create_remote_repo(request: git::GitCreateRepoRequest) -> Result<String, AppError> {
+    git::git_create_remote_repo(&request)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -827,7 +841,11 @@ pub fn run() {
             git_conflicted_files,
             git_abort_merge,
             git_read_gitignore,
-            git_write_gitignore
+            git_write_gitignore,
+            // Git – Graph
+            git_graph,
+            // Git – Remote create
+            git_create_remote_repo
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

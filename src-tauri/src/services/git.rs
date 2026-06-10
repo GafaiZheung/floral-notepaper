@@ -91,6 +91,53 @@ pub struct GitStashEntry {
     pub date: String,
 }
 
+// --- Graph types -----------------------------------------------------------
+
+/// A single node in the git graph visualization.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitGraphNode {
+    pub hash: String,
+    pub short_hash: String,
+    pub message: String,
+    pub author: String,
+    pub date: String,
+    /// Column index for this commit (0-based, leftmost lane).
+    pub lane: u32,
+    /// The visual graph glyph string (e.g. ["*", "|", " ", "/"]).
+    pub glyphs: Vec<String>,
+    /// Ref names pointing at this commit (branch heads, tags, HEAD).
+    pub refs: Vec<String>,
+    /// Whether this commit is on the currently checked-out branch.
+    pub is_head: bool,
+}
+
+// --- GitHub/GitLab account types -------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitHostingAccount {
+    pub provider: String, // "github" | "gitlab"
+    pub username: String,
+    pub token: String,
+    /// Base URL. For self-hosted GitLab, e.g. "https://gitlab.example.com".
+    /// Defaults to "https://github.com" or "https://gitlab.com".
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitCreateRepoRequest {
+    pub provider: String,
+    pub token: String,
+    pub repo_name: String,
+    pub description: Option<String>,
+    pub private: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub base_url: Option<String>,
+}
+
 // ---------------------------------------------------------------------------
 // Helper: run a git command and capture stdout + stderr
 // ---------------------------------------------------------------------------
@@ -653,6 +700,339 @@ pub fn git_write_gitignore(path: &Path, content: &str) -> Result<(), AppError> {
     std::fs::write(&gitignore_path, content).map_err(|e| AppError {
         code: "io".into(),
         message: e.to_string(),
+        details: Default::default(),
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Git graph
+// ---------------------------------------------------------------------------
+
+/// Generate structured graph data for the commit history.
+/// Uses `git log --all --graph` to get the visual representation,
+/// then parses it into lane+glyphs per commit.
+pub fn git_graph(path: &Path, count: Option<u32>) -> Result<Vec<GitGraphNode>, AppError> {
+    let n = count.unwrap_or(100).min(500);
+    let n_str = n.to_string();
+
+    // Format: each line is "<graph-prefix> <hash> <short-hash> <message> <author> <date> <refs>"
+    // The graph prefix can contain *, |, /, \, spaces etc.
+    // We use %x00 as field separator so the graph prefix can safely end at the first NUL.
+    let output = git_command()
+        .args([
+            "log",
+            &format!("-{n_str}"),
+            "--all",
+            "--graph",
+            "--format=%H%x00%h%x00%s%x00%an%x00%ad%x00%D",
+            "--date=format:%Y-%m-%d %H:%M",
+            "--color=never",
+        ])
+        .current_dir(path)
+        .output()
+        .map_err(|e| AppError {
+            code: "gitNotInstalled".into(),
+            message: format!("Git is not installed or not in PATH: {e}"),
+            details: Default::default(),
+        })?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        // Empty repo → return empty
+        if stderr.contains("does not have any commits") || stderr.contains("No commits yet") {
+            return Ok(Vec::new());
+        }
+        return Err(AppError {
+            code: "git".into(),
+            message: stderr.trim_end().to_string(),
+            details: Default::default(),
+        });
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let mut nodes: Vec<GitGraphNode> = Vec::new();
+
+    // Get the current branch's HEAD hash for marking is_head
+    let head_hash = get_head_hash(path).unwrap_or_default();
+
+    for line in stdout.lines() {
+        let line = line.trim_end();
+        if line.is_empty() {
+            continue;
+        }
+
+        // The line looks like:
+        // "* \0abc1234\0abc1234\0commit msg\0author\0date\0refs"
+        // or
+        // "| * \0abc1234\0short\0msg\0author\0date\0refs"
+        // Split on the first NUL to separate graph prefix from data.
+        let (graph_part, data_part) = match line.split_once('\0') {
+            Some((g, d)) => (g, d),
+            None => continue,
+        };
+
+        let fields: Vec<&str> = data_part.split('\0').collect();
+        if fields.len() < 5 {
+            continue;
+        }
+
+        let hash = fields[0].to_string();
+        let short_hash = if fields.len() > 1 {
+            fields[1].to_string()
+        } else {
+            hash[..7.min(hash.len())].to_string()
+        };
+        let message = fields.get(2).map(|s| s.to_string()).unwrap_or_default();
+        let author = fields.get(3).map(|s| s.to_string()).unwrap_or_default();
+        let date = fields.get(4).map(|s| s.to_string()).unwrap_or_default();
+        let refs_str = fields.get(5).map(|s| s.to_string()).unwrap_or_default();
+
+        // Parse refs: "origin/main, tag: v1.0, HEAD -> main"
+        let mut refs: Vec<String> = Vec::new();
+        for r in refs_str.split(", ") {
+            let r = r.trim();
+            if r.is_empty() {
+                continue;
+            }
+            // Clean up "HEAD -> main" → "HEAD→main"
+            let cleaned = r.replace(" -> ", "→");
+            if !cleaned.is_empty() {
+                refs.push(cleaned);
+            }
+        }
+
+        // Parse the graph prefix into glyphs.
+        // Each commit gets one character column. We build glyphs from the graph_part.
+        let (glyphs, lane) = parse_graph_line(graph_part);
+
+        let is_head = hash == head_hash || refs.iter().any(|r| r.starts_with("HEAD"));
+
+        nodes.push(GitGraphNode {
+            hash,
+            short_hash,
+            message,
+            author,
+            date,
+            lane,
+            glyphs,
+            refs,
+            is_head,
+        });
+    }
+
+    Ok(nodes)
+}
+
+/// Get the hash of HEAD.
+fn get_head_hash(path: &Path) -> Result<String, AppError> {
+    let output = git_command()
+        .args(["rev-parse", "HEAD"])
+        .current_dir(path)
+        .output()
+        .map_err(|e| AppError {
+            code: "gitNotInstalled".into(),
+            message: format!("Git is not installed: {e}"),
+            details: Default::default(),
+        })?;
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+/// Parse the graph part of a `git log --graph` line into glyph vectors and lane index.
+/// E.g. "* " becomes glyphs=["*"], lane=0.
+/// "| * " becomes glyphs=["|","*"], lane=1.
+/// "|/ " becomes glyphs=["|","/"], lane=1.
+fn parse_graph_line(graph: &str) -> (Vec<String>, u32) {
+    let chars: Vec<char> = graph.chars().collect();
+    let mut glyphs: Vec<String> = Vec::new();
+    let mut lane: u32 = 0;
+
+    let mut i = 0usize;
+    while i < chars.len() {
+        let c = chars[i];
+        match c {
+            '*' => {
+                glyphs.push("*".to_string());
+                lane = glyphs.len() as u32 - 1;
+                i += 1;
+                // Skip trailing space after '*'
+                if i < chars.len() && chars[i] == ' ' {
+                    i += 1;
+                }
+            }
+            '|' => {
+                glyphs.push("|".to_string());
+                i += 1;
+            }
+            '/' | '\\' => {
+                glyphs.push(c.to_string());
+                i += 1;
+            }
+            '_' => {
+                // Check if this is part of a horizontal edge like '/_'
+                glyphs.push("_".to_string());
+                i += 1;
+            }
+            ' ' => {
+                glyphs.push(" ".to_string());
+                i += 1;
+            }
+            _ => {
+                i += 1; // unknown char, skip
+            }
+        }
+    }
+
+    (glyphs, lane)
+}
+
+// ---------------------------------------------------------------------------
+// GitHub / GitLab remote repository creation
+// ---------------------------------------------------------------------------
+
+/// Create a remote repository on GitHub or GitLab and return the clone URL.
+pub fn git_create_remote_repo(req: &GitCreateRepoRequest) -> Result<String, AppError> {
+    match req.provider.as_str() {
+        "github" => create_github_repo(req),
+        "gitlab" => create_gitlab_repo(req),
+        _ => Err(AppError {
+            code: "gitUnknownProvider".into(),
+            message: format!("Unknown provider: {}", req.provider),
+            details: Default::default(),
+        }),
+    }
+}
+
+fn create_github_repo(req: &GitCreateRepoRequest) -> Result<String, AppError> {
+    let base = req.base_url.as_deref().unwrap_or("https://api.github.com");
+    let url = format!("{base}/user/repos");
+
+    let body = serde_json::json!({
+        "name": req.repo_name,
+        "description": req.description.as_deref().unwrap_or(""),
+        "private": req.private.unwrap_or(false),
+        "auto_init": false,
+    });
+
+    let child = Command::new("curl")
+        .args([
+            "-s",
+            "-X",
+            "POST",
+            "-H",
+            &format!("Authorization: token {}", req.token),
+            "-H",
+            "Accept: application/vnd.github+json",
+            "-H",
+            "Content-Type: application/json",
+            "-d",
+            &body.to_string(),
+            &url,
+        ])
+        .output()
+        .map_err(|e| AppError {
+            code: "curl".into(),
+            message: format!("curl not available: {e}"),
+            details: Default::default(),
+        })?;
+
+    let stdout = String::from_utf8_lossy(&child.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&child.stderr).to_string();
+
+    if !child.status.success() {
+        return Err(AppError {
+            code: "gitRemoteCreate".into(),
+            message: if stderr.is_empty() { stdout } else { stderr },
+            details: Default::default(),
+        });
+    }
+
+    // Parse JSON response to get clone_url or ssh_url
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
+        if let Some(msg) = json.get("message").and_then(|v| v.as_str()) {
+            return Err(AppError {
+                code: "gitRemoteCreate".into(),
+                message: msg.to_string(),
+                details: Default::default(),
+            });
+        }
+        if let Some(url) = json.get("clone_url").and_then(|v| v.as_str()) {
+            return Ok(url.to_string());
+        }
+        if let Some(url) = json.get("html_url").and_then(|v| v.as_str()) {
+            return Ok(format!("{url}.git"));
+        }
+    }
+
+    Err(AppError {
+        code: "gitRemoteCreate".into(),
+        message: format!("Failed to parse GitHub response: {stdout}"),
+        details: Default::default(),
+    })
+}
+
+fn create_gitlab_repo(req: &GitCreateRepoRequest) -> Result<String, AppError> {
+    let base = req.base_url.as_deref().unwrap_or("https://gitlab.com");
+    let url = format!("{base}/api/v4/projects");
+
+    let visibility = if req.private.unwrap_or(false) {
+        "private"
+    } else {
+        "public"
+    };
+
+    let body = serde_json::json!({
+        "name": req.repo_name,
+        "description": req.description.as_deref().unwrap_or(""),
+        "visibility": visibility,
+        "initialize_with_readme": false,
+    });
+
+    let child = Command::new("curl")
+        .args([
+            "-s",
+            "-X",
+            "POST",
+            "-H",
+            &format!("PRIVATE-TOKEN: {}", req.token),
+            "-H",
+            "Content-Type: application/json",
+            "-d",
+            &body.to_string(),
+            &url,
+        ])
+        .output()
+        .map_err(|e| AppError {
+            code: "curl".into(),
+            message: format!("curl not available: {e}"),
+            details: Default::default(),
+        })?;
+
+    let stdout = String::from_utf8_lossy(&child.stdout).to_string();
+
+    if !child.status.success() {
+        return Err(AppError {
+            code: "gitRemoteCreate".into(),
+            message: stdout,
+            details: Default::default(),
+        });
+    }
+
+    if let Ok(json) = serde_json::from_str::<serde_json::Value>(&stdout) {
+        if let Some(msg) = json.get("message").and_then(|v| v.as_str()) {
+            return Err(AppError {
+                code: "gitRemoteCreate".into(),
+                message: msg.to_string(),
+                details: Default::default(),
+            });
+        }
+        if let Some(url) = json.get("http_url_to_repo").and_then(|v| v.as_str()) {
+            return Ok(url.to_string());
+        }
+    }
+
+    Err(AppError {
+        code: "gitRemoteCreate".into(),
+        message: format!("Failed to parse GitLab response: {stdout}"),
         details: Default::default(),
     })
 }

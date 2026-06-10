@@ -11,9 +11,11 @@ import {
   commit,
   commitAmend,
   conflictedFiles,
+  createRemoteRepo,
   diffStaged,
   diffUnstaged,
   fetch,
+  gitGraph,
   getLog,
   getStatus,
   hasConflicts,
@@ -36,7 +38,10 @@ import {
 import type {
   GitBranch,
   GitCommit,
+  GitCreateRepoRequest,
   GitFileStatus,
+  GitGraphNode,
+  GitHostingAccount,
   GitRemote,
   GitStashEntry,
   GitStatus,
@@ -82,6 +87,25 @@ export function GitPanel({ repoPath, onRefresh }: GitPanelProps) {
   // Gitignore
   const [gitignoreContent, setGitignoreContent] = useState("");
   const [showGitignoreEditor, setShowGitignoreEditor] = useState(false);
+  // Graph
+  const [graphNodes, setGraphNodes] = useState<GitGraphNode[]>([]);
+  // Merge picker
+  const [showMergePicker, setShowMergePicker] = useState(false);
+  // Context menu
+  const [ctxMenu, setCtxMenu] = useState<{
+    x: number;
+    y: number;
+    branch?: string;
+    hash?: string;
+    refs?: string[];
+  } | null>(null);
+  // GitHub / GitLab
+  const [hostingAccounts, setHostingAccounts] = useState<GitHostingAccount[]>([]);
+  const [showHostingSetup, setShowHostingSetup] = useState(false);
+  const [showCreateRepo, setShowCreateRepo] = useState(false);
+  const [newRepoName, setNewRepoName] = useState("");
+  const [newRepoProvider, setNewRepoProvider] = useState<"github" | "gitlab">("github");
+  const [newRepoPrivate, setNewRepoPrivate] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const refreshingRef = useRef(false);
 
@@ -102,18 +126,21 @@ export function GitPanel({ repoPath, onRefresh }: GitPanelProps) {
       }
 
       setState("ready");
-      const [gitStatus, gitLog, gitBranches, gitRemotes, gitStashes, hasConf] = await Promise.all([
-        getStatus(repoPath),
-        getLog(repoPath, 30),
-        branchList(repoPath).catch(() => [] as GitBranch[]),
-        remoteList(repoPath).catch(() => [] as GitRemote[]),
-        stashList(repoPath).catch(() => [] as GitStashEntry[]),
-        hasConflicts(repoPath).catch(() => false),
-      ]);
+      const [gitStatus, gitLog, gitBranches, gitRemotes, gitGraphData, gitStashes, hasConf] =
+        await Promise.all([
+          getStatus(repoPath),
+          getLog(repoPath, 30),
+          branchList(repoPath).catch(() => [] as GitBranch[]),
+          remoteList(repoPath).catch(() => [] as GitRemote[]),
+          gitGraph(repoPath, 80).catch(() => [] as GitGraphNode[]),
+          stashList(repoPath).catch(() => [] as GitStashEntry[]),
+          hasConflicts(repoPath).catch(() => false),
+        ]);
       setStatus(gitStatus);
       setCommits(gitLog);
       setBranches(gitBranches);
       setRemotes(gitRemotes);
+      setGraphNodes(gitGraphData);
       setStashEntries(gitStashes);
       if (hasConf) {
         const cf = await conflictedFiles(repoPath).catch(() => [] as string[]);
@@ -465,6 +492,89 @@ export function GitPanel({ repoPath, onRefresh }: GitPanelProps) {
     }
   };
 
+  // --- Merge handler ---
+
+  const handleMerge = async (targetBranch: string) => {
+    setLoading(true);
+    setShowMergePicker(false);
+    try {
+      await branchMerge(repoPath, targetBranch);
+      await refreshRef.current();
+      onRefresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // --- Context menu handlers ---
+
+  const handleCtxCreateBranch = (hash: string) => {
+    const name = prompt(
+      t("git.ctxNewBranchPrompt", { defaultValue: "从当前提交创建新分支：" }) as string,
+    );
+    if (name) {
+      branchCreate(repoPath, name)
+        .then(() => {
+          branchSwitch(repoPath, name).then(() => refreshRef.current());
+        })
+        .catch((e) => setError(e instanceof Error ? e.message : String(e)));
+    }
+    setCtxMenu(null);
+  };
+
+  const handleCtxSwitchBranch = (name: string) => {
+    handleBranchSwitch(name);
+    setCtxMenu(null);
+  };
+
+  const handleCtxDeleteBranch = (name: string) => {
+    handleBranchDelete(name);
+    setCtxMenu(null);
+  };
+
+  const handleCtxMergeBranch = (name: string) => {
+    handleMerge(name);
+    setCtxMenu(null);
+  };
+
+  // --- Remote repo creation handler ---
+
+  const handleCreateRemoteRepo = async () => {
+    if (!newRepoName.trim()) return;
+    const account = hostingAccounts.find((a) => a.provider === newRepoProvider);
+    if (!account) {
+      setError(
+        t("git.noAccountForProvider", {
+          provider: newRepoProvider,
+          defaultValue: `未配置 ${newRepoProvider} 账号`,
+        }) as string,
+      );
+      return;
+    }
+    setLoading(true);
+    setShowCreateRepo(false);
+    try {
+      const req: GitCreateRepoRequest = {
+        provider: newRepoProvider,
+        token: account.token,
+        repoName: newRepoName.trim(),
+        private: newRepoPrivate,
+        baseUrl: account.baseUrl,
+      };
+      const cloneUrl = await createRemoteRepo(req);
+      await remoteAdd(repoPath, "origin", cloneUrl);
+      setNewRepoName("");
+      await refreshRef.current();
+      setError(`${t("git.repoCreated", { defaultValue: "仓库已创建" })}: ${cloneUrl}`);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   // Filter files by status
   const staged = status?.files.filter((f) => f.status === "staged") ?? [];
   const unstaged =
@@ -675,6 +785,26 @@ export function GitPanel({ repoPath, onRefresh }: GitPanelProps) {
             >
               ⇣
             </button>
+            {/* Merge button — opens merge picker */}
+            <div className="relative">
+              <button
+                onClick={() => setShowMergePicker(!showMergePicker)}
+                disabled={loading || branches.length <= 1}
+                className="text-[10px] px-1 py-0.5 rounded text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/20 transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                title={t("git.mergeBtn", { defaultValue: "合并分支" }) as string}
+              >
+                ◉
+              </button>
+              {showMergePicker && (
+                <MergePicker
+                  branches={branches}
+                  currentBranch={status.branch}
+                  onMerge={handleMerge}
+                  onClose={() => setShowMergePicker(false)}
+                  t={t}
+                />
+              )}
+            </div>
             <button
               onClick={handlePush}
               disabled={loading || remotes.length === 0}
@@ -703,6 +833,14 @@ export function GitPanel({ repoPath, onRefresh }: GitPanelProps) {
                   onUrlChange={setNewRemoteUrl}
                   onAdd={handleRemoteAdd}
                   onRemove={handleRemoteRemove}
+                  onOpenHosting={() => {
+                    setShowRemotePopup(false);
+                    setShowHostingSetup(true);
+                  }}
+                  onOpenCreateRepo={() => {
+                    setShowRemotePopup(false);
+                    setShowCreateRepo(true);
+                  }}
                   onClose={() => setShowRemotePopup(false)}
                   t={t}
                 />
@@ -795,14 +933,94 @@ export function GitPanel({ repoPath, onRefresh }: GitPanelProps) {
       {/* Content area */}
       <div className="flex-1 overflow-y-auto scrollbar-hidden">
         {activeTab === "history" ? (
-          /* Commit log view */
-          <div className="p-2">
-            {commits.length === 0 ? (
+          /* Git graph view */
+          <div className="p-0.5">
+            {graphNodes.length === 0 && commits.length === 0 ? (
               <p className="text-xs text-ink-ghost text-center py-6">
                 {t("git.noCommits", { defaultValue: "暂无提交记录" })}
               </p>
+            ) : graphNodes.length > 0 ? (
+              <div className="font-mono">
+                {graphNodes.map((node) => (
+                  <div
+                    key={node.hash}
+                    className="flex items-start py-[1px] hover:bg-paper-warm/60 transition-colors cursor-pointer group"
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setCtxMenu({ x: e.clientX, y: e.clientY, hash: node.hash, refs: node.refs });
+                    }}
+                  >
+                    {/* Graph glyph column */}
+                    <div className="shrink-0 flex text-[9px] leading-[14px] text-ink-ghost/50 mr-1">
+                      {node.glyphs.map((g, i) => (
+                        <span
+                          key={i}
+                          className={`w-2.5 text-center ${
+                            g === "*"
+                              ? "text-bamboo font-bold"
+                              : g === "/" || g === "\\"
+                                ? "text-amber-500"
+                                : g === "|"
+                                  ? "text-ink-ghost/40"
+                                  : ""
+                          }`}
+                        >
+                          {g}
+                        </span>
+                      ))}
+                    </div>
+                    {/* Commit info */}
+                    <div className="flex-1 min-w-0 pl-0.5">
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-[10px] text-bamboo font-semibold">
+                          {node.shortHash}
+                        </span>
+                        <span className="text-[11px] text-ink-soft truncate">{node.message}</span>
+                      </div>
+                      <div className="flex gap-1.5 mt-px">
+                        <span className="text-[9px] text-ink-ghost">{node.author}</span>
+                        <span className="text-[9px] text-ink-ghost">{node.date}</span>
+                      </div>
+                      {/* Ref tags */}
+                      {node.refs.length > 0 && (
+                        <div className="flex gap-1 mt-0.5 flex-wrap">
+                          {node.refs.map((r) => (
+                            <span
+                              key={r}
+                              className={`text-[8px] px-1 py-px rounded-full ${
+                                r.startsWith("HEAD")
+                                  ? "bg-bamboo/15 text-bamboo"
+                                  : r.startsWith("tag:")
+                                    ? "bg-amber-100/50 dark:bg-amber-900/20 text-amber-600"
+                                    : r.includes("→")
+                                      ? "bg-blue-100/50 dark:bg-blue-900/20 text-blue-500"
+                                      : "bg-emerald-100/50 dark:bg-emerald-900/20 text-emerald-600"
+                              }`}
+                              onContextMenu={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                const branchName = r
+                                  .replace("HEAD→", "")
+                                  .replace("tag: ", "")
+                                  .split(",")[0]
+                                  .trim();
+                                if (branchName && !branchName.startsWith("origin/")) {
+                                  setCtxMenu({ x: e.clientX, y: e.clientY, branch: branchName });
+                                }
+                              }}
+                            >
+                              {r}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
             ) : (
-              <div className="space-y-0.5">
+              /* Fallback plain log */
+              <div className="p-2 space-y-0.5">
                 {commits.map((c) => (
                   <div
                     key={c.hash}
@@ -1002,6 +1220,49 @@ export function GitPanel({ repoPath, onRefresh }: GitPanelProps) {
           </div>
         ) : null}
       </div>
+
+      {/* Context menu overlay */}
+      {ctxMenu && (
+        <GitCtxMenu
+          ctxMenu={ctxMenu}
+          branches={branches}
+          currentBranch={status?.branch ?? ""}
+          onCreateBranch={handleCtxCreateBranch}
+          onSwitchBranch={handleCtxSwitchBranch}
+          onDeleteBranch={handleCtxDeleteBranch}
+          onMergeBranch={handleCtxMergeBranch}
+          onClose={() => setCtxMenu(null)}
+          t={t}
+        />
+      )}
+
+      {/* Hosting setup modal */}
+      {showHostingSetup && (
+        <HostingSetup
+          accounts={hostingAccounts}
+          onSave={(accounts) => {
+            setHostingAccounts(accounts);
+            setShowHostingSetup(false);
+          }}
+          onClose={() => setShowHostingSetup(false)}
+          t={t}
+        />
+      )}
+
+      {/* Create remote repo modal */}
+      {showCreateRepo && (
+        <CreateRepoModal
+          provider={newRepoProvider}
+          repoName={newRepoName}
+          isPrivate={newRepoPrivate}
+          onProviderChange={setNewRepoProvider}
+          onNameChange={setNewRepoName}
+          onPrivateChange={setNewRepoPrivate}
+          onCreate={handleCreateRemoteRepo}
+          onClose={() => setShowCreateRepo(false)}
+          t={t}
+        />
+      )}
 
       {/* Commit area (always at bottom, only on changes tab) */}
       {status && activeTab === "changes" && (
@@ -1297,6 +1558,8 @@ interface RemotePopupProps {
   onUrlChange: (v: string) => void;
   onAdd: () => void;
   onRemove: (name: string) => void;
+  onOpenHosting?: () => void;
+  onOpenCreateRepo?: () => void;
   onClose: () => void;
   t: ReturnType<typeof useTranslation>["t"];
 }
@@ -1309,6 +1572,8 @@ function RemotePopup({
   onUrlChange,
   onAdd,
   onRemove,
+  onOpenHosting,
+  onOpenCreateRepo,
   onClose,
   t,
 }: RemotePopupProps) {
@@ -1366,6 +1631,25 @@ function RemotePopup({
           {t("git.noRemotes", { defaultValue: "无远程仓库" })}
         </p>
       )}
+      {/* Hosting integration */}
+      <div className="border-t border-paper-deep/10 p-2 space-y-1">
+        {onOpenHosting && (
+          <button
+            onClick={onOpenHosting}
+            className="w-full text-[10px] px-2 py-1 rounded text-ink-faint bg-paper-warm/60 hover:bg-paper-warm transition-colors cursor-pointer"
+          >
+            {t("git.hostingSetup", { defaultValue: "配置 GitHub / GitLab 账号" })}
+          </button>
+        )}
+        {onOpenCreateRepo && (
+          <button
+            onClick={onOpenCreateRepo}
+            className="w-full text-[10px] px-2 py-1 rounded bg-bamboo text-white hover:bg-bamboo-dark transition-colors cursor-pointer"
+          >
+            {t("git.createRemoteRepo", { defaultValue: "自动创建远程仓库" })}
+          </button>
+        )}
+      </div>
     </div>
   );
 }
@@ -1395,6 +1679,372 @@ function DiffModal({ content, title, onClose }: DiffModalProps) {
       <pre className="flex-1 overflow-auto p-3 text-[10px] font-mono text-ink-soft whitespace-pre-wrap leading-relaxed">
         {content}
       </pre>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Merge picker */
+/* ------------------------------------------------------------------ */
+
+interface MergePickerProps {
+  branches: GitBranch[];
+  currentBranch: string;
+  onMerge: (target: string) => void;
+  onClose: () => void;
+  t: ReturnType<typeof useTranslation>["t"];
+}
+
+function MergePicker({ branches, currentBranch, onMerge, onClose, t }: MergePickerProps) {
+  const otherBranches = branches.filter((b) => b.name !== currentBranch);
+  return (
+    <div className="absolute top-full right-0 mt-1 w-44 bg-white dark:bg-slate-800 rounded-lg shadow-lg border border-paper-deep/20 z-50 overflow-hidden">
+      <div className="px-2 py-1.5 border-b border-paper-deep/10">
+        <p className="text-[10px] text-ink-ghost">
+          {t("git.mergeInto", { branch: currentBranch, defaultValue: `合并到 ${currentBranch}` })}
+        </p>
+      </div>
+      <div className="max-h-36 overflow-y-auto">
+        {otherBranches.length === 0 ? (
+          <p className="text-xs text-ink-ghost text-center py-2">
+            {t("git.noOtherBranches", { defaultValue: "无其他分支" })}
+          </p>
+        ) : (
+          otherBranches.map((b) => (
+            <button
+              key={b.name}
+              onClick={() => onMerge(b.name)}
+              className="w-full text-left px-2 py-1.5 text-[11px] text-ink-soft hover:bg-bamboo-mist/20 hover:text-bamboo transition-colors cursor-pointer"
+            >
+              {b.name}
+            </button>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Context menu */
+/* ------------------------------------------------------------------ */
+
+interface GitCtxMenuProps {
+  ctxMenu: { x: number; y: number; branch?: string; hash?: string; refs?: string[] };
+  branches: GitBranch[];
+  currentBranch: string;
+  onCreateBranch: (hash: string) => void;
+  onSwitchBranch: (name: string) => void;
+  onDeleteBranch: (name: string) => void;
+  onMergeBranch: (name: string) => void;
+  onClose: () => void;
+  t: ReturnType<typeof useTranslation>["t"];
+}
+
+function GitCtxMenu({
+  ctxMenu,
+  currentBranch,
+  onCreateBranch,
+  onSwitchBranch,
+  onDeleteBranch,
+  onMergeBranch,
+  onClose,
+  t,
+}: GitCtxMenuProps) {
+  const isBranch = !!ctxMenu.branch;
+  const isCommit = !!ctxMenu.hash;
+  const targetBranch = ctxMenu.branch;
+  const targetHash = ctxMenu.hash;
+
+  return (
+    <>
+      <div
+        className="absolute inset-0 z-50"
+        onClick={onClose}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          onClose();
+        }}
+      />
+      <div
+        className="absolute z-50 bg-white dark:bg-slate-800 rounded-lg shadow-xl border border-paper-deep/20 py-1 min-w-[140px]"
+        style={{ left: Math.min(ctxMenu.x, window.innerWidth - 180), top: ctxMenu.y }}
+      >
+        {isBranch && targetBranch && (
+          <>
+            {targetBranch !== currentBranch && (
+              <button
+                onClick={() => onSwitchBranch(targetBranch)}
+                className="w-full text-left px-3 py-1 text-[11px] text-ink-soft hover:bg-bamboo-mist/20 hover:text-bamboo cursor-pointer"
+              >
+                {t("git.ctxSwitchTo", {
+                  branch: targetBranch,
+                  defaultValue: `切换到 ${targetBranch}`,
+                })}
+              </button>
+            )}
+            {targetBranch !== currentBranch && (
+              <button
+                onClick={() => onMergeBranch(targetBranch)}
+                className="w-full text-left px-3 py-1 text-[11px] text-ink-soft hover:bg-bamboo-mist/20 hover:text-bamboo cursor-pointer"
+              >
+                {t("git.ctxMerge", {
+                  branch: targetBranch,
+                  defaultValue: `合并 ${targetBranch} 到 ${currentBranch}`,
+                })}
+              </button>
+            )}
+            {targetBranch !== currentBranch && (
+              <button
+                onClick={() => onDeleteBranch(targetBranch)}
+                className="w-full text-left px-3 py-1 text-[11px] text-ink-soft hover:bg-red-100/50 hover:text-red-500 cursor-pointer"
+              >
+                {t("git.ctxDeleteBranch", { defaultValue: "删除分支" })}
+              </button>
+            )}
+          </>
+        )}
+        {isCommit && targetHash && (
+          <>
+            <button
+              onClick={() => onCreateBranch(targetHash)}
+              className="w-full text-left px-3 py-1 text-[11px] text-ink-soft hover:bg-bamboo-mist/20 hover:text-bamboo cursor-pointer"
+            >
+              {t("git.ctxCreateBranchHere", { defaultValue: "从此提交创建分支" })}
+            </button>
+            <button
+              onClick={() => {
+                navigator.clipboard.writeText(targetHash);
+                onClose();
+              }}
+              className="w-full text-left px-3 py-1 text-[11px] text-ink-soft hover:bg-paper-warm/60 cursor-pointer"
+            >
+              {t("git.ctxCopyHash", { defaultValue: "复制提交哈希" })}
+            </button>
+          </>
+        )}
+      </div>
+    </>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* GitHub / GitLab hosting setup */
+/* ------------------------------------------------------------------ */
+
+interface HostingSetupProps {
+  accounts: GitHostingAccount[];
+  onSave: (accounts: GitHostingAccount[]) => void;
+  onClose: () => void;
+  t: ReturnType<typeof useTranslation>["t"];
+}
+
+function HostingSetup({ accounts: initialAccounts, onSave, onClose, t }: HostingSetupProps) {
+  const [accounts, setAccounts] = useState<GitHostingAccount[]>(initialAccounts);
+  const [provider, setProvider] = useState<"github" | "gitlab">("github");
+  const [username, setUsername] = useState("");
+  const [token, setToken] = useState("");
+  const [baseUrl, setBaseUrl] = useState("");
+
+  const addAccount = () => {
+    if (!username.trim() || !token.trim()) return;
+    setAccounts([
+      ...accounts.filter((a) => a.provider !== provider),
+      {
+        provider,
+        username: username.trim(),
+        token: token.trim(),
+        baseUrl: baseUrl.trim() || undefined,
+      },
+    ]);
+    setUsername("");
+    setToken("");
+    setBaseUrl("");
+  };
+
+  return (
+    <div className="absolute inset-0 z-40 flex flex-col bg-white/95 dark:bg-slate-900/95">
+      <div className="shrink-0 px-3 py-1.5 flex items-center gap-2 border-b border-paper-deep/20">
+        <span className="text-xs text-ink-faint flex-1">
+          {t("git.hostingSetupTitle", { defaultValue: "托管账号配置" })}
+        </span>
+        <button
+          onClick={onClose}
+          className="text-[10px] px-1.5 py-0.5 rounded text-ink-ghost hover:text-ink-faint hover:bg-paper-warm cursor-pointer"
+        >
+          ✕
+        </button>
+      </div>
+      <div className="flex-1 overflow-y-auto p-3 space-y-3">
+        {accounts.length > 0 && (
+          <div className="space-y-1.5">
+            <p className="text-[10px] text-ink-ghost font-medium">
+              {t("git.savedAccounts", { defaultValue: "已保存的账号" })}
+            </p>
+            {accounts.map((a) => (
+              <div
+                key={a.provider}
+                className="flex items-center gap-2 px-2 py-1.5 rounded bg-paper-warm/40"
+              >
+                <span className="text-[10px] font-medium text-bamboo uppercase">{a.provider}</span>
+                <span className="text-[11px] text-ink-soft flex-1">{a.username}</span>
+                <button
+                  onClick={() => setAccounts(accounts.filter((x) => x.provider !== a.provider))}
+                  className="text-[9px] px-1 rounded text-ink-ghost hover:text-red-400 cursor-pointer"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        <div className="space-y-2 p-2 rounded bg-paper-warm/40 border border-paper-deep/10">
+          <p className="text-[10px] text-ink-ghost">
+            {t("git.addAccount", { defaultValue: "添加账号" })}
+          </p>
+          <select
+            value={provider}
+            onChange={(e) => setProvider(e.target.value as "github" | "gitlab")}
+            className="w-full text-[11px] bg-paper-warm/40 rounded px-1.5 py-1 outline-none cursor-pointer"
+          >
+            <option value="github">GitHub</option>
+            <option value="gitlab">GitLab</option>
+          </select>
+          <input
+            value={username}
+            onChange={(e) => setUsername(e.target.value)}
+            placeholder={t("git.username", { defaultValue: "用户名" }) as string}
+            className="w-full text-[11px] bg-paper-warm/40 rounded px-1.5 py-1 outline-none"
+          />
+          <input
+            value={token}
+            onChange={(e) => setToken(e.target.value)}
+            type="password"
+            placeholder={
+              t("git.tokenPlaceholder", { defaultValue: "Personal Access Token" }) as string
+            }
+            className="w-full text-[11px] bg-paper-warm/40 rounded px-1.5 py-1 outline-none"
+          />
+          {provider === "gitlab" && (
+            <input
+              value={baseUrl}
+              onChange={(e) => setBaseUrl(e.target.value)}
+              placeholder={
+                t("git.gitlabUrl", { defaultValue: "https://gitlab.com (留空使用默认)" }) as string
+              }
+              className="w-full text-[11px] bg-paper-warm/40 rounded px-1.5 py-1 outline-none"
+            />
+          )}
+          <button
+            onClick={addAccount}
+            disabled={!username.trim() || !token.trim()}
+            className="w-full text-[10px] px-2 py-1 rounded bg-bamboo text-white hover:bg-bamboo-dark disabled:opacity-30 cursor-pointer"
+          >
+            {t("git.saveAccount", { defaultValue: "保存账号" })}
+          </button>
+        </div>
+        <p className="text-[9px] text-ink-ghost leading-relaxed">
+          {t("git.tokenHelp", {
+            defaultValue:
+              "GitHub: Settings → Developer settings → Personal access tokens → Tokens (classic)，需要 repo 权限",
+          })}
+        </p>
+      </div>
+      <div className="shrink-0 border-t border-paper-deep/20 p-2">
+        <button
+          onClick={() => onSave(accounts)}
+          className="w-full py-1.5 rounded-lg bg-bamboo text-white text-xs font-medium hover:bg-bamboo-dark cursor-pointer"
+        >
+          {t("common.save", { defaultValue: "保存" })}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Create remote repo modal */
+/* ------------------------------------------------------------------ */
+
+interface CreateRepoModalProps {
+  provider: "github" | "gitlab";
+  repoName: string;
+  isPrivate: boolean;
+  onProviderChange: (p: "github" | "gitlab") => void;
+  onNameChange: (n: string) => void;
+  onPrivateChange: (p: boolean) => void;
+  onCreate: () => void;
+  onClose: () => void;
+  t: ReturnType<typeof useTranslation>["t"];
+}
+
+function CreateRepoModal({
+  provider,
+  repoName,
+  isPrivate,
+  onProviderChange,
+  onNameChange,
+  onPrivateChange,
+  onCreate,
+  onClose,
+  t,
+}: CreateRepoModalProps) {
+  return (
+    <div className="absolute inset-0 z-40 flex flex-col bg-white/95 dark:bg-slate-900/95">
+      <div className="shrink-0 px-3 py-1.5 flex items-center gap-2 border-b border-paper-deep/20">
+        <span className="text-xs text-ink-faint flex-1">
+          {t("git.createRemoteRepoTitle", { defaultValue: "创建远程仓库" })}
+        </span>
+        <button
+          onClick={onClose}
+          className="text-[10px] px-1.5 py-0.5 rounded text-ink-ghost hover:text-ink-faint hover:bg-paper-warm cursor-pointer"
+        >
+          ✕
+        </button>
+      </div>
+      <div className="flex-1 p-3 space-y-3">
+        <select
+          value={provider}
+          onChange={(e) => onProviderChange(e.target.value as "github" | "gitlab")}
+          className="w-full text-[11px] bg-paper-warm/40 rounded px-2 py-1.5 outline-none cursor-pointer"
+        >
+          <option value="github">GitHub</option>
+          <option value="gitlab">GitLab</option>
+        </select>
+        <input
+          value={repoName}
+          onChange={(e) => onNameChange(e.target.value)}
+          placeholder={t("git.repoNamePlaceholder", { defaultValue: "仓库名称" }) as string}
+          className="w-full text-[11px] bg-paper-warm/40 rounded px-2 py-1.5 outline-none"
+          onKeyDown={(e) => {
+            if (e.key === "Enter") onCreate();
+          }}
+        />
+        <label className="flex items-center gap-2 text-[11px] text-ink-soft cursor-pointer">
+          <input
+            type="checkbox"
+            checked={isPrivate}
+            onChange={(e) => onPrivateChange(e.target.checked)}
+            className="rounded cursor-pointer"
+          />
+          {t("git.privateRepo", { defaultValue: "私有仓库" })}
+        </label>
+      </div>
+      <div className="shrink-0 border-t border-paper-deep/20 p-2 space-y-1.5">
+        <button
+          onClick={onCreate}
+          disabled={!repoName.trim()}
+          className="w-full py-1.5 rounded-lg bg-bamboo text-white text-xs font-medium hover:bg-bamboo-dark disabled:opacity-40 cursor-pointer"
+        >
+          {t("git.createAndAddRemote", { defaultValue: "创建并添加为远程仓库" })}
+        </button>
+        <button
+          onClick={onClose}
+          className="w-full py-1 rounded text-[10px] text-ink-ghost hover:text-ink-faint cursor-pointer"
+        >
+          {t("common.cancel", { defaultValue: "取消" })}
+        </button>
+      </div>
     </div>
   );
 }
