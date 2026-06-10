@@ -14,6 +14,7 @@ import { applyTheme, watchSystemTheme } from "../features/settings/theme";
 import { SUPPORTED_LOCALES } from "../locales/locale-whitelist";
 import { SlidingButtonGroup } from "./SlidingButtonGroup";
 import { OneDriveSettings } from "../features/onedrive/OneDriveSettings";
+import { GitHostingSettings } from "../features/git/GitHostingSettings";
 import { ToggleRow, RangeRow, ShortcutRecorder } from "./SettingsPanel";
 
 const HARMONY_FONT_LICENSE_URL = new URL("../assets/fonts/LICENSE_Fonts", import.meta.url).href;
@@ -641,6 +642,9 @@ export function SettingsTab({ config, onChange, onChooseNotesDir }: SettingsTabP
         return (
           <div className="space-y-5 animate-view-fade">
             <OneDriveSettings config={config} onChange={onChange} />
+            <section className="pt-1 border-t border-paper-deep/20">
+              <GitHostingSettings />
+            </section>
           </div>
         );
 

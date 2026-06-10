@@ -520,20 +520,19 @@ pub fn git_remote_remove(path: &Path, name: &str) -> Result<String, AppError> {
 }
 
 /// Push to a remote. `remote` defaults to "origin", `branch` defaults to current.
+/// Uses `--set-upstream` so the local branch tracks the remote on first push.
 pub fn git_push(
     path: &Path,
     remote: Option<&str>,
     branch: Option<&str>,
 ) -> Result<String, AppError> {
     let remote = remote.unwrap_or("origin");
-    let mut args: Vec<&str> = vec!["push"];
     if let Some(b) = branch {
-        args.push(remote);
-        args.push(b);
+        run_git(path, &["push", "-u", remote, b])
     } else {
-        args.push(remote);
+        let current = get_current_branch(path).unwrap_or_else(|_| "main".into());
+        run_git(path, &["push", "-u", remote, &current])
     }
-    run_git(path, &args)
 }
 
 /// Pull from a remote. `remote` defaults to "origin", `branch` defaults to current.

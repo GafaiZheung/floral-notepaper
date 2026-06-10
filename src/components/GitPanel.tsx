@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import {
   abortMerge,
@@ -41,11 +42,12 @@ import type {
   GitCreateRepoRequest,
   GitFileStatus,
   GitGraphNode,
+  GitHostingAccount,
   GitRemote,
   GitStashEntry,
   GitStatus,
 } from "../features/git/types";
-import { loadHostingAccounts } from "../features/git/hostingStorage";
+import { loadHostingAccounts, saveHostingAccounts } from "../features/git/hostingStorage";
 
 interface GitPanelProps {
   repoPath: string;
@@ -99,11 +101,8 @@ export function GitPanel({ repoPath, onRefresh }: GitPanelProps) {
     hash?: string;
     refs?: string[];
   } | null>(null);
-  // Create remote repo
+  // Create remote repo wizard
   const [showCreateRepo, setShowCreateRepo] = useState(false);
-  const [newRepoName, setNewRepoName] = useState("");
-  const [newRepoProvider, setNewRepoProvider] = useState<"github" | "gitlab">("github");
-  const [newRepoPrivate, setNewRepoPrivate] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const refreshingRef = useRef(false);
 
@@ -343,9 +342,10 @@ export function GitPanel({ repoPath, onRefresh }: GitPanelProps) {
   // --- Remote handlers ---
 
   const handlePush = async () => {
+    if (!status) return;
     setLoading(true);
     try {
-      await push(repoPath);
+      await push(repoPath, undefined, status.branch);
       await refreshRef.current();
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
@@ -539,32 +539,26 @@ export function GitPanel({ repoPath, onRefresh }: GitPanelProps) {
 
   // --- Remote repo creation handler ---
 
-  const handleCreateRemoteRepo = async () => {
-    if (!newRepoName.trim()) return;
-    const accounts = loadHostingAccounts();
-    const account = accounts.find((a) => a.provider === newRepoProvider);
-    if (!account) {
-      setError(
-        t("git.noAccountForProvider", {
-          provider: newRepoProvider,
-          defaultValue: `未配置 ${newRepoProvider} 账号`,
-        }) as string,
-      );
-      return;
-    }
+  const handleCreateRemoteRepo = async (
+    provider: "github" | "gitlab",
+    token: string,
+    repoName: string,
+    isPrivate: boolean,
+    baseUrl?: string,
+  ) => {
+    if (!repoName.trim()) return;
     setLoading(true);
     setShowCreateRepo(false);
     try {
       const req: GitCreateRepoRequest = {
-        provider: newRepoProvider,
-        token: account.token,
-        repoName: newRepoName.trim(),
-        private: newRepoPrivate,
-        baseUrl: account.baseUrl,
+        provider,
+        token,
+        repoName: repoName.trim(),
+        private: isPrivate,
+        baseUrl,
       };
       const cloneUrl = await createRemoteRepo(req);
       await remoteAdd(repoPath, "origin", cloneUrl);
-      setNewRepoName("");
       await refreshRef.current();
       setError(`${t("git.repoCreated", { defaultValue: "仓库已创建" })}: ${cloneUrl}`);
     } catch (e) {
@@ -913,17 +907,19 @@ export function GitPanel({ repoPath, onRefresh }: GitPanelProps) {
         </div>
       )}
 
-      {/* Diff modal */}
-      {diffContent !== null && (
-        <DiffModal
-          content={diffContent}
-          title={diffTitle}
-          onClose={() => {
-            setDiffContent(null);
-            setDiffTitle("");
-          }}
-        />
-      )}
+      {/* Diff modal (portaled to escape CSS containing blocks) */}
+      {diffContent !== null &&
+        createPortal(
+          <DiffModal
+            content={diffContent}
+            title={diffTitle}
+            onClose={() => {
+              setDiffContent(null);
+              setDiffTitle("");
+            }}
+          />,
+          document.body,
+        )}
 
       {/* Content area */}
       <div className="flex-1 overflow-y-auto scrollbar-hidden">
@@ -1216,35 +1212,34 @@ export function GitPanel({ repoPath, onRefresh }: GitPanelProps) {
         ) : null}
       </div>
 
-      {/* Context menu overlay */}
-      {ctxMenu && (
-        <GitCtxMenu
-          ctxMenu={ctxMenu}
-          branches={branches}
-          currentBranch={status?.branch ?? ""}
-          onCreateBranch={handleCtxCreateBranch}
-          onSwitchBranch={handleCtxSwitchBranch}
-          onDeleteBranch={handleCtxDeleteBranch}
-          onMergeBranch={handleCtxMergeBranch}
-          onClose={() => setCtxMenu(null)}
-          t={t}
-        />
-      )}
+      {/* Context menu overlay (portaled to escape CSS containing blocks) */}
+      {ctxMenu &&
+        createPortal(
+          <GitCtxMenu
+            ctxMenu={ctxMenu}
+            branches={branches}
+            currentBranch={status?.branch ?? ""}
+            onCreateBranch={handleCtxCreateBranch}
+            onSwitchBranch={handleCtxSwitchBranch}
+            onDeleteBranch={handleCtxDeleteBranch}
+            onMergeBranch={handleCtxMergeBranch}
+            onClose={() => setCtxMenu(null)}
+            t={t}
+          />,
+          document.body,
+        )}
 
-      {/* Create remote repo modal */}
-      {showCreateRepo && (
-        <CreateRepoModal
-          provider={newRepoProvider}
-          repoName={newRepoName}
-          isPrivate={newRepoPrivate}
-          onProviderChange={setNewRepoProvider}
-          onNameChange={setNewRepoName}
-          onPrivateChange={setNewRepoPrivate}
-          onCreate={handleCreateRemoteRepo}
-          onClose={() => setShowCreateRepo(false)}
-          t={t}
-        />
-      )}
+      {/* Create remote repo wizard (portaled to escape CSS containing blocks) */}
+      {showCreateRepo &&
+        createPortal(
+          <CreateRepoWizard
+            repoPath={repoPath}
+            onCreate={handleCreateRemoteRepo}
+            onClose={() => setShowCreateRepo(false)}
+            t={t}
+          />,
+          document.body,
+        )}
 
       {/* Commit area (always at bottom, only on changes tab) */}
       {status && activeTab === "changes" && (
@@ -1460,7 +1455,7 @@ function BranchPopup({
   t,
 }: BranchPopupProps) {
   return (
-    <div className="absolute top-full left-0 mt-1 w-52 bg-white dark:bg-slate-800 rounded-lg shadow-lg border border-paper-deep/20 z-50 overflow-hidden">
+    <div className="absolute top-full left-0 mt-1 w-52 bg-white dark:bg-cloud rounded-lg shadow-lg border border-paper-deep/20 z-50 overflow-hidden">
       {/* Create new branch */}
       <div className="p-2 border-b border-paper-deep/10">
         <div className="flex gap-1">
@@ -1557,41 +1552,17 @@ function RemotePopup({
   onClose,
   t,
 }: RemotePopupProps) {
+  const hasRemotes = remotes.length > 0;
+
   return (
-    <div className="absolute top-full right-0 mt-1 w-64 bg-white dark:bg-slate-800 rounded-lg shadow-lg border border-paper-deep/20 z-50 overflow-hidden">
-      {/* Add remote */}
-      <div className="p-2 border-b border-paper-deep/10 space-y-1">
-        <input
-          value={newName}
-          onChange={(e) => onNameChange(e.target.value)}
-          placeholder={
-            t("git.remoteNamePlaceholder", { defaultValue: "名称 (如 origin)" }) as string
-          }
-          className="w-full text-[11px] bg-paper-warm/40 rounded px-1.5 py-1 outline-none focus:bg-paper-warm"
-        />
-        <input
-          value={newUrl}
-          onChange={(e) => onUrlChange(e.target.value)}
-          placeholder={
-            t("git.remoteUrlPlaceholder", { defaultValue: "URL (如 https://…)" }) as string
-          }
-          className="w-full text-[11px] bg-paper-warm/40 rounded px-1.5 py-1 outline-none focus:bg-paper-warm"
-        />
-        <button
-          onClick={onAdd}
-          disabled={!newName.trim() || !newUrl.trim()}
-          className="w-full text-[10px] px-2 py-1 rounded bg-bamboo text-white hover:bg-bamboo-dark disabled:opacity-30 cursor-pointer"
-        >
-          {t("git.addRemote", { defaultValue: "添加远程仓库" })}
-        </button>
-      </div>
-      {/* Remote list */}
-      {remotes.length > 0 ? (
-        <div className="max-h-36 overflow-y-auto">
+    <div className="absolute top-full right-0 mt-1 w-64 bg-white dark:bg-cloud rounded-lg shadow-lg border border-paper-deep/20 z-50 overflow-hidden">
+      {/* Existing remotes — just list them */}
+      {hasRemotes ? (
+        <div className="max-h-48 overflow-y-auto">
           {remotes.map((r) => (
             <div
               key={r.name}
-              className="flex items-center gap-1.5 px-2 py-1.5 hover:bg-paper-warm/60 transition-colors"
+              className="flex items-center gap-1.5 px-2 py-1.5 hover:bg-paper-warm/60 transition-colors group"
             >
               <div className="flex-1 min-w-0">
                 <div className="text-[11px] text-ink-soft font-medium">{r.name}</div>
@@ -1599,7 +1570,8 @@ function RemotePopup({
               </div>
               <button
                 onClick={() => onRemove(r.name)}
-                className="text-[9px] px-1 rounded text-ink-ghost hover:text-red-400 cursor-pointer shrink-0"
+                className="text-[9px] px-1 rounded text-ink-ghost hover:text-red-400 cursor-pointer shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                title="删除远程仓库"
               >
                 ✕
               </button>
@@ -1607,21 +1579,49 @@ function RemotePopup({
           ))}
         </div>
       ) : (
-        <p className="text-xs text-ink-ghost text-center py-3">
-          {t("git.noRemotes", { defaultValue: "无远程仓库" })}
-        </p>
+        <>
+          {/* No remotes yet — show add form */}
+          <div className="p-2 border-b border-paper-deep/10 space-y-1">
+            <p className="text-[10px] text-ink-ghost">
+              {t("git.noRemotes", { defaultValue: "尚未添加远程仓库" })}
+            </p>
+            <input
+              value={newName}
+              onChange={(e) => onNameChange(e.target.value)}
+              placeholder={
+                t("git.remoteNamePlaceholder", { defaultValue: "名称 (如 origin)" }) as string
+              }
+              className="w-full text-[11px] bg-paper-warm/40 rounded px-1.5 py-1 outline-none focus:bg-paper-warm"
+            />
+            <input
+              value={newUrl}
+              onChange={(e) => onUrlChange(e.target.value)}
+              placeholder={
+                t("git.remoteUrlPlaceholder", { defaultValue: "URL (如 https://…)" }) as string
+              }
+              className="w-full text-[11px] bg-paper-warm/40 rounded px-1.5 py-1 outline-none focus:bg-paper-warm"
+            />
+            <button
+              onClick={onAdd}
+              disabled={!newName.trim() || !newUrl.trim()}
+              className="w-full text-[10px] px-2 py-1 rounded bg-bamboo text-white hover:bg-bamboo-dark disabled:opacity-30 cursor-pointer"
+            >
+              {t("git.addRemote", { defaultValue: "添加远程仓库" })}
+            </button>
+          </div>
+          {/* Hosting integration */}
+          {onOpenCreateRepo && (
+            <div className="p-2 space-y-1">
+              <button
+                onClick={onOpenCreateRepo}
+                className="w-full text-[10px] px-2 py-1 rounded bg-bamboo text-white hover:bg-bamboo-dark transition-colors cursor-pointer"
+              >
+                {t("git.createRemoteRepo", { defaultValue: "自动创建远程仓库" })}
+              </button>
+            </div>
+          )}
+        </>
       )}
-      {/* Hosting integration */}
-      <div className="border-t border-paper-deep/10 p-2 space-y-1">
-        {onOpenCreateRepo && (
-          <button
-            onClick={onOpenCreateRepo}
-            className="w-full text-[10px] px-2 py-1 rounded bg-bamboo text-white hover:bg-bamboo-dark transition-colors cursor-pointer"
-          >
-            {t("git.createRemoteRepo", { defaultValue: "自动创建远程仓库" })}
-          </button>
-        )}
-      </div>
     </div>
   );
 }
@@ -1638,7 +1638,7 @@ interface DiffModalProps {
 
 function DiffModal({ content, title, onClose }: DiffModalProps) {
   return (
-    <div className="fixed inset-0 z-[100] flex flex-col bg-white/95 dark:bg-slate-900/95">
+    <div className="fixed inset-0 z-[100] flex flex-col bg-white/95 dark:bg-cloud/95">
       <div className="shrink-0 px-3 py-1.5 flex items-center gap-2 border-b border-paper-deep/20">
         <span className="text-xs text-ink-faint font-mono truncate flex-1">{title}</span>
         <button
@@ -1670,7 +1670,7 @@ interface MergePickerProps {
 function MergePicker({ branches, currentBranch, onMerge, onClose, t }: MergePickerProps) {
   const otherBranches = branches.filter((b) => b.name !== currentBranch);
   return (
-    <div className="absolute top-full right-0 mt-1 w-44 bg-white dark:bg-slate-800 rounded-lg shadow-lg border border-paper-deep/20 z-50 overflow-hidden">
+    <div className="absolute top-full right-0 mt-1 w-44 bg-white dark:bg-cloud rounded-lg shadow-lg border border-paper-deep/20 z-50 overflow-hidden">
       <div className="px-2 py-1.5 border-b border-paper-deep/10">
         <p className="text-[10px] text-ink-ghost">
           {t("git.mergeInto", { branch: currentBranch, defaultValue: `合并到 ${currentBranch}` })}
@@ -1739,8 +1739,11 @@ function GitCtxMenu({
         }}
       />
       <div
-        className="fixed z-[101] bg-white dark:bg-slate-800 rounded-lg shadow-xl border border-paper-deep/20 py-1 min-w-[140px]"
-        style={{ left: Math.min(ctxMenu.x, window.innerWidth - 180), top: ctxMenu.y }}
+        className="fixed z-[101] bg-white dark:bg-cloud rounded-lg shadow-xl border border-paper-deep/20 py-1 min-w-[140px]"
+        style={{
+          left: Math.min(ctxMenu.x, window.innerWidth - 180),
+          top: Math.min(ctxMenu.y, window.innerHeight - 160),
+        }}
       >
         {isBranch && targetBranch && (
           <>
@@ -1801,88 +1804,375 @@ function GitCtxMenu({
 }
 
 /* ------------------------------------------------------------------ */
-/* Create remote repo modal */
+/* Create remote repo wizard (VS Code palette-style, keyboard-driven) */
 /* ------------------------------------------------------------------ */
 
-interface CreateRepoModalProps {
-  provider: "github" | "gitlab";
-  repoName: string;
-  isPrivate: boolean;
-  onProviderChange: (p: "github" | "gitlab") => void;
-  onNameChange: (n: string) => void;
-  onPrivateChange: (p: boolean) => void;
-  onCreate: () => void;
+interface CreateRepoWizardProps {
+  repoPath: string;
+  onCreate: (
+    provider: "github" | "gitlab",
+    token: string,
+    repoName: string,
+    isPrivate: boolean,
+    baseUrl?: string,
+  ) => void;
   onClose: () => void;
   t: ReturnType<typeof useTranslation>["t"];
 }
 
-function CreateRepoModal({
-  provider,
-  repoName,
-  isPrivate,
-  onProviderChange,
-  onNameChange,
-  onPrivateChange,
-  onCreate,
-  onClose,
-  t,
-}: CreateRepoModalProps) {
+type WizardPhase = "account" | "provider" | "username" | "token" | "baseurl" | "config";
+
+function CreateRepoWizard({ repoPath, onCreate, onClose, t }: CreateRepoWizardProps) {
+  const defaultRepoName = repoPath.split(/[/\\]/).pop() || "";
+  const savedAccounts = loadHostingAccounts();
+
+  const [phase, setPhase] = useState<WizardPhase>("account");
+  const [focusIdx, setFocusIdx] = useState(0);
+  const [selectedAccount, setSelectedAccount] = useState<GitHostingAccount | null>(null);
+  const [newProvider, setNewProvider] = useState<"github" | "gitlab">("github");
+  const [newUsername, setNewUsername] = useState("");
+  const [newToken, setNewToken] = useState("");
+  const [newBaseUrl, setNewBaseUrl] = useState("");
+  const [repoName, setRepoName] = useState(defaultRepoName);
+  const [isPrivate, setIsPrivate] = useState(false);
+
+  const usernameRef = useRef<HTMLInputElement>(null);
+  const tokenRef = useRef<HTMLInputElement>(null);
+  const baseUrlRef = useRef<HTMLInputElement>(null);
+  const repoNameRef = useRef<HTMLInputElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  // Auto-focus inputs when entering input phases
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (phase === "username") usernameRef.current?.focus();
+      else if (phase === "token") tokenRef.current?.focus();
+      else if (phase === "baseurl") baseUrlRef.current?.focus();
+      else if (phase === "config") {
+        repoNameRef.current?.focus();
+        repoNameRef.current?.select();
+      }
+    }, 80);
+    return () => clearTimeout(t);
+  }, [phase]);
+
+  // Focus container for arrow-key navigation in list phases
+  useEffect(() => {
+    if (phase === "account" || phase === "provider") {
+      containerRef.current?.focus();
+    }
+  }, [phase]);
+
+  const doCreate = () => {
+    if (!repoName.trim()) return;
+    if (selectedAccount) {
+      onCreate(
+        selectedAccount.provider,
+        selectedAccount.token,
+        repoName.trim(),
+        isPrivate,
+        selectedAccount.baseUrl,
+      );
+    } else {
+      const account: GitHostingAccount = {
+        provider: newProvider,
+        username: newUsername.trim(),
+        token: newToken.trim(),
+        baseUrl: newBaseUrl.trim() || undefined,
+      };
+      saveHostingAccounts([...savedAccounts.filter((a) => a.provider !== newProvider), account]);
+      onCreate(newProvider, newToken.trim(), repoName.trim(), isPrivate, account.baseUrl);
+    }
+  };
+
+  // --- List phase item counts ---
+  const accountItemCount = savedAccounts.length + 1; // saved accounts + "添加新账号"
+  const providerItemCount = 2; // GitHub, GitLab
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      switch (phase) {
+        case "config":
+          setPhase(selectedAccount ? "account" : newProvider === "gitlab" ? "baseurl" : "token");
+          break;
+        case "baseurl":
+          setPhase("token");
+          break;
+        case "token":
+          setPhase("username");
+          break;
+        case "username":
+          setPhase("provider");
+          break;
+        case "provider":
+          setPhase("account");
+          setFocusIdx(0);
+          break;
+        default:
+          onClose();
+      }
+      return;
+    }
+
+    // List phases: arrow-key navigation
+    if (phase === "account" || phase === "provider") {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        const max = phase === "account" ? accountItemCount : providerItemCount;
+        setFocusIdx((i) => Math.min(i + 1, max - 1));
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setFocusIdx((i) => Math.max(i - 1, 0));
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        selectItem(focusIdx);
+      }
+    }
+  };
+
+  const selectItem = (idx: number) => {
+    if (phase === "account") {
+      if (idx < savedAccounts.length) {
+        setSelectedAccount(savedAccounts[idx]);
+        setPhase("config");
+      } else {
+        setSelectedAccount(null);
+        setPhase("provider");
+        setFocusIdx(0);
+      }
+    } else if (phase === "provider") {
+      setNewProvider(idx === 0 ? "github" : "gitlab");
+      setPhase("username");
+    }
+  };
+
+  // Input-phase Enter handler
+  const handleInputEnter = (next: WizardPhase | "create") => {
+    if (next === "create") {
+      doCreate();
+      return;
+    }
+    setPhase(next);
+  };
+
+  const providerLabel = newProvider === "github" ? "GitHub" : "GitLab";
+  const phaseTitle: string =
+    phase === "account"
+      ? "选择账号"
+      : phase === "provider"
+        ? "选择托管平台"
+        : phase === "username" || phase === "token"
+          ? `添加 ${providerLabel} 账号`
+          : phase === "baseurl"
+            ? "添加 GitLab 账号"
+            : "创建远程仓库";
+
   return (
-    <div className="fixed inset-0 z-[100] flex flex-col bg-white/95 dark:bg-slate-900/95">
-      <div className="shrink-0 px-3 py-1.5 flex items-center gap-2 border-b border-paper-deep/20">
-        <span className="text-xs text-ink-faint flex-1">
-          {t("git.createRemoteRepoTitle", { defaultValue: "创建远程仓库" })}
-        </span>
-        <button
-          onClick={onClose}
-          className="text-[10px] px-1.5 py-0.5 rounded text-ink-ghost hover:text-ink-faint hover:bg-paper-warm cursor-pointer"
+    <>
+      {/* Backdrop */}
+      <div className="fixed inset-0 z-[100]" onClick={onClose} />
+      {/* Top-floating bar */}
+      <div className="fixed top-0 left-0 right-0 z-[101] flex justify-center pt-8 pointer-events-none">
+        <div
+          ref={containerRef}
+          tabIndex={-1}
+          onKeyDown={handleKeyDown}
+          className="pointer-events-auto w-[380px] max-w-[calc(100vw-16px)] bg-white dark:bg-cloud rounded-xl shadow-xl border border-paper-deep/20 overflow-hidden outline-none"
         >
-          ✕
-        </button>
+          {/* Header */}
+          <div className="flex items-center gap-2 px-3 py-2 border-b border-paper-deep/15">
+            <span className="text-[11px] text-ink-faint flex-1">{phaseTitle}</span>
+            <span className="text-[9px] text-ink-ghost/50 tracking-wide">Esc 退出</span>
+          </div>
+
+          {/* Phase: account list */}
+          {phase === "account" && (
+            <div className="py-1">
+              {savedAccounts.length === 0 && (
+                <p className="text-[10px] text-ink-ghost/60 px-3 py-2">暂无已保存的账号</p>
+              )}
+              {savedAccounts.map((a, i) => (
+                <div
+                  key={a.provider}
+                  onClick={() => {
+                    setSelectedAccount(a);
+                    setPhase("config");
+                  }}
+                  className={`flex items-center gap-2 mx-1 px-2.5 py-1.5 rounded-md cursor-pointer transition-colors ${
+                    focusIdx === i
+                      ? "bg-bamboo-mist/30 text-bamboo"
+                      : "text-ink-soft hover:bg-paper-warm/60"
+                  }`}
+                >
+                  <span className="text-[10px] font-medium uppercase w-14 shrink-0 opacity-70">
+                    {a.provider}
+                  </span>
+                  <span className="text-[11px] flex-1 truncate">{a.username}</span>
+                  {a.baseUrl && (
+                    <span className="text-[9px] text-ink-ghost truncate max-w-[100px]">
+                      {a.baseUrl}
+                    </span>
+                  )}
+                </div>
+              ))}
+              <div className="mx-2 my-1 border-t border-paper-deep/10" />
+              <div
+                onClick={() => {
+                  setSelectedAccount(null);
+                  setPhase("provider");
+                  setFocusIdx(0);
+                }}
+                className={`flex items-center gap-2 mx-1 px-2.5 py-1.5 rounded-md cursor-pointer transition-colors ${
+                  focusIdx === savedAccounts.length
+                    ? "bg-bamboo-mist/30 text-bamboo"
+                    : "text-ink-faint hover:bg-paper-warm/60"
+                }`}
+              >
+                <span className="text-[11px]">+ 添加新账号</span>
+              </div>
+            </div>
+          )}
+
+          {/* Phase: provider list */}
+          {phase === "provider" && (
+            <div className="py-1">
+              {(["github", "gitlab"] as const).map((p, i) => (
+                <div
+                  key={p}
+                  onClick={() => {
+                    setNewProvider(p);
+                    setPhase("username");
+                  }}
+                  className={`flex items-center gap-2 mx-1 px-2.5 py-1.5 rounded-md cursor-pointer transition-colors ${
+                    focusIdx === i
+                      ? "bg-bamboo-mist/30 text-bamboo"
+                      : "text-ink-soft hover:bg-paper-warm/60"
+                  }`}
+                >
+                  <span className="text-[10px] font-medium uppercase w-14 shrink-0 opacity-70">
+                    {p}
+                  </span>
+                  <span className="text-[11px]">
+                    {p === "github" ? "github.com" : "gitlab.com"}
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {/* Phase: username input */}
+          {phase === "username" && (
+            <div className="p-3">
+              <label className="block text-[10px] text-ink-ghost mb-1">
+                {t("git.username", { defaultValue: "用户名" })}
+              </label>
+              <input
+                ref={usernameRef}
+                value={newUsername}
+                onChange={(e) => setNewUsername(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleInputEnter("token");
+                }}
+                placeholder={t("git.username", { defaultValue: "用户名" }) as string}
+                className="w-full h-8 px-2.5 rounded-lg bg-paper-warm/70 border border-paper-deep/40 text-[11px] text-ink-soft outline-none placeholder:text-ink-ghost focus:border-bamboo/40"
+              />
+            </div>
+          )}
+
+          {/* Phase: token input */}
+          {phase === "token" && (
+            <div className="p-3">
+              <label className="block text-[10px] text-ink-ghost mb-1">
+                {t("git.tokenPlaceholder", { defaultValue: "Personal Access Token" })}
+              </label>
+              <input
+                ref={tokenRef}
+                value={newToken}
+                onChange={(e) => setNewToken(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter")
+                    handleInputEnter(newProvider === "gitlab" ? "baseurl" : "config");
+                }}
+                type="password"
+                placeholder={
+                  t("git.tokenPlaceholder", { defaultValue: "Personal Access Token" }) as string
+                }
+                className="w-full h-8 px-2.5 rounded-lg bg-paper-warm/70 border border-paper-deep/40 text-[11px] text-ink-soft outline-none placeholder:text-ink-ghost focus:border-bamboo/40"
+              />
+            </div>
+          )}
+
+          {/* Phase: GitLab base URL input */}
+          {phase === "baseurl" && (
+            <div className="p-3">
+              <label className="block text-[10px] text-ink-ghost mb-1">
+                {t("git.gitlabUrl", { defaultValue: "GitLab 地址（留空使用默认）" })}
+              </label>
+              <input
+                ref={baseUrlRef}
+                value={newBaseUrl}
+                onChange={(e) => setNewBaseUrl(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleInputEnter("config");
+                }}
+                placeholder="https://gitlab.com"
+                className="w-full h-8 px-2.5 rounded-lg bg-paper-warm/70 border border-paper-deep/40 text-[11px] text-ink-soft outline-none placeholder:text-ink-ghost focus:border-bamboo/40"
+              />
+            </div>
+          )}
+
+          {/* Phase: repo config */}
+          {phase === "config" && (
+            <div className="p-3 space-y-2.5">
+              {/* Account summary */}
+              <div className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg bg-bamboo-mist/20 border border-bamboo/15">
+                <span className="text-[10px] font-medium text-bamboo uppercase">
+                  {selectedAccount ? selectedAccount.provider : newProvider}
+                </span>
+                <span className="text-[11px] text-ink-soft flex-1 truncate">
+                  {selectedAccount ? selectedAccount.username : newUsername}
+                </span>
+              </div>
+              {/* Visibility toggle */}
+              <div className="flex items-center justify-between px-0.5">
+                <span className="text-[11px] text-ink-soft">
+                  {t("git.privateRepo", { defaultValue: "私有仓库" })}
+                </span>
+                <button
+                  onClick={() => setIsPrivate(!isPrivate)}
+                  className={`relative w-8 h-4 rounded-full transition-colors cursor-pointer ${
+                    isPrivate ? "bg-bamboo" : "bg-paper-deep"
+                  }`}
+                  tabIndex={-1}
+                >
+                  <span
+                    className={`absolute top-0.5 w-3 h-3 rounded-full bg-white shadow-sm transition-transform ${
+                      isPrivate ? "left-[18px]" : "left-0.5"
+                    }`}
+                  />
+                </button>
+              </div>
+              {/* Repo name */}
+              <div>
+                <label className="block text-[10px] text-ink-ghost mb-1">
+                  {t("git.repoNamePlaceholder", { defaultValue: "仓库名称" })}
+                </label>
+                <input
+                  ref={repoNameRef}
+                  value={repoName}
+                  onChange={(e) => setRepoName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && repoName.trim()) doCreate();
+                  }}
+                  placeholder={t("git.repoNamePlaceholder", { defaultValue: "仓库名称" }) as string}
+                  className="w-full h-8 px-2.5 rounded-lg bg-paper-warm/70 border border-paper-deep/40 text-[11px] text-ink-soft outline-none focus:border-bamboo/40"
+                />
+              </div>
+            </div>
+          )}
+        </div>
       </div>
-      <div className="flex-1 p-3 space-y-3">
-        <select
-          value={provider}
-          onChange={(e) => onProviderChange(e.target.value as "github" | "gitlab")}
-          className="w-full text-[11px] bg-paper-warm/40 rounded px-2 py-1.5 outline-none cursor-pointer"
-        >
-          <option value="github">GitHub</option>
-          <option value="gitlab">GitLab</option>
-        </select>
-        <input
-          value={repoName}
-          onChange={(e) => onNameChange(e.target.value)}
-          placeholder={t("git.repoNamePlaceholder", { defaultValue: "仓库名称" }) as string}
-          className="w-full text-[11px] bg-paper-warm/40 rounded px-2 py-1.5 outline-none"
-          onKeyDown={(e) => {
-            if (e.key === "Enter") onCreate();
-          }}
-        />
-        <label className="flex items-center gap-2 text-[11px] text-ink-soft cursor-pointer">
-          <input
-            type="checkbox"
-            checked={isPrivate}
-            onChange={(e) => onPrivateChange(e.target.checked)}
-            className="rounded cursor-pointer"
-          />
-          {t("git.privateRepo", { defaultValue: "私有仓库" })}
-        </label>
-      </div>
-      <div className="shrink-0 border-t border-paper-deep/20 p-2 space-y-1.5">
-        <button
-          onClick={onCreate}
-          disabled={!repoName.trim()}
-          className="w-full py-1.5 rounded-lg bg-bamboo text-white text-xs font-medium hover:bg-bamboo-dark disabled:opacity-40 cursor-pointer"
-        >
-          {t("git.createAndAddRemote", { defaultValue: "创建并添加为远程仓库" })}
-        </button>
-        <button
-          onClick={onClose}
-          className="w-full py-1 rounded text-[10px] text-ink-ghost hover:text-ink-faint cursor-pointer"
-        >
-          {t("common.cancel", { defaultValue: "取消" })}
-        </button>
-      </div>
-    </div>
+    </>
   );
 }
