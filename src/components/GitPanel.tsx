@@ -41,11 +41,11 @@ import type {
   GitCreateRepoRequest,
   GitFileStatus,
   GitGraphNode,
-  GitHostingAccount,
   GitRemote,
   GitStashEntry,
   GitStatus,
 } from "../features/git/types";
+import { loadHostingAccounts } from "../features/git/hostingStorage";
 
 interface GitPanelProps {
   repoPath: string;
@@ -99,9 +99,7 @@ export function GitPanel({ repoPath, onRefresh }: GitPanelProps) {
     hash?: string;
     refs?: string[];
   } | null>(null);
-  // GitHub / GitLab
-  const [hostingAccounts, setHostingAccounts] = useState<GitHostingAccount[]>([]);
-  const [showHostingSetup, setShowHostingSetup] = useState(false);
+  // Create remote repo
   const [showCreateRepo, setShowCreateRepo] = useState(false);
   const [newRepoName, setNewRepoName] = useState("");
   const [newRepoProvider, setNewRepoProvider] = useState<"github" | "gitlab">("github");
@@ -543,7 +541,8 @@ export function GitPanel({ repoPath, onRefresh }: GitPanelProps) {
 
   const handleCreateRemoteRepo = async () => {
     if (!newRepoName.trim()) return;
-    const account = hostingAccounts.find((a) => a.provider === newRepoProvider);
+    const accounts = loadHostingAccounts();
+    const account = accounts.find((a) => a.provider === newRepoProvider);
     if (!account) {
       setError(
         t("git.noAccountForProvider", {
@@ -833,10 +832,6 @@ export function GitPanel({ repoPath, onRefresh }: GitPanelProps) {
                   onUrlChange={setNewRemoteUrl}
                   onAdd={handleRemoteAdd}
                   onRemove={handleRemoteRemove}
-                  onOpenHosting={() => {
-                    setShowRemotePopup(false);
-                    setShowHostingSetup(true);
-                  }}
                   onOpenCreateRepo={() => {
                     setShowRemotePopup(false);
                     setShowCreateRepo(true);
@@ -1236,19 +1231,6 @@ export function GitPanel({ repoPath, onRefresh }: GitPanelProps) {
         />
       )}
 
-      {/* Hosting setup modal */}
-      {showHostingSetup && (
-        <HostingSetup
-          accounts={hostingAccounts}
-          onSave={(accounts) => {
-            setHostingAccounts(accounts);
-            setShowHostingSetup(false);
-          }}
-          onClose={() => setShowHostingSetup(false)}
-          t={t}
-        />
-      )}
-
       {/* Create remote repo modal */}
       {showCreateRepo && (
         <CreateRepoModal
@@ -1558,7 +1540,6 @@ interface RemotePopupProps {
   onUrlChange: (v: string) => void;
   onAdd: () => void;
   onRemove: (name: string) => void;
-  onOpenHosting?: () => void;
   onOpenCreateRepo?: () => void;
   onClose: () => void;
   t: ReturnType<typeof useTranslation>["t"];
@@ -1572,7 +1553,6 @@ function RemotePopup({
   onUrlChange,
   onAdd,
   onRemove,
-  onOpenHosting,
   onOpenCreateRepo,
   onClose,
   t,
@@ -1633,14 +1613,6 @@ function RemotePopup({
       )}
       {/* Hosting integration */}
       <div className="border-t border-paper-deep/10 p-2 space-y-1">
-        {onOpenHosting && (
-          <button
-            onClick={onOpenHosting}
-            className="w-full text-[10px] px-2 py-1 rounded text-ink-faint bg-paper-warm/60 hover:bg-paper-warm transition-colors cursor-pointer"
-          >
-            {t("git.hostingSetup", { defaultValue: "配置 GitHub / GitLab 账号" })}
-          </button>
-        )}
         {onOpenCreateRepo && (
           <button
             onClick={onOpenCreateRepo}
@@ -1666,7 +1638,7 @@ interface DiffModalProps {
 
 function DiffModal({ content, title, onClose }: DiffModalProps) {
   return (
-    <div className="absolute inset-0 z-40 flex flex-col bg-white/95 dark:bg-slate-900/95">
+    <div className="fixed inset-0 z-[100] flex flex-col bg-white/95 dark:bg-slate-900/95">
       <div className="shrink-0 px-3 py-1.5 flex items-center gap-2 border-b border-paper-deep/20">
         <span className="text-xs text-ink-faint font-mono truncate flex-1">{title}</span>
         <button
@@ -1759,7 +1731,7 @@ function GitCtxMenu({
   return (
     <>
       <div
-        className="absolute inset-0 z-50"
+        className="fixed inset-0 z-[100]"
         onClick={onClose}
         onContextMenu={(e) => {
           e.preventDefault();
@@ -1767,7 +1739,7 @@ function GitCtxMenu({
         }}
       />
       <div
-        className="absolute z-50 bg-white dark:bg-slate-800 rounded-lg shadow-xl border border-paper-deep/20 py-1 min-w-[140px]"
+        className="fixed z-[101] bg-white dark:bg-slate-800 rounded-lg shadow-xl border border-paper-deep/20 py-1 min-w-[140px]"
         style={{ left: Math.min(ctxMenu.x, window.innerWidth - 180), top: ctxMenu.y }}
       >
         {isBranch && targetBranch && (
@@ -1829,140 +1801,6 @@ function GitCtxMenu({
 }
 
 /* ------------------------------------------------------------------ */
-/* GitHub / GitLab hosting setup */
-/* ------------------------------------------------------------------ */
-
-interface HostingSetupProps {
-  accounts: GitHostingAccount[];
-  onSave: (accounts: GitHostingAccount[]) => void;
-  onClose: () => void;
-  t: ReturnType<typeof useTranslation>["t"];
-}
-
-function HostingSetup({ accounts: initialAccounts, onSave, onClose, t }: HostingSetupProps) {
-  const [accounts, setAccounts] = useState<GitHostingAccount[]>(initialAccounts);
-  const [provider, setProvider] = useState<"github" | "gitlab">("github");
-  const [username, setUsername] = useState("");
-  const [token, setToken] = useState("");
-  const [baseUrl, setBaseUrl] = useState("");
-
-  const addAccount = () => {
-    if (!username.trim() || !token.trim()) return;
-    setAccounts([
-      ...accounts.filter((a) => a.provider !== provider),
-      {
-        provider,
-        username: username.trim(),
-        token: token.trim(),
-        baseUrl: baseUrl.trim() || undefined,
-      },
-    ]);
-    setUsername("");
-    setToken("");
-    setBaseUrl("");
-  };
-
-  return (
-    <div className="absolute inset-0 z-40 flex flex-col bg-white/95 dark:bg-slate-900/95">
-      <div className="shrink-0 px-3 py-1.5 flex items-center gap-2 border-b border-paper-deep/20">
-        <span className="text-xs text-ink-faint flex-1">
-          {t("git.hostingSetupTitle", { defaultValue: "托管账号配置" })}
-        </span>
-        <button
-          onClick={onClose}
-          className="text-[10px] px-1.5 py-0.5 rounded text-ink-ghost hover:text-ink-faint hover:bg-paper-warm cursor-pointer"
-        >
-          ✕
-        </button>
-      </div>
-      <div className="flex-1 overflow-y-auto p-3 space-y-3">
-        {accounts.length > 0 && (
-          <div className="space-y-1.5">
-            <p className="text-[10px] text-ink-ghost font-medium">
-              {t("git.savedAccounts", { defaultValue: "已保存的账号" })}
-            </p>
-            {accounts.map((a) => (
-              <div
-                key={a.provider}
-                className="flex items-center gap-2 px-2 py-1.5 rounded bg-paper-warm/40"
-              >
-                <span className="text-[10px] font-medium text-bamboo uppercase">{a.provider}</span>
-                <span className="text-[11px] text-ink-soft flex-1">{a.username}</span>
-                <button
-                  onClick={() => setAccounts(accounts.filter((x) => x.provider !== a.provider))}
-                  className="text-[9px] px-1 rounded text-ink-ghost hover:text-red-400 cursor-pointer"
-                >
-                  ✕
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-        <div className="space-y-2 p-2 rounded bg-paper-warm/40 border border-paper-deep/10">
-          <p className="text-[10px] text-ink-ghost">
-            {t("git.addAccount", { defaultValue: "添加账号" })}
-          </p>
-          <select
-            value={provider}
-            onChange={(e) => setProvider(e.target.value as "github" | "gitlab")}
-            className="w-full text-[11px] bg-paper-warm/40 rounded px-1.5 py-1 outline-none cursor-pointer"
-          >
-            <option value="github">GitHub</option>
-            <option value="gitlab">GitLab</option>
-          </select>
-          <input
-            value={username}
-            onChange={(e) => setUsername(e.target.value)}
-            placeholder={t("git.username", { defaultValue: "用户名" }) as string}
-            className="w-full text-[11px] bg-paper-warm/40 rounded px-1.5 py-1 outline-none"
-          />
-          <input
-            value={token}
-            onChange={(e) => setToken(e.target.value)}
-            type="password"
-            placeholder={
-              t("git.tokenPlaceholder", { defaultValue: "Personal Access Token" }) as string
-            }
-            className="w-full text-[11px] bg-paper-warm/40 rounded px-1.5 py-1 outline-none"
-          />
-          {provider === "gitlab" && (
-            <input
-              value={baseUrl}
-              onChange={(e) => setBaseUrl(e.target.value)}
-              placeholder={
-                t("git.gitlabUrl", { defaultValue: "https://gitlab.com (留空使用默认)" }) as string
-              }
-              className="w-full text-[11px] bg-paper-warm/40 rounded px-1.5 py-1 outline-none"
-            />
-          )}
-          <button
-            onClick={addAccount}
-            disabled={!username.trim() || !token.trim()}
-            className="w-full text-[10px] px-2 py-1 rounded bg-bamboo text-white hover:bg-bamboo-dark disabled:opacity-30 cursor-pointer"
-          >
-            {t("git.saveAccount", { defaultValue: "保存账号" })}
-          </button>
-        </div>
-        <p className="text-[9px] text-ink-ghost leading-relaxed">
-          {t("git.tokenHelp", {
-            defaultValue:
-              "GitHub: Settings → Developer settings → Personal access tokens → Tokens (classic)，需要 repo 权限",
-          })}
-        </p>
-      </div>
-      <div className="shrink-0 border-t border-paper-deep/20 p-2">
-        <button
-          onClick={() => onSave(accounts)}
-          className="w-full py-1.5 rounded-lg bg-bamboo text-white text-xs font-medium hover:bg-bamboo-dark cursor-pointer"
-        >
-          {t("common.save", { defaultValue: "保存" })}
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/* ------------------------------------------------------------------ */
 /* Create remote repo modal */
 /* ------------------------------------------------------------------ */
 
@@ -1990,7 +1828,7 @@ function CreateRepoModal({
   t,
 }: CreateRepoModalProps) {
   return (
-    <div className="absolute inset-0 z-40 flex flex-col bg-white/95 dark:bg-slate-900/95">
+    <div className="fixed inset-0 z-[100] flex flex-col bg-white/95 dark:bg-slate-900/95">
       <div className="shrink-0 px-3 py-1.5 flex items-center gap-2 border-b border-paper-deep/20">
         <span className="text-xs text-ink-faint flex-1">
           {t("git.createRemoteRepoTitle", { defaultValue: "创建远程仓库" })}

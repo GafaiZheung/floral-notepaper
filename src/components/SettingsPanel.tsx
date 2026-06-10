@@ -21,6 +21,7 @@ import { applyTheme, watchSystemTheme } from "../features/settings/theme";
 import { SUPPORTED_LOCALES } from "../locales/locale-whitelist";
 import { SlidingButtonGroup } from "./SlidingButtonGroup";
 import { OneDriveSettings } from "../features/onedrive/OneDriveSettings";
+import { GitHostingSettings } from "../features/git/GitHostingSettings";
 
 const HARMONY_FONT_LICENSE_URL = new URL("../assets/fonts/LICENSE_Fonts", import.meta.url).href;
 
@@ -496,6 +497,8 @@ export function SettingsPanel({ config, onChange, onChooseNotesDir, onClose }: S
         </section>
 
         <OneDriveSettings config={config} onChange={onChange} />
+
+        <GitHostingSettings />
 
         <section className="pt-2 border-t border-paper-deep/25">
           <p className="text-[10px] leading-relaxed text-ink-ghost/75">
