@@ -3,6 +3,7 @@ pub mod locales;
 pub mod services;
 
 use locales::Locale;
+use services::browser_webview;
 use services::git;
 use services::notes::{
     default_store, AppConfig, AppError, Note, NoteMetadata, OpenedFileClassification,
@@ -845,7 +846,14 @@ pub fn run() {
             // Git – Graph
             git_graph,
             // Git – Remote create
-            git_create_remote_repo
+            git_create_remote_repo,
+            // Browser child webview
+            browser_webview::create_browser_webview,
+            browser_webview::update_browser_webview_bounds,
+            browser_webview::navigate_browser_webview,
+            browser_webview::destroy_browser_webview,
+            browser_webview::set_browser_webview_visible,
+            browser_webview::browser_webview_eval
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

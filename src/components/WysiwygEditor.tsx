@@ -45,6 +45,8 @@ export interface WysiwygEditorProps {
   onScrollTop?: (scrollTop: number) => void;
   /** Initial editor mode — defaults to "wysiwyg" when undefined */
   initialMode?: WysiwygMode;
+  /** Called when user clicks an external link in rendered content */
+  onLinkClick?: (url: string, event: React.MouseEvent<HTMLAnchorElement>) => void;
 }
 
 /** Compute which heading is at or above the top of the scroll container */
@@ -91,6 +93,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
       onActiveHeadingChange,
       onScrollTop,
       initialMode = "wysiwyg",
+      onLinkClick,
     },
     ref,
   ) {
@@ -431,6 +434,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
                     onChange={(newSource) => handleBlockChange(index, newSource)}
                     onBlur={() => setEditingBlockIndex(null)}
                     fontSize={fontSize}
+                    onLinkClick={onLinkClick}
                   />
                 ))
               )}

@@ -53,12 +53,17 @@ function extractText(node: React.ReactNode): string {
 interface MarkdownPreviewProps {
   content: string;
   fontSize?: number;
+  /** Called when user clicks an external link. If not provided, uses system browser. */
+  onLinkClick?: (url: string, event: React.MouseEvent<HTMLAnchorElement>) => void;
 }
 
 const remarkPlugins = [remarkBreaks, remarkGfm, remarkMath];
 const rehypePlugins = [rehypeKatex];
 
-function createComponents(fontSize: number): Components {
+function createComponents(
+  fontSize: number,
+  onLinkClick?: (url: string, event: React.MouseEvent<HTMLAnchorElement>) => void,
+): Components {
   return {
     h1: ({ children }) => (
       <h1 className="text-[1.57em] font-display font-bold text-ink mt-6 mb-4 tracking-wide">
@@ -135,7 +140,13 @@ function createComponents(fontSize: number): Components {
         href={href}
         onClick={(e) => {
           e.preventDefault();
-          if (href && /^https?:\/\//i.test(href)) openUrl(href);
+          if (href && /^https?:\/\//i.test(href)) {
+            if (onLinkClick) {
+              onLinkClick(href, e as React.MouseEvent<HTMLAnchorElement>);
+            } else {
+              openUrl(href);
+            }
+          }
         }}
         className="text-bamboo hover:text-bamboo-light underline underline-offset-2 cursor-pointer"
       >
@@ -163,9 +174,12 @@ function createComponents(fontSize: number): Components {
   };
 }
 
-export function MarkdownPreview({ content, fontSize = 14 }: MarkdownPreviewProps) {
+export function MarkdownPreview({ content, fontSize = 14, onLinkClick }: MarkdownPreviewProps) {
   const { t } = useTranslation();
-  const components = useMemo(() => createComponents(fontSize), [fontSize]);
+  const components = useMemo(
+    () => createComponents(fontSize, onLinkClick),
+    [fontSize, onLinkClick],
+  );
   return (
     <div className="font-body" style={{ fontSize: `${fontSize}px` }}>
       {content.trim() ? (

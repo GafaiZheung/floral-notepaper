@@ -27,6 +27,8 @@ import { SettingsTab } from "./SettingsTab";
 import { TabBar } from "./TabBar";
 import type { TabMenuAction } from "./TabBar";
 import { WysiwygEditor } from "./WysiwygEditor";
+import { RightBrowserPanel } from "./RightBrowserPanel";
+import { navigateBrowserWebview } from "../features/browser/api";
 import type { WysiwygEditorHandle } from "./WysiwygEditor";
 import {
   createNote,
@@ -72,6 +74,8 @@ import {
   toggleMaximizeCurrentWindow,
   isCurrentWindowMaximized,
   startCurrentWindowDrag,
+  getCurrentWindowBounds,
+  setCurrentWindowBounds,
 } from "../features/windows/controls";
 import {
   TILE_WINDOW_CLOSED_EVENT,
@@ -163,6 +167,15 @@ export function MainWindow({
   const [dragOverCategory, setDragOverCategory] = useState<string | null>(null);
   const [sidebarWidth, setSidebarWidth] = useState(280);
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
+  // Right browser panel state
+  const rightPanelBaseWidth = 280;
+  const [rightPanelOpen, setRightPanelOpen] = useState(false);
+  const [rightPanelExpanded, setRightPanelExpanded] = useState(false);
+  // Window width without the right panel (restored when panel closes)
+  const [windowBaseWidth, setWindowBaseWidth] = useState<number | null>(null);
+  const rightPanelWidth = rightPanelExpanded
+    ? rightPanelBaseWidth + sidebarWidth + 4
+    : rightPanelBaseWidth;
   const splitContainerRef = useRef<HTMLDivElement>(null);
   const wysiwygRef = useRef<WysiwygEditorHandle>(null);
   const [categoryMenu, setCategoryMenu] = useState<CategoryMenuState | null>(null);
@@ -522,6 +535,32 @@ export function MainWindow({
     }, 500);
     return () => window.clearTimeout(timer);
   }, [tabs, activeTabId, settingsConfig]);
+
+  // Persist right panel state to config (debounced)
+  useEffect(() => {
+    if (!settingsConfig) return;
+    const timer = window.setTimeout(() => {
+      const updated = { ...settingsConfig };
+      updated.rightPanelOpen = rightPanelOpen;
+      updated.rightPanelExpanded = rightPanelExpanded;
+      updated.windowBaseWidth = windowBaseWidth ?? undefined;
+      void saveConfig(updated);
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [rightPanelOpen, rightPanelExpanded, windowBaseWidth, settingsConfig]);
+
+  // Restore right panel state from config on first load
+  useEffect(() => {
+    if (!settingsConfig) return;
+    if (settingsConfig.rightPanelOpen) {
+      setRightPanelOpen(true);
+      setRightPanelExpanded(settingsConfig.rightPanelExpanded ?? false);
+      if (settingsConfig.windowBaseWidth) {
+        setWindowBaseWidth(settingsConfig.windowBaseWidth);
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [settingsConfig === null]); // Run once when settingsConfig first loads
 
   const applyNote = useCallback((note: Note) => {
     setSelectedId(note.id);
@@ -1004,6 +1043,63 @@ export function MainWindow({
       setErrorMessage(getErrorMessage(error));
     }
   };
+
+  const toggleRightPanel = useCallback(async () => {
+    if (rightPanelOpen) {
+      // Closing — restore window to base width, then hide panel
+      setRightPanelExpanded(false);
+      setSidebarCollapsed(false);
+      if (windowBaseWidth !== null) {
+        const b = await getCurrentWindowBounds();
+        await setCurrentWindowBounds({ ...b, width: windowBaseWidth });
+      }
+      setRightPanelOpen(false);
+    } else {
+      // Opening — save current width, expand window, then show panel
+      const b = await getCurrentWindowBounds();
+      setWindowBaseWidth(b.width);
+      await setCurrentWindowBounds({
+        ...b,
+        width: b.width + rightPanelBaseWidth,
+      });
+      setRightPanelOpen(true);
+    }
+  }, [rightPanelOpen, windowBaseWidth, rightPanelBaseWidth]);
+
+  const toggleRightPanelExpand = useCallback(async () => {
+    const next = !rightPanelExpanded;
+    setRightPanelExpanded(next);
+    setSidebarCollapsed(next);
+    // Arrow toggle does NOT change window size — sidebar space goes to right panel.
+  }, [rightPanelExpanded]);
+
+  /** Open a URL in the browser panel. If panel is not yet open, auto-open it. */
+  const handleLinkClick = useCallback(
+    async (url: string, event: React.MouseEvent<HTMLAnchorElement>) => {
+      // Cmd/Ctrl+Click → system browser (original behaviour)
+      if (event.metaKey || event.ctrlKey) {
+        return;
+      }
+      event.preventDefault();
+      if (!rightPanelOpen) {
+        // Auto-open: resize window first, then show panel, then navigate
+        const b = await getCurrentWindowBounds();
+        setWindowBaseWidth(b.width);
+        await setCurrentWindowBounds({
+          ...b,
+          width: b.width + rightPanelBaseWidth,
+        });
+        setRightPanelOpen(true);
+        // Give the webview time to create before navigating
+        setTimeout(() => {
+          void navigateBrowserWebview(url).catch(() => {});
+        }, 600);
+      } else {
+        void navigateBrowserWebview(url).catch(() => {});
+      }
+    },
+    [rightPanelOpen, rightPanelBaseWidth],
+  );
 
   const toggleSettingsTab = useCallback(async () => {
     // Always open settings; never toggle-close. Close via tab or note selection.
@@ -2027,546 +2123,90 @@ export function MainWindow({
         </div>
 
         <div className="relative z-10 flex flex-1 min-h-0">
-          <LeftIconSidebar
-            activePanel={sidebarTab}
-            onSelectPanel={setSidebarTab}
-            onSettings={() => void toggleSettingsTab()}
-          />
-          <div
-            className={`border-r border-paper-deep/30 bg-paper/40 flex flex-col shrink-0 ${
-              sidebarCollapsed ? "w-0 overflow-hidden transition-all duration-[600ms]" : ""
-            }`}
-            style={sidebarCollapsed ? undefined : { width: `${sidebarWidth}px` }}
-          >
-            {sidebarTab !== "git" && (
-              <div className="px-3 pt-3 pb-2 shrink-0">
-                <div className="flex items-center gap-2 px-2.5 h-8 rounded-lg bg-paper-warm/80 border border-paper-deep/40 focus-within:border-bamboo/30 focus-within:bg-cloud transition-all">
-                  <svg
-                    width="13"
-                    height="13"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2.5"
-                    strokeLinecap="round"
-                    className="text-ink-ghost shrink-0"
-                  >
-                    <circle cx="11" cy="11" r="8" />
-                    <path d="m21 21-4.35-4.35" />
-                  </svg>
-                  <input
-                    type="text"
-                    value={searchQuery}
-                    onChange={(event) => setSearchQuery(event.target.value)}
-                    placeholder={t("main.sidebar.searchPlaceholder", { defaultValue: "搜索笔记…" })}
-                    className="flex-1 text-[12px] font-body text-ink placeholder:text-ink-ghost/60 bg-transparent"
-                  />
-                  {searchQuery && (
-                    <button
-                      onClick={() => setSearchQuery("")}
-                      className="text-ink-ghost hover:text-ink-faint transition-colors cursor-pointer"
-                      title={t("main.sidebar.clearSearch", { defaultValue: "清空搜索" })}
+          {/* === Base content area — always flex:1, naturally shrinks when right panel appears === */}
+          <div className="flex flex-1 min-h-0 min-w-0">
+            <LeftIconSidebar
+              activePanel={sidebarTab}
+              onSelectPanel={setSidebarTab}
+              onSettings={() => void toggleSettingsTab()}
+              onToggleBrowser={toggleRightPanel}
+              browserOpen={rightPanelOpen}
+            />
+            <div
+              className={`border-r border-paper-deep/30 bg-paper/40 flex flex-col shrink-0 ${
+                sidebarCollapsed ? "w-0 overflow-hidden transition-all duration-[600ms]" : ""
+              }`}
+              style={sidebarCollapsed ? undefined : { width: `${sidebarWidth}px` }}
+            >
+              {sidebarTab !== "git" && (
+                <div className="px-3 pt-3 pb-2 shrink-0">
+                  <div className="flex items-center gap-2 px-2.5 h-8 rounded-lg bg-paper-warm/80 border border-paper-deep/40 focus-within:border-bamboo/30 focus-within:bg-cloud transition-all">
+                    <svg
+                      width="13"
+                      height="13"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                      className="text-ink-ghost shrink-0"
                     >
-                      <svg
-                        width="10"
-                        height="10"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="3"
-                        strokeLinecap="round"
-                      >
-                        <path d="M18 6L6 18M6 6l12 12" />
-                      </svg>
-                    </button>
-                  )}
-                </div>
-              </div>
-            )}
-
-            {sidebarTab === "directory" && (
-              <div key="dir" className="flex flex-col flex-1 min-h-0 animate-view-fade">
-                <>
-                  {/* Notes directory selector — hidden in compact mode (moved to titlebar) */}
-                  {settingsConfig && settingsConfig?.tabLayout === "default" && (
-                    <div className="px-3 pb-1.5 shrink-0">
-                      <div className="flex items-center gap-1.5">
-                        <div className="relative flex-1 min-w-0">
-                          <button
-                            onMouseDown={(e) => e.stopPropagation()}
-                            onClick={() => {
-                              setDeleteConfirmDir(null);
-                              setNotesDirDropdownOpen((prev) => !prev);
-                              void refreshOneDrivePaths();
-                            }}
-                            className="w-full flex items-center gap-1 h-7 rounded-lg text-[11px] font-body bg-paper-warm/80 border border-paper-deep/40 pl-2.5 pr-1.5 hover:border-bamboo/30 hover:bg-cloud transition-colors cursor-pointer"
-                            title={t("main.notesDir.select", { defaultValue: "切换笔记目录" })}
-                          >
-                            <span className="flex-1 truncate text-left text-ink-faint">
-                              {displayPathLabel(settingsConfig.notesDir)}
-                            </span>
-                            <svg
-                              width="10"
-                              height="10"
-                              viewBox="0 0 24 24"
-                              fill="none"
-                              stroke="currentColor"
-                              strokeWidth="2.5"
-                              strokeLinecap="round"
-                              strokeLinejoin="round"
-                              className={`text-ink-ghost shrink-0 transition-transform duration-200 ${notesDirDropdownOpen ? "rotate-180" : ""}`}
-                            >
-                              <polyline points="6 9 12 15 18 9" />
-                            </svg>
-                          </button>
-                          <div
-                            onMouseDown={(e) => e.stopPropagation()}
-                            className={`absolute top-full left-0 right-0 mt-1 z-[9999] bg-cloud border border-paper-deep/40 rounded-xl shadow-lg overflow-hidden py-1 transition-all duration-200 origin-top ${notesDirDropdownOpen ? "opacity-100 scale-y-100" : "opacity-0 scale-y-95 pointer-events-none"}`}
-                          >
-                            {(settingsConfig.notesDirs ?? [settingsConfig.notesDir]).map((dir) => {
-                              const isCurrent = dir === settingsConfig.notesDir;
-                              return (
-                                <div key={dir} className="flex items-center">
-                                  {deleteConfirmDir === dir ? (
-                                    <div className="flex-1">
-                                      <div className="px-3 py-1.5 text-[10px] font-body text-ink-faint border-b border-paper-deep/20">
-                                        {t("main.notesDir.confirmDelete", {
-                                          path: displayPathLabel(dir),
-                                          defaultValue: "确认删除「{{path}}」？",
-                                        })}
-                                      </div>
-                                      <div className="flex">
-                                        <button
-                                          onClick={() => void handleDeleteNotesDir(dir)}
-                                          className="flex-1 text-center px-2 py-1.5 text-[11px] font-body text-red-400 hover:bg-danger-bg hover:text-red-500 transition-colors cursor-pointer"
-                                        >
-                                          {t("main.notesDir.confirmDeleteAction", {
-                                            defaultValue: "确认删除",
-                                          })}
-                                        </button>
-                                        <button
-                                          onClick={() => setDeleteConfirmDir(null)}
-                                          className="flex-1 text-center px-2 py-1.5 text-[11px] font-body text-ink-soft hover:bg-paper-warm transition-colors cursor-pointer"
-                                        >
-                                          {t("common.cancel", { defaultValue: "取消" })}
-                                        </button>
-                                      </div>
-                                    </div>
-                                  ) : (
-                                    <button
-                                      onClick={() => {
-                                        setNotesDirDropdownOpen(false);
-                                        void switchNotesDir(dir);
-                                      }}
-                                      className={`flex-1 text-left truncate px-3 py-1.5 text-[11px] font-mono transition-colors cursor-pointer ${
-                                        isCurrent
-                                          ? "text-bamboo font-medium bg-bamboo-mist/30"
-                                          : "text-ink-faint hover:text-ink-soft hover:bg-paper-warm/60"
-                                      }`}
-                                    >
-                                      <span className="flex items-center gap-1.5">
-                                        {oneDriveSyncedPaths.includes(dir) && (
-                                          <svg
-                                            width="11"
-                                            height="11"
-                                            viewBox="0 0 24 24"
-                                            fill="none"
-                                            stroke="currentColor"
-                                            strokeWidth="1.7"
-                                            strokeLinecap="round"
-                                            strokeLinejoin="round"
-                                            className="shrink-0 opacity-60"
-                                          >
-                                            <path d="M6.5 17.5c-2.3-.5-4-2.5-4-4.9 0-3 2.3-5 5-4.8.8-2.7 3.3-4.5 6.1-4.1a5.2 5.2 0 0 1 3.6 2.1c2.7.2 4.8 2.6 4.8 5.3 0 2.3-1.3 4.2-3.2 5.1" />
-                                            <path d="M9 19a3 3 0 0 0 6 0" />
-                                            <path d="M12 16v3" />
-                                          </svg>
-                                        )}
-                                        {displayPathLabel(dir)}
-                                      </span>
-                                    </button>
-                                  )}
-                                  {!isCurrent && deleteConfirmDir !== dir && (
-                                    <button
-                                      onClick={() => setDeleteConfirmDir(dir)}
-                                      className="shrink-0 w-6 h-6 flex items-center justify-center opacity-30 hover:opacity-100 text-ink-ghost hover:text-red-400 hover:bg-danger-bg rounded transition-all cursor-pointer mr-0.5"
-                                      title={t("common.delete", { defaultValue: "删除" })}
-                                    >
-                                      <svg
-                                        width="10"
-                                        height="10"
-                                        viewBox="0 0 24 24"
-                                        fill="none"
-                                        stroke="currentColor"
-                                        strokeWidth="2.5"
-                                        strokeLinecap="round"
-                                      >
-                                        <path d="M18 6L6 18M6 6l12 12" />
-                                      </svg>
-                                    </button>
-                                  )}
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
-                        <button
-                          onClick={() => {
-                            void handleChooseNotesDir();
-                          }}
-                          className="h-7 w-7 flex items-center justify-center rounded-lg text-[10px] text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 transition-colors cursor-pointer shrink-0"
-                          title={t("main.notesDir.add", { defaultValue: "添加目录" })}
-                        >
-                          <svg
-                            width="12"
-                            height="12"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2.5"
-                            strokeLinecap="round"
-                          >
-                            <path d="M12 5v14M5 12h14" />
-                          </svg>
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  {settingsConfig?.tabLayout === "default" && (
-                    <div className="px-3 pb-2 shrink-0 space-y-1">
-                      <button
-                        onClick={handleNewNote}
-                        className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[12px] font-body text-bamboo hover:bg-bamboo-mist/60 transition-all cursor-pointer group"
-                      >
-                        <svg
-                          width="13"
-                          height="13"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2.5"
-                          strokeLinecap="round"
-                          className="group-hover:rotate-90 transition-transform duration-200"
-                        >
-                          <path d="M12 5v14M5 12h14" />
-                        </svg>
-                        <span>{t("main.sidebar.newNote", { defaultValue: "新建笔记" })}</span>
-                      </button>
-                      <button
-                        onClick={() => void handleImportNote()}
-                        className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[12px] font-body text-ink-faint hover:text-bamboo hover:bg-bamboo-mist/50 transition-all cursor-pointer group"
-                      >
-                        <svg
-                          width="13"
-                          height="13"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2.2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        >
-                          <path d="M12 3v12" />
-                          <path d="m7 10 5 5 5-5" />
-                          <path d="M5 21h14" />
-                        </svg>
-                        <span>
-                          {t("main.sidebar.importMarkdown", { defaultValue: "导入 Markdown" })}
-                        </span>
-                      </button>
-                    </div>
-                  )}
-
-                  <div className="flex items-center justify-between px-5 pb-1.5 shrink-0">
-                    <span className="text-[10px] text-ink-ghost font-mono tracking-wider uppercase">
-                      {t("common.noteCount", {
-                        count: filteredNotes.length,
-                        defaultValue: "{{count}} 篇笔记",
+                      <circle cx="11" cy="11" r="8" />
+                      <path d="m21 21-4.35-4.35" />
+                    </svg>
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(event) => setSearchQuery(event.target.value)}
+                      placeholder={t("main.sidebar.searchPlaceholder", {
+                        defaultValue: "搜索笔记…",
                       })}
-                      {externalFiles.length > 0
-                        ? ` · ${t("common.externalFileCount", {
-                            count: externalFiles.length,
-                            defaultValue: "{{count}} 个外部文件",
-                          })}`
-                        : ""}
-                    </span>
-                    <button
-                      onClick={() => setShowCategoryInput(true)}
-                      className="text-[10px] text-ink-ghost hover:text-bamboo transition-colors cursor-pointer"
-                      title={t("main.category.new", { defaultValue: "新建分类" })}
-                    >
-                      <svg
-                        width="12"
-                        height="12"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2.5"
-                        strokeLinecap="round"
+                      className="flex-1 text-[12px] font-body text-ink placeholder:text-ink-ghost/60 bg-transparent"
+                    />
+                    {searchQuery && (
+                      <button
+                        onClick={() => setSearchQuery("")}
+                        className="text-ink-ghost hover:text-ink-faint transition-colors cursor-pointer"
+                        title={t("main.sidebar.clearSearch", { defaultValue: "清空搜索" })}
                       >
-                        <path d="M12 5v14M5 12h14" />
-                      </svg>
-                    </button>
+                        <svg
+                          width="10"
+                          height="10"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="3"
+                          strokeLinecap="round"
+                        >
+                          <path d="M18 6L6 18M6 6l12 12" />
+                        </svg>
+                      </button>
+                    )}
                   </div>
+                </div>
+              )}
 
-                  {showCategoryInput && (
-                    <div className="px-3 pb-2 shrink-0">
-                      <input
-                        type="text"
-                        autoFocus
-                        value={categoryInputValue}
-                        onChange={(e) => setCategoryInputValue(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") void handleCreateCategory();
-                          if (e.key === "Escape") {
-                            setShowCategoryInput(false);
-                            setCategoryInputValue("");
-                          }
-                        }}
-                        onBlur={() => void handleCreateCategory()}
-                        placeholder={t("main.category.placeholder", {
-                          defaultValue: "输入分类名…",
-                        })}
-                        className="w-full px-2.5 h-7 rounded-lg text-[12px] font-body text-ink bg-paper-warm/80 border border-paper-deep/40 focus:border-bamboo/30 placeholder:text-ink-ghost/60"
-                      />
-                    </div>
-                  )}
-
-                  <div className="flex-1 overflow-y-scroll px-2 pb-2">
-                    <div className="space-y-0.5">
-                      {externalFiles.length > 0 && (
-                        <>
-                          <div className="px-3 py-1.5 text-[10px] text-ink-ghost/50 font-mono tracking-wider uppercase">
-                            {t("main.externalFiles.title", { defaultValue: "外部文件" })}
-                          </div>
-                          {externalFiles.map((file) => {
-                            const isSelected = file.id === selectedId;
-                            const isHovered = file.id === hoveredId;
-
-                            return (
-                              <button
-                                key={file.id}
-                                onClick={() => void handleSelectExternalFile(file.id)}
-                                onMouseEnter={() => setHoveredId(file.id)}
-                                onMouseLeave={() => setHoveredId(null)}
-                                className={`w-full text-left rounded-xl px-3 py-2.5 transition-all duration-[600ms] cursor-pointer group relative ${
-                                  isSelected
-                                    ? "bg-bamboo-mist/70"
-                                    : isHovered
-                                      ? "bg-paper-warm/70"
-                                      : "bg-transparent"
-                                }`}
-                              >
-                                <div
-                                  className={`absolute left-0 top-1/2 -translate-y-1/2 w-[3px] rounded-r-full bg-bamboo/60 transition-all duration-[600ms] ${
-                                    isSelected ? "h-5 opacity-100" : "h-0 opacity-0"
-                                  }`}
-                                />
-
-                                <div className="flex items-baseline justify-between mb-0.5">
-                                  <span
-                                    className={`text-[13px] font-display font-medium truncate pr-2 transition-colors flex items-center gap-1.5 ${
-                                      isSelected ? "text-bamboo" : "text-ink-soft"
-                                    }`}
-                                  >
-                                    <svg
-                                      width="12"
-                                      height="12"
-                                      viewBox="0 0 24 24"
-                                      fill="none"
-                                      stroke="currentColor"
-                                      strokeWidth="2"
-                                      strokeLinecap="round"
-                                      strokeLinejoin="round"
-                                      className="shrink-0 opacity-60"
-                                    >
-                                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                                      <polyline points="14 2 14 8 20 8" />
-                                    </svg>
-                                    {file.title}
-                                    {file.readOnly && (
-                                      <span className="text-[9px] text-ink-ghost/50 font-mono bg-paper-deep/30 px-1 rounded">
-                                        {file.mimeType
-                                          ? file.mimeType.split("/").pop()?.toUpperCase()
-                                          : "📎"}
-                                      </span>
-                                    )}
-                                  </span>
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation();
-                                      handleRemoveExternalFile(file.id);
-                                    }}
-                                    className="opacity-0 group-hover:opacity-100 text-ink-ghost hover:text-red-400 transition-all p-0.5"
-                                    title={t("main.externalFiles.remove", {
-                                      defaultValue: "从列表移除",
-                                    })}
-                                  >
-                                    <svg
-                                      width="12"
-                                      height="12"
-                                      viewBox="0 0 24 24"
-                                      fill="none"
-                                      stroke="currentColor"
-                                      strokeWidth="2"
-                                      strokeLinecap="round"
-                                    >
-                                      <line x1="18" y1="6" x2="6" y2="18" />
-                                      <line x1="6" y1="6" x2="18" y2="18" />
-                                    </svg>
-                                  </button>
-                                </div>
-
-                                <p className="text-[11px] text-ink-ghost leading-relaxed line-clamp-2 group-hover:text-ink-faint transition-colors pl-[18px]">
-                                  {file.filePath}
-                                </p>
-                              </button>
-                            );
-                          })}
-                        </>
-                      )}
-
-                      {categoryGroups.map((group: CategoryGroup) => {
-                        if (!group.category) {
-                          return (
-                            <div
-                              key="__uncategorized__"
-                              className={`rounded-lg transition-all duration-200 ${
-                                dragOverCategory === "" ? "bg-bamboo/10 ring-1 ring-bamboo/20" : ""
-                              }`}
-                              onDragOver={(e) => {
-                                e.preventDefault();
-                                e.dataTransfer.dropEffect = "move";
-                                setDragOverCategory("");
+              {sidebarTab === "directory" && (
+                <div key="dir" className="flex flex-col flex-1 min-h-0 animate-view-fade">
+                  <>
+                    {/* Notes directory selector — hidden in compact mode (moved to titlebar) */}
+                    {settingsConfig && settingsConfig?.tabLayout === "default" && (
+                      <div className="px-3 pb-1.5 shrink-0">
+                        <div className="flex items-center gap-1.5">
+                          <div className="relative flex-1 min-w-0">
+                            <button
+                              onMouseDown={(e) => e.stopPropagation()}
+                              onClick={() => {
+                                setDeleteConfirmDir(null);
+                                setNotesDirDropdownOpen((prev) => !prev);
+                                void refreshOneDrivePaths();
                               }}
-                              onDragLeave={(e) => {
-                                if (!e.currentTarget.contains(e.relatedTarget as Node)) {
-                                  setDragOverCategory(null);
-                                }
-                              }}
-                              onDrop={(e) => {
-                                e.preventDefault();
-                                setDragOverCategory(null);
-                                const noteId = e.dataTransfer.getData("text/plain");
-                                if (noteId) void handleMoveNote(noteId, "");
-                              }}
+                              className="w-full flex items-center gap-1 h-7 rounded-lg text-[11px] font-body bg-paper-warm/80 border border-paper-deep/40 pl-2.5 pr-1.5 hover:border-bamboo/30 hover:bg-cloud transition-colors cursor-pointer"
+                              title={t("main.notesDir.select", { defaultValue: "切换笔记目录" })}
                             >
-                              {group.notes.map((note) => {
-                                const isSelected = note.id === selectedId;
-                                const isHovered = note.id === hoveredId;
-                                return (
-                                  <div
-                                    key={note.id}
-                                    draggable
-                                    onDragStart={(e) => {
-                                      e.dataTransfer.setData("text/plain", note.id);
-                                      e.dataTransfer.effectAllowed = "move";
-                                    }}
-                                    onClick={() => void handleSelectNote(note.id)}
-                                    onDoubleClick={() => void handleDoubleClickNote(note.id)}
-                                    onContextMenu={(event) => handleOpenNoteMenu(event, note.id)}
-                                    onMouseEnter={() => setHoveredId(note.id)}
-                                    onMouseLeave={() => setHoveredId(null)}
-                                    className={`w-full text-left rounded-xl px-3 py-2.5 transition-all duration-[600ms] cursor-pointer group relative ${
-                                      isSelected
-                                        ? "bg-bamboo-mist/70"
-                                        : isHovered
-                                          ? "bg-paper-warm/70"
-                                          : "bg-transparent"
-                                    }`}
-                                  >
-                                    <div
-                                      className={`absolute left-0 top-1/2 -translate-y-1/2 w-[3px] rounded-r-full bg-bamboo/60 transition-all duration-[600ms] ${
-                                        isSelected ? "h-5 opacity-100" : "h-0 opacity-0"
-                                      }`}
-                                    />
-                                    <div className="flex items-baseline mb-0.5">
-                                      <div className="min-w-0 flex-1">
-                                        <span
-                                          className={`text-[13px] font-display font-medium block truncate transition-colors flex items-center gap-1.5 ${
-                                            isSelected ? "text-bamboo" : "text-ink-soft"
-                                          }`}
-                                        >
-                                          {isReadOnlyNote(note) && (
-                                            <span
-                                              className={`text-[9px] font-mono shrink-0 px-1 rounded ${getFileTypeIconColor(note)} bg-current/10`}
-                                            >
-                                              {getFileTypeLabel(note)}
-                                            </span>
-                                          )}
-                                          {getDisplayTitle(note, t)}
-                                        </span>
-                                        {note.fileStem &&
-                                          note.title &&
-                                          note.title !== note.fileStem && (
-                                            <span className="text-[10px] text-ink-ghost/50 font-mono block truncate mt-0.5">
-                                              {note.fileStem}
-                                            </span>
-                                          )}
-                                      </div>
-                                    </div>
-                                    <p className="text-[11px] text-ink-ghost leading-relaxed line-clamp-2 group-hover:text-ink-faint transition-colors">
-                                      {note.preview ||
-                                        t("common.blankNote", { defaultValue: "空白笔记" })}
-                                    </p>
-                                    <div className="flex items-center gap-2 mt-1">
-                                      <span className="text-[10px] text-ink-ghost/60 font-mono tabular-nums">
-                                        {formatShortDate(note.updatedAt)}{" "}
-                                        {formatTime(note.updatedAt)}
-                                      </span>
-                                      <span className="text-[10px] text-ink-ghost/40">·</span>
-                                      <span className="text-[10px] text-ink-ghost/60 font-mono tabular-nums">
-                                        {t("common.wordCount", {
-                                          count: note.wordCount,
-                                          defaultValue: "{{count}} 字",
-                                        })}
-                                      </span>
-                                    </div>
-                                  </div>
-                                );
-                              })}
-                            </div>
-                          );
-                        }
-
-                        const isCollapsed = collapsedCategories.has(group.category);
-
-                        return (
-                          <div key={group.category} className="mb-0.5">
-                            <div
-                              className={`flex items-center gap-1.5 pl-2 pr-3 py-2 rounded-xl group/cat cursor-pointer select-none transition-all duration-[600ms] ${
-                                dragOverCategory === group.category
-                                  ? "bg-bamboo/10 ring-1 ring-bamboo/20"
-                                  : isCollapsed
-                                    ? "hover:bg-paper-warm/70"
-                                    : "bg-bamboo-mist/30"
-                              }`}
-                              onClick={() => toggleCategoryCollapse(group.category)}
-                              onContextMenu={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                setCategoryMenu({
-                                  x: e.clientX,
-                                  y: e.clientY,
-                                  category: group.category,
-                                });
-                                setCategoryMenuClosing(false);
-                                setCategoryMenuConfirmDelete(false);
-                              }}
-                              onDragOver={(e) => {
-                                e.preventDefault();
-                                e.dataTransfer.dropEffect = "move";
-                                setDragOverCategory(group.category);
-                              }}
-                              onDragLeave={() => setDragOverCategory(null)}
-                              onDrop={(e) => {
-                                e.preventDefault();
-                                setDragOverCategory(null);
-                                const noteId = e.dataTransfer.getData("text/plain");
-                                if (noteId) void handleMoveNote(noteId, group.category);
-                              }}
-                            >
+                              <span className="flex-1 truncate text-left text-ink-faint">
+                                {displayPathLabel(settingsConfig.notesDir)}
+                              </span>
                               <svg
                                 width="10"
                                 height="10"
@@ -2576,56 +2216,335 @@ export function MainWindow({
                                 strokeWidth="2.5"
                                 strokeLinecap="round"
                                 strokeLinejoin="round"
-                                className={`text-bamboo/50 shrink-0 transition-transform duration-200 ${isCollapsed ? "" : "rotate-90"}`}
+                                className={`text-ink-ghost shrink-0 transition-transform duration-200 ${notesDirDropdownOpen ? "rotate-180" : ""}`}
                               >
-                                <polyline points="9 18 15 12 9 6" />
+                                <polyline points="6 9 12 15 18 9" />
                               </svg>
-                              <svg
-                                width="12"
-                                height="12"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                strokeWidth="2"
-                                strokeLinecap="round"
-                                strokeLinejoin="round"
-                                className="text-bamboo/50 shrink-0"
-                              >
-                                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-                              </svg>
-                              {renamingCategory === group.category ? (
-                                <input
-                                  type="text"
-                                  autoFocus
-                                  value={renameCategoryValue}
-                                  onChange={(e) => setRenameCategoryValue(e.target.value)}
-                                  onKeyDown={(e) => {
-                                    e.stopPropagation();
-                                    if (e.key === "Enter")
-                                      void handleRenameCategory(group.category);
-                                    if (e.key === "Escape") setRenamingCategory(null);
-                                  }}
-                                  onBlur={() => void handleRenameCategory(group.category)}
-                                  onClick={(e) => e.stopPropagation()}
-                                  className="flex-1 min-w-0 px-1 text-[10px] font-mono text-ink bg-paper-warm/80 border border-bamboo/30 rounded"
-                                />
-                              ) : (
-                                <span className="text-[11px] text-bamboo/70 font-medium truncate">
-                                  {group.category}
-                                </span>
+                            </button>
+                            <div
+                              onMouseDown={(e) => e.stopPropagation()}
+                              className={`absolute top-full left-0 right-0 mt-1 z-[9999] bg-cloud border border-paper-deep/40 rounded-xl shadow-lg overflow-hidden py-1 transition-all duration-200 origin-top ${notesDirDropdownOpen ? "opacity-100 scale-y-100" : "opacity-0 scale-y-95 pointer-events-none"}`}
+                            >
+                              {(settingsConfig.notesDirs ?? [settingsConfig.notesDir]).map(
+                                (dir) => {
+                                  const isCurrent = dir === settingsConfig.notesDir;
+                                  return (
+                                    <div key={dir} className="flex items-center">
+                                      {deleteConfirmDir === dir ? (
+                                        <div className="flex-1">
+                                          <div className="px-3 py-1.5 text-[10px] font-body text-ink-faint border-b border-paper-deep/20">
+                                            {t("main.notesDir.confirmDelete", {
+                                              path: displayPathLabel(dir),
+                                              defaultValue: "确认删除「{{path}}」？",
+                                            })}
+                                          </div>
+                                          <div className="flex">
+                                            <button
+                                              onClick={() => void handleDeleteNotesDir(dir)}
+                                              className="flex-1 text-center px-2 py-1.5 text-[11px] font-body text-red-400 hover:bg-danger-bg hover:text-red-500 transition-colors cursor-pointer"
+                                            >
+                                              {t("main.notesDir.confirmDeleteAction", {
+                                                defaultValue: "确认删除",
+                                              })}
+                                            </button>
+                                            <button
+                                              onClick={() => setDeleteConfirmDir(null)}
+                                              className="flex-1 text-center px-2 py-1.5 text-[11px] font-body text-ink-soft hover:bg-paper-warm transition-colors cursor-pointer"
+                                            >
+                                              {t("common.cancel", { defaultValue: "取消" })}
+                                            </button>
+                                          </div>
+                                        </div>
+                                      ) : (
+                                        <button
+                                          onClick={() => {
+                                            setNotesDirDropdownOpen(false);
+                                            void switchNotesDir(dir);
+                                          }}
+                                          className={`flex-1 text-left truncate px-3 py-1.5 text-[11px] font-mono transition-colors cursor-pointer ${
+                                            isCurrent
+                                              ? "text-bamboo font-medium bg-bamboo-mist/30"
+                                              : "text-ink-faint hover:text-ink-soft hover:bg-paper-warm/60"
+                                          }`}
+                                        >
+                                          <span className="flex items-center gap-1.5">
+                                            {oneDriveSyncedPaths.includes(dir) && (
+                                              <svg
+                                                width="11"
+                                                height="11"
+                                                viewBox="0 0 24 24"
+                                                fill="none"
+                                                stroke="currentColor"
+                                                strokeWidth="1.7"
+                                                strokeLinecap="round"
+                                                strokeLinejoin="round"
+                                                className="shrink-0 opacity-60"
+                                              >
+                                                <path d="M6.5 17.5c-2.3-.5-4-2.5-4-4.9 0-3 2.3-5 5-4.8.8-2.7 3.3-4.5 6.1-4.1a5.2 5.2 0 0 1 3.6 2.1c2.7.2 4.8 2.6 4.8 5.3 0 2.3-1.3 4.2-3.2 5.1" />
+                                                <path d="M9 19a3 3 0 0 0 6 0" />
+                                                <path d="M12 16v3" />
+                                              </svg>
+                                            )}
+                                            {displayPathLabel(dir)}
+                                          </span>
+                                        </button>
+                                      )}
+                                      {!isCurrent && deleteConfirmDir !== dir && (
+                                        <button
+                                          onClick={() => setDeleteConfirmDir(dir)}
+                                          className="shrink-0 w-6 h-6 flex items-center justify-center opacity-30 hover:opacity-100 text-ink-ghost hover:text-red-400 hover:bg-danger-bg rounded transition-all cursor-pointer mr-0.5"
+                                          title={t("common.delete", { defaultValue: "删除" })}
+                                        >
+                                          <svg
+                                            width="10"
+                                            height="10"
+                                            viewBox="0 0 24 24"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            strokeWidth="2.5"
+                                            strokeLinecap="round"
+                                          >
+                                            <path d="M18 6L6 18M6 6l12 12" />
+                                          </svg>
+                                        </button>
+                                      )}
+                                    </div>
+                                  );
+                                },
                               )}
-                              <span className="text-[9px] text-bamboo/40 font-mono ml-auto shrink-0">
-                                {group.notes.length}
-                              </span>
                             </div>
+                          </div>
+                          <button
+                            onClick={() => {
+                              void handleChooseNotesDir();
+                            }}
+                            className="h-7 w-7 flex items-center justify-center rounded-lg text-[10px] text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 transition-colors cursor-pointer shrink-0"
+                            title={t("main.notesDir.add", { defaultValue: "添加目录" })}
+                          >
+                            <svg
+                              width="12"
+                              height="12"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2.5"
+                              strokeLinecap="round"
+                            >
+                              <path d="M12 5v14M5 12h14" />
+                            </svg>
+                          </button>
+                        </div>
+                      </div>
+                    )}
 
-                            <div className={`category-body ${isCollapsed ? "" : "expanded"}`}>
+                    {settingsConfig?.tabLayout === "default" && (
+                      <div className="px-3 pb-2 shrink-0 space-y-1">
+                        <button
+                          onClick={handleNewNote}
+                          className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[12px] font-body text-bamboo hover:bg-bamboo-mist/60 transition-all cursor-pointer group"
+                        >
+                          <svg
+                            width="13"
+                            height="13"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2.5"
+                            strokeLinecap="round"
+                            className="group-hover:rotate-90 transition-transform duration-200"
+                          >
+                            <path d="M12 5v14M5 12h14" />
+                          </svg>
+                          <span>{t("main.sidebar.newNote", { defaultValue: "新建笔记" })}</span>
+                        </button>
+                        <button
+                          onClick={() => void handleImportNote()}
+                          className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[12px] font-body text-ink-faint hover:text-bamboo hover:bg-bamboo-mist/50 transition-all cursor-pointer group"
+                        >
+                          <svg
+                            width="13"
+                            height="13"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2.2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <path d="M12 3v12" />
+                            <path d="m7 10 5 5 5-5" />
+                            <path d="M5 21h14" />
+                          </svg>
+                          <span>
+                            {t("main.sidebar.importMarkdown", { defaultValue: "导入 Markdown" })}
+                          </span>
+                        </button>
+                      </div>
+                    )}
+
+                    <div className="flex items-center justify-between px-5 pb-1.5 shrink-0">
+                      <span className="text-[10px] text-ink-ghost font-mono tracking-wider uppercase">
+                        {t("common.noteCount", {
+                          count: filteredNotes.length,
+                          defaultValue: "{{count}} 篇笔记",
+                        })}
+                        {externalFiles.length > 0
+                          ? ` · ${t("common.externalFileCount", {
+                              count: externalFiles.length,
+                              defaultValue: "{{count}} 个外部文件",
+                            })}`
+                          : ""}
+                      </span>
+                      <button
+                        onClick={() => setShowCategoryInput(true)}
+                        className="text-[10px] text-ink-ghost hover:text-bamboo transition-colors cursor-pointer"
+                        title={t("main.category.new", { defaultValue: "新建分类" })}
+                      >
+                        <svg
+                          width="12"
+                          height="12"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2.5"
+                          strokeLinecap="round"
+                        >
+                          <path d="M12 5v14M5 12h14" />
+                        </svg>
+                      </button>
+                    </div>
+
+                    {showCategoryInput && (
+                      <div className="px-3 pb-2 shrink-0">
+                        <input
+                          type="text"
+                          autoFocus
+                          value={categoryInputValue}
+                          onChange={(e) => setCategoryInputValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") void handleCreateCategory();
+                            if (e.key === "Escape") {
+                              setShowCategoryInput(false);
+                              setCategoryInputValue("");
+                            }
+                          }}
+                          onBlur={() => void handleCreateCategory()}
+                          placeholder={t("main.category.placeholder", {
+                            defaultValue: "输入分类名…",
+                          })}
+                          className="w-full px-2.5 h-7 rounded-lg text-[12px] font-body text-ink bg-paper-warm/80 border border-paper-deep/40 focus:border-bamboo/30 placeholder:text-ink-ghost/60"
+                        />
+                      </div>
+                    )}
+
+                    <div className="flex-1 overflow-y-scroll px-2 pb-2">
+                      <div className="space-y-0.5">
+                        {externalFiles.length > 0 && (
+                          <>
+                            <div className="px-3 py-1.5 text-[10px] text-ink-ghost/50 font-mono tracking-wider uppercase">
+                              {t("main.externalFiles.title", { defaultValue: "外部文件" })}
+                            </div>
+                            {externalFiles.map((file) => {
+                              const isSelected = file.id === selectedId;
+                              const isHovered = file.id === hoveredId;
+
+                              return (
+                                <button
+                                  key={file.id}
+                                  onClick={() => void handleSelectExternalFile(file.id)}
+                                  onMouseEnter={() => setHoveredId(file.id)}
+                                  onMouseLeave={() => setHoveredId(null)}
+                                  className={`w-full text-left rounded-xl px-3 py-2.5 transition-all duration-[600ms] cursor-pointer group relative ${
+                                    isSelected
+                                      ? "bg-bamboo-mist/70"
+                                      : isHovered
+                                        ? "bg-paper-warm/70"
+                                        : "bg-transparent"
+                                  }`}
+                                >
+                                  <div
+                                    className={`absolute left-0 top-1/2 -translate-y-1/2 w-[3px] rounded-r-full bg-bamboo/60 transition-all duration-[600ms] ${
+                                      isSelected ? "h-5 opacity-100" : "h-0 opacity-0"
+                                    }`}
+                                  />
+
+                                  <div className="flex items-baseline justify-between mb-0.5">
+                                    <span
+                                      className={`text-[13px] font-display font-medium truncate pr-2 transition-colors flex items-center gap-1.5 ${
+                                        isSelected ? "text-bamboo" : "text-ink-soft"
+                                      }`}
+                                    >
+                                      <svg
+                                        width="12"
+                                        height="12"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeWidth="2"
+                                        strokeLinecap="round"
+                                        strokeLinejoin="round"
+                                        className="shrink-0 opacity-60"
+                                      >
+                                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                                        <polyline points="14 2 14 8 20 8" />
+                                      </svg>
+                                      {file.title}
+                                      {file.readOnly && (
+                                        <span className="text-[9px] text-ink-ghost/50 font-mono bg-paper-deep/30 px-1 rounded">
+                                          {file.mimeType
+                                            ? file.mimeType.split("/").pop()?.toUpperCase()
+                                            : "📎"}
+                                        </span>
+                                      )}
+                                    </span>
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        handleRemoveExternalFile(file.id);
+                                      }}
+                                      className="opacity-0 group-hover:opacity-100 text-ink-ghost hover:text-red-400 transition-all p-0.5"
+                                      title={t("main.externalFiles.remove", {
+                                        defaultValue: "从列表移除",
+                                      })}
+                                    >
+                                      <svg
+                                        width="12"
+                                        height="12"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeWidth="2"
+                                        strokeLinecap="round"
+                                      >
+                                        <line x1="18" y1="6" x2="6" y2="18" />
+                                        <line x1="6" y1="6" x2="18" y2="18" />
+                                      </svg>
+                                    </button>
+                                  </div>
+
+                                  <p className="text-[11px] text-ink-ghost leading-relaxed line-clamp-2 group-hover:text-ink-faint transition-colors pl-[18px]">
+                                    {file.filePath}
+                                  </p>
+                                </button>
+                              );
+                            })}
+                          </>
+                        )}
+
+                        {categoryGroups.map((group: CategoryGroup) => {
+                          if (!group.category) {
+                            return (
                               <div
-                                className="category-body-inner relative ml-[14px] pl-3 border-l-[1.5px] border-bamboo/15 pt-0.5 pb-0.5"
+                                key="__uncategorized__"
+                                className={`rounded-lg transition-all duration-200 ${
+                                  dragOverCategory === ""
+                                    ? "bg-bamboo/10 ring-1 ring-bamboo/20"
+                                    : ""
+                                }`}
                                 onDragOver={(e) => {
                                   e.preventDefault();
                                   e.dataTransfer.dropEffect = "move";
-                                  setDragOverCategory(group.category);
+                                  setDragOverCategory("");
                                 }}
                                 onDragLeave={(e) => {
                                   if (!e.currentTarget.contains(e.relatedTarget as Node)) {
@@ -2636,364 +2555,384 @@ export function MainWindow({
                                   e.preventDefault();
                                   setDragOverCategory(null);
                                   const noteId = e.dataTransfer.getData("text/plain");
+                                  if (noteId) void handleMoveNote(noteId, "");
+                                }}
+                              >
+                                {group.notes.map((note) => {
+                                  const isSelected = note.id === selectedId;
+                                  const isHovered = note.id === hoveredId;
+                                  return (
+                                    <div
+                                      key={note.id}
+                                      draggable
+                                      onDragStart={(e) => {
+                                        e.dataTransfer.setData("text/plain", note.id);
+                                        e.dataTransfer.effectAllowed = "move";
+                                      }}
+                                      onClick={() => void handleSelectNote(note.id)}
+                                      onDoubleClick={() => void handleDoubleClickNote(note.id)}
+                                      onContextMenu={(event) => handleOpenNoteMenu(event, note.id)}
+                                      onMouseEnter={() => setHoveredId(note.id)}
+                                      onMouseLeave={() => setHoveredId(null)}
+                                      className={`w-full text-left rounded-xl px-3 py-2.5 transition-all duration-[600ms] cursor-pointer group relative ${
+                                        isSelected
+                                          ? "bg-bamboo-mist/70"
+                                          : isHovered
+                                            ? "bg-paper-warm/70"
+                                            : "bg-transparent"
+                                      }`}
+                                    >
+                                      <div
+                                        className={`absolute left-0 top-1/2 -translate-y-1/2 w-[3px] rounded-r-full bg-bamboo/60 transition-all duration-[600ms] ${
+                                          isSelected ? "h-5 opacity-100" : "h-0 opacity-0"
+                                        }`}
+                                      />
+                                      <div className="flex items-baseline mb-0.5">
+                                        <div className="min-w-0 flex-1">
+                                          <span
+                                            className={`text-[13px] font-display font-medium block truncate transition-colors flex items-center gap-1.5 ${
+                                              isSelected ? "text-bamboo" : "text-ink-soft"
+                                            }`}
+                                          >
+                                            {isReadOnlyNote(note) && (
+                                              <span
+                                                className={`text-[9px] font-mono shrink-0 px-1 rounded ${getFileTypeIconColor(note)} bg-current/10`}
+                                              >
+                                                {getFileTypeLabel(note)}
+                                              </span>
+                                            )}
+                                            {getDisplayTitle(note, t)}
+                                          </span>
+                                          {note.fileStem &&
+                                            note.title &&
+                                            note.title !== note.fileStem && (
+                                              <span className="text-[10px] text-ink-ghost/50 font-mono block truncate mt-0.5">
+                                                {note.fileStem}
+                                              </span>
+                                            )}
+                                        </div>
+                                      </div>
+                                      <p className="text-[11px] text-ink-ghost leading-relaxed line-clamp-2 group-hover:text-ink-faint transition-colors">
+                                        {note.preview ||
+                                          t("common.blankNote", { defaultValue: "空白笔记" })}
+                                      </p>
+                                      <div className="flex items-center gap-2 mt-1">
+                                        <span className="text-[10px] text-ink-ghost/60 font-mono tabular-nums">
+                                          {formatShortDate(note.updatedAt)}{" "}
+                                          {formatTime(note.updatedAt)}
+                                        </span>
+                                        <span className="text-[10px] text-ink-ghost/40">·</span>
+                                        <span className="text-[10px] text-ink-ghost/60 font-mono tabular-nums">
+                                          {t("common.wordCount", {
+                                            count: note.wordCount,
+                                            defaultValue: "{{count}} 字",
+                                          })}
+                                        </span>
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            );
+                          }
+
+                          const isCollapsed = collapsedCategories.has(group.category);
+
+                          return (
+                            <div key={group.category} className="mb-0.5">
+                              <div
+                                className={`flex items-center gap-1.5 pl-2 pr-3 py-2 rounded-xl group/cat cursor-pointer select-none transition-all duration-[600ms] ${
+                                  dragOverCategory === group.category
+                                    ? "bg-bamboo/10 ring-1 ring-bamboo/20"
+                                    : isCollapsed
+                                      ? "hover:bg-paper-warm/70"
+                                      : "bg-bamboo-mist/30"
+                                }`}
+                                onClick={() => toggleCategoryCollapse(group.category)}
+                                onContextMenu={(e) => {
+                                  e.preventDefault();
+                                  e.stopPropagation();
+                                  setCategoryMenu({
+                                    x: e.clientX,
+                                    y: e.clientY,
+                                    category: group.category,
+                                  });
+                                  setCategoryMenuClosing(false);
+                                  setCategoryMenuConfirmDelete(false);
+                                }}
+                                onDragOver={(e) => {
+                                  e.preventDefault();
+                                  e.dataTransfer.dropEffect = "move";
+                                  setDragOverCategory(group.category);
+                                }}
+                                onDragLeave={() => setDragOverCategory(null)}
+                                onDrop={(e) => {
+                                  e.preventDefault();
+                                  setDragOverCategory(null);
+                                  const noteId = e.dataTransfer.getData("text/plain");
                                   if (noteId) void handleMoveNote(noteId, group.category);
                                 }}
                               >
-                                {group.notes.length === 0 ? (
-                                  <div className="px-2 py-3 text-center text-[11px] text-ink-ghost/50">
-                                    {t("main.category.emptyFolder", { defaultValue: "空文件夹" })}
-                                  </div>
+                                <svg
+                                  width="10"
+                                  height="10"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth="2.5"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  className={`text-bamboo/50 shrink-0 transition-transform duration-200 ${isCollapsed ? "" : "rotate-90"}`}
+                                >
+                                  <polyline points="9 18 15 12 9 6" />
+                                </svg>
+                                <svg
+                                  width="12"
+                                  height="12"
+                                  viewBox="0 0 24 24"
+                                  fill="none"
+                                  stroke="currentColor"
+                                  strokeWidth="2"
+                                  strokeLinecap="round"
+                                  strokeLinejoin="round"
+                                  className="text-bamboo/50 shrink-0"
+                                >
+                                  <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                                </svg>
+                                {renamingCategory === group.category ? (
+                                  <input
+                                    type="text"
+                                    autoFocus
+                                    value={renameCategoryValue}
+                                    onChange={(e) => setRenameCategoryValue(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      e.stopPropagation();
+                                      if (e.key === "Enter")
+                                        void handleRenameCategory(group.category);
+                                      if (e.key === "Escape") setRenamingCategory(null);
+                                    }}
+                                    onBlur={() => void handleRenameCategory(group.category)}
+                                    onClick={(e) => e.stopPropagation()}
+                                    className="flex-1 min-w-0 px-1 text-[10px] font-mono text-ink bg-paper-warm/80 border border-bamboo/30 rounded"
+                                  />
                                 ) : (
-                                  group.notes.map((note) => {
-                                    const isSelected = note.id === selectedId;
-                                    const isHovered = note.id === hoveredId;
+                                  <span className="text-[11px] text-bamboo/70 font-medium truncate">
+                                    {group.category}
+                                  </span>
+                                )}
+                                <span className="text-[9px] text-bamboo/40 font-mono ml-auto shrink-0">
+                                  {group.notes.length}
+                                </span>
+                              </div>
 
-                                    return (
-                                      <div
-                                        key={note.id}
-                                        draggable
-                                        onDragStart={(e) => {
-                                          e.dataTransfer.setData("text/plain", note.id);
-                                          e.dataTransfer.effectAllowed = "move";
-                                        }}
-                                        onClick={() => void handleSelectNote(note.id)}
-                                        onDoubleClick={() => void handleDoubleClickNote(note.id)}
-                                        onContextMenu={(event) =>
-                                          handleOpenNoteMenu(event, note.id)
-                                        }
-                                        onMouseEnter={() => setHoveredId(note.id)}
-                                        onMouseLeave={() => setHoveredId(null)}
-                                        className={`w-full text-left rounded-xl px-3 py-2.5 transition-all duration-[600ms] cursor-pointer group relative ${
-                                          isSelected
-                                            ? "bg-bamboo-mist/70"
-                                            : isHovered
-                                              ? "bg-paper-warm/70"
-                                              : "bg-transparent"
-                                        }`}
-                                      >
+                              <div className={`category-body ${isCollapsed ? "" : "expanded"}`}>
+                                <div
+                                  className="category-body-inner relative ml-[14px] pl-3 border-l-[1.5px] border-bamboo/15 pt-0.5 pb-0.5"
+                                  onDragOver={(e) => {
+                                    e.preventDefault();
+                                    e.dataTransfer.dropEffect = "move";
+                                    setDragOverCategory(group.category);
+                                  }}
+                                  onDragLeave={(e) => {
+                                    if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                                      setDragOverCategory(null);
+                                    }
+                                  }}
+                                  onDrop={(e) => {
+                                    e.preventDefault();
+                                    setDragOverCategory(null);
+                                    const noteId = e.dataTransfer.getData("text/plain");
+                                    if (noteId) void handleMoveNote(noteId, group.category);
+                                  }}
+                                >
+                                  {group.notes.length === 0 ? (
+                                    <div className="px-2 py-3 text-center text-[11px] text-ink-ghost/50">
+                                      {t("main.category.emptyFolder", { defaultValue: "空文件夹" })}
+                                    </div>
+                                  ) : (
+                                    group.notes.map((note) => {
+                                      const isSelected = note.id === selectedId;
+                                      const isHovered = note.id === hoveredId;
+
+                                      return (
                                         <div
-                                          className={`absolute left-0 top-1/2 -translate-y-1/2 w-[3px] rounded-r-full bg-bamboo/60 transition-all duration-[600ms] ${
-                                            isSelected ? "h-5 opacity-100" : "h-0 opacity-0"
+                                          key={note.id}
+                                          draggable
+                                          onDragStart={(e) => {
+                                            e.dataTransfer.setData("text/plain", note.id);
+                                            e.dataTransfer.effectAllowed = "move";
+                                          }}
+                                          onClick={() => void handleSelectNote(note.id)}
+                                          onDoubleClick={() => void handleDoubleClickNote(note.id)}
+                                          onContextMenu={(event) =>
+                                            handleOpenNoteMenu(event, note.id)
+                                          }
+                                          onMouseEnter={() => setHoveredId(note.id)}
+                                          onMouseLeave={() => setHoveredId(null)}
+                                          className={`w-full text-left rounded-xl px-3 py-2.5 transition-all duration-[600ms] cursor-pointer group relative ${
+                                            isSelected
+                                              ? "bg-bamboo-mist/70"
+                                              : isHovered
+                                                ? "bg-paper-warm/70"
+                                                : "bg-transparent"
                                           }`}
-                                        />
+                                        >
+                                          <div
+                                            className={`absolute left-0 top-1/2 -translate-y-1/2 w-[3px] rounded-r-full bg-bamboo/60 transition-all duration-[600ms] ${
+                                              isSelected ? "h-5 opacity-100" : "h-0 opacity-0"
+                                            }`}
+                                          />
 
-                                        <div className="flex items-baseline mb-0.5">
-                                          <div className="min-w-0 flex-1">
-                                            <span
-                                              className={`text-[13px] font-display font-medium block truncate transition-colors flex items-center gap-1.5 ${
-                                                isSelected ? "text-bamboo" : "text-ink-soft"
-                                              }`}
-                                            >
-                                              {isReadOnlyNote(note) && (
-                                                <span
-                                                  className={`text-[9px] font-mono shrink-0 px-1 rounded ${getFileTypeIconColor(note)} bg-current/10`}
-                                                >
-                                                  {getFileTypeLabel(note)}
-                                                </span>
-                                              )}
-                                              {getDisplayTitle(note, t)}
+                                          <div className="flex items-baseline mb-0.5">
+                                            <div className="min-w-0 flex-1">
+                                              <span
+                                                className={`text-[13px] font-display font-medium block truncate transition-colors flex items-center gap-1.5 ${
+                                                  isSelected ? "text-bamboo" : "text-ink-soft"
+                                                }`}
+                                              >
+                                                {isReadOnlyNote(note) && (
+                                                  <span
+                                                    className={`text-[9px] font-mono shrink-0 px-1 rounded ${getFileTypeIconColor(note)} bg-current/10`}
+                                                  >
+                                                    {getFileTypeLabel(note)}
+                                                  </span>
+                                                )}
+                                                {getDisplayTitle(note, t)}
+                                              </span>
+                                              {note.fileStem &&
+                                                note.title &&
+                                                note.title !== note.fileStem && (
+                                                  <span className="text-[10px] text-ink-ghost/50 font-mono block truncate mt-0.5">
+                                                    {note.fileStem}
+                                                  </span>
+                                                )}
+                                            </div>
+                                          </div>
+
+                                          <p className="text-[11px] text-ink-ghost leading-relaxed line-clamp-2 group-hover:text-ink-faint transition-colors">
+                                            {note.preview ||
+                                              t("common.blankNote", { defaultValue: "空白笔记" })}
+                                          </p>
+
+                                          <div className="flex items-center gap-2 mt-1">
+                                            <span className="text-[10px] text-ink-ghost/60 font-mono tabular-nums">
+                                              {formatShortDate(note.updatedAt)}{" "}
+                                              {formatTime(note.updatedAt)}
                                             </span>
-                                            {note.fileStem &&
-                                              note.title &&
-                                              note.title !== note.fileStem && (
-                                                <span className="text-[10px] text-ink-ghost/50 font-mono block truncate mt-0.5">
-                                                  {note.fileStem}
-                                                </span>
-                                              )}
+                                            <span className="text-[10px] text-ink-ghost/40">·</span>
+                                            <span className="text-[10px] text-ink-ghost/60 font-mono tabular-nums">
+                                              {t("common.wordCount", {
+                                                count: note.wordCount,
+                                                defaultValue: "{{count}} 字",
+                                              })}
+                                            </span>
                                           </div>
                                         </div>
-
-                                        <p className="text-[11px] text-ink-ghost leading-relaxed line-clamp-2 group-hover:text-ink-faint transition-colors">
-                                          {note.preview ||
-                                            t("common.blankNote", { defaultValue: "空白笔记" })}
-                                        </p>
-
-                                        <div className="flex items-center gap-2 mt-1">
-                                          <span className="text-[10px] text-ink-ghost/60 font-mono tabular-nums">
-                                            {formatShortDate(note.updatedAt)}{" "}
-                                            {formatTime(note.updatedAt)}
-                                          </span>
-                                          <span className="text-[10px] text-ink-ghost/40">·</span>
-                                          <span className="text-[10px] text-ink-ghost/60 font-mono tabular-nums">
-                                            {t("common.wordCount", {
-                                              count: note.wordCount,
-                                              defaultValue: "{{count}} 字",
-                                            })}
-                                          </span>
-                                        </div>
-                                      </div>
-                                    );
-                                  })
-                                )}
+                                      );
+                                    })
+                                  )}
+                                </div>
                               </div>
                             </div>
+                          );
+                        })}
+
+                        {!isLoading && filteredNotes.length === 0 && externalFiles.length === 0 && (
+                          <div className="px-3 py-8 text-center text-[12px] text-ink-ghost leading-relaxed">
+                            {searchQuery
+                              ? t("main.search.noResults", { defaultValue: "没有匹配的笔记" })
+                              : t("main.search.empty", { defaultValue: "还没有笔记" })}
                           </div>
-                        );
-                      })}
-
-                      {!isLoading && filteredNotes.length === 0 && externalFiles.length === 0 && (
-                        <div className="px-3 py-8 text-center text-[12px] text-ink-ghost leading-relaxed">
-                          {searchQuery
-                            ? t("main.search.noResults", { defaultValue: "没有匹配的笔记" })
-                            : t("main.search.empty", { defaultValue: "还没有笔记" })}
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </>
-              </div>
-            )}
-
-            {sidebarTab === "outline" && selectedId && (
-              <div key="outline" className="flex flex-col flex-1 min-h-0 animate-view-fade">
-                <OutlinePanel
-                  headings={headings}
-                  onJumpTo={handleJumpToHeading}
-                  emptyText={t("main.outline.empty", { defaultValue: "当前文档暂无标题" })}
-                />
-              </div>
-            )}
-
-            {sidebarTab === "git" && savedNotesDir && (
-              <div key="git" className="flex flex-col flex-1 min-h-0 animate-view-fade">
-                <GitPanel
-                  repoPath={savedNotesDir}
-                  onRefresh={() => {
-                    void refreshNotes();
-                  }}
-                />
-              </div>
-            )}
-          </div>
-
-          {!sidebarCollapsed && (
-            <div
-              className={`w-1 shrink-0 cursor-col-resize group relative ${isResizingSidebar ? "bg-bamboo/30" : "hover:bg-bamboo/20"} transition-colors`}
-              onMouseDown={(e) => {
-                e.preventDefault();
-                setIsResizingSidebar(true);
-              }}
-            >
-              <div
-                className={`absolute inset-y-0 -left-1 -right-1 ${isResizingSidebar ? "" : "group-hover:bg-bamboo/5"}`}
-              />
-            </div>
-          )}
-
-          <div className="flex-1 flex flex-col min-w-0">
-            <div
-              className="grid transition-[grid-template-rows] duration-300 ease-in-out"
-              style={{
-                gridTemplateRows: settingsConfig?.tabLayout === "default" ? "1fr" : "0fr",
-              }}
-            >
-              <div className="overflow-hidden">
-                <TabBar
-                  tabs={displayTabs}
-                  activeTabId={settingsTabActive ? "__settings__" : activeTabId}
-                  onSelectTab={(noteId) => {
-                    if (noteId === "__settings__") return;
-                    setSettingsTabActive(false);
-                    flushActiveTab();
-                    void openTab(noteId);
-                  }}
-                  onCloseTab={(noteId) => {
-                    if (noteId === "__settings__") {
-                      setSettingsTabActive(false);
-                      return;
-                    }
-                    void closeTab(noteId);
-                  }}
-                  onNewTab={() => void handleNewNote()}
-                  onTabMenuAction={(action, noteId) => void handleTabMenuAction(action, noteId)}
-                />
-              </div>
-            </div>
-            {settingsTabActive && settingsConfig ? (
-              <SettingsTab
-                config={settingsConfig}
-                onChange={handleSettingsChange}
-                onChooseNotesDir={() => void handleChooseNotesDir()}
-              />
-            ) : (
-              <>
-                <div className="flex items-center justify-between px-4 h-10 border-b border-paper-deep/20 shrink-0 bg-paper/20">
-                  <div className="flex items-center gap-1">
-                    <button
-                      onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-                      className="w-7 h-7 flex items-center justify-center rounded-lg text-ink-ghost hover:text-ink-faint hover:bg-paper-warm transition-all cursor-pointer"
-                      title={
-                        sidebarCollapsed
-                          ? t("main.window.expandSidebar", { defaultValue: "展开侧栏" })
-                          : t("main.window.collapseSidebar", { defaultValue: "收起侧栏" })
-                      }
-                    >
-                      <svg
-                        width="14"
-                        height="14"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
-                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                        <line x1="9" y1="3" x2="9" y2="21" />
-                      </svg>
-                    </button>
-
-                    <div className="h-4 w-px bg-paper-deep/30 mx-1" />
-
-                    <button
-                      onClick={() => void handlePinEntry()}
-                      disabled={!selectedId}
-                      aria-label={pinTileButtonTitle(selectedTilePinned)}
-                      className={`w-7 h-7 flex items-center justify-center rounded-lg transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed ${
-                        selectedTilePinned
-                          ? "text-bamboo bg-bamboo-mist/40 hover:text-red-400 hover:bg-danger-bg"
-                          : "text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50"
-                      }`}
-                      title={pinTileButtonTitle(selectedTilePinned)}
-                    >
-                      <svg
-                        width="13"
-                        height="13"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                      >
-                        <path d="M12 17v5" />
-                        <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 1 1 0 0 0 1-1V4a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v1a1 1 0 0 0 1 1 1 1 0 0 1 1 1z" />
-                      </svg>
-                    </button>
-
-                    <button
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={handleUndo}
-                      disabled={!selectedId}
-                      className="w-7 h-7 flex items-center justify-center rounded-lg text-ink-ghost hover:text-ink-faint hover:bg-paper-warm transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-                      title={t("main.editor.undo", { defaultValue: "撤销（Ctrl+Z）" })}
-                      aria-label={t("main.editor.undoLabel", { defaultValue: "撤销" })}
-                    >
-                      <svg
-                        data-testid="main-editor-undo-icon"
-                        width="14"
-                        height="14"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
-                        aria-hidden="true"
-                      >
-                        <path d="M9 14 4 9l5-5" />
-                        <path d="M4 9h10a6 6 0 0 1 0 12h-1" />
-                      </svg>
-                    </button>
-
-                    <button
-                      onClick={() => void saveCurrentNote()}
-                      disabled={!selectedId || saveState === "saving"}
-                      className="px-2.5 h-7 flex items-center justify-center rounded-lg text-[11px] text-ink-ghost hover:text-ink-faint hover:bg-paper-warm transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-                      title={t("common.save", { defaultValue: "保存" })}
-                    >
-                      {t("common.save", { defaultValue: "保存" })}
-                    </button>
-
-                    {deleteConfirm ? (
-                      <div
-                        className={`flex items-center gap-1 ml-1 ${deleteExiting ? "animate-delete-confirm-exit" : "animate-delete-confirm"}`}
-                      >
-                        <span className="text-[11px] text-red-400 whitespace-nowrap">
-                          {t("main.editor.confirmDelete", { defaultValue: "确认删除？" })}
-                        </span>
-                        <button
-                          onClick={() => {
-                            setDeleteExiting(true);
-                            setTimeout(() => {
-                              setDeleteExiting(false);
-                              setDeleteConfirm(false);
-                              void handleDeleteNote();
-                            }, 150);
-                          }}
-                          className="px-2 h-6 rounded-md text-[11px] text-cloud bg-red-400 hover:bg-red-500 transition-colors cursor-pointer whitespace-nowrap"
-                        >
-                          {t("common.delete", { defaultValue: "删除" })}
-                        </button>
-                        <button
-                          onClick={() => {
-                            setDeleteExiting(true);
-                            setTimeout(() => {
-                              setDeleteExiting(false);
-                              setDeleteConfirm(false);
-                            }, 150);
-                          }}
-                          className="px-2 h-6 rounded-md text-[11px] text-ink-faint hover:text-ink-soft hover:bg-paper-warm transition-colors cursor-pointer"
-                        >
-                          {t("common.cancel", { defaultValue: "取消" })}
-                        </button>
+                        )}
                       </div>
-                    ) : (
+                    </div>
+                  </>
+                </div>
+              )}
+
+              {sidebarTab === "outline" && selectedId && (
+                <div key="outline" className="flex flex-col flex-1 min-h-0 animate-view-fade">
+                  <OutlinePanel
+                    headings={headings}
+                    onJumpTo={handleJumpToHeading}
+                    emptyText={t("main.outline.empty", { defaultValue: "当前文档暂无标题" })}
+                  />
+                </div>
+              )}
+
+              {sidebarTab === "git" && savedNotesDir && (
+                <div key="git" className="flex flex-col flex-1 min-h-0 animate-view-fade">
+                  <GitPanel
+                    repoPath={savedNotesDir}
+                    onRefresh={() => {
+                      void refreshNotes();
+                    }}
+                  />
+                </div>
+              )}
+            </div>
+
+            {!sidebarCollapsed && (
+              <div
+                className={`w-1 shrink-0 cursor-col-resize group relative ${isResizingSidebar ? "bg-bamboo/30" : "hover:bg-bamboo/20"} transition-colors`}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  setIsResizingSidebar(true);
+                }}
+              >
+                <div
+                  className={`absolute inset-y-0 -left-1 -right-1 ${isResizingSidebar ? "" : "group-hover:bg-bamboo/5"}`}
+                />
+              </div>
+            )}
+
+            <div className="flex-1 flex flex-col min-w-0">
+              <div
+                className="grid transition-[grid-template-rows] duration-300 ease-in-out"
+                style={{
+                  gridTemplateRows: settingsConfig?.tabLayout === "default" ? "1fr" : "0fr",
+                }}
+              >
+                <div className="overflow-hidden">
+                  <TabBar
+                    tabs={displayTabs}
+                    activeTabId={settingsTabActive ? "__settings__" : activeTabId}
+                    onSelectTab={(noteId) => {
+                      if (noteId === "__settings__") return;
+                      setSettingsTabActive(false);
+                      flushActiveTab();
+                      void openTab(noteId);
+                    }}
+                    onCloseTab={(noteId) => {
+                      if (noteId === "__settings__") {
+                        setSettingsTabActive(false);
+                        return;
+                      }
+                      void closeTab(noteId);
+                    }}
+                    onNewTab={() => void handleNewNote()}
+                    onTabMenuAction={(action, noteId) => void handleTabMenuAction(action, noteId)}
+                  />
+                </div>
+              </div>
+              {settingsTabActive && settingsConfig ? (
+                <SettingsTab
+                  config={settingsConfig}
+                  onChange={handleSettingsChange}
+                  onChooseNotesDir={() => void handleChooseNotesDir()}
+                />
+              ) : (
+                <>
+                  <div className="flex items-center justify-between px-4 h-10 border-b border-paper-deep/20 shrink-0 bg-paper/20">
+                    <div className="flex items-center gap-1">
                       <button
-                        onClick={() => setDeleteConfirm(true)}
-                        disabled={!selectedId}
-                        className="w-7 h-7 flex items-center justify-center rounded-lg text-ink-ghost hover:text-red-400 hover:bg-danger-bg transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-                        title={t("noteMenu.delete", { defaultValue: "删除笔记" })}
-                      >
-                        <svg
-                          width="13"
-                          height="13"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        >
-                          <polyline points="3,6 5,6 21,6" />
-                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                        </svg>
-                      </button>
-                    )}
-                    {/* Rename file button */}
-                    {renameFileFor === selectedNote?.id ? (
-                      <input
-                        type="text"
-                        value={renameFileValue}
-                        onChange={(e) => setRenameFileValue(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") {
-                            const v = renameFileValue.trim();
-                            if (v && selectedNote) {
-                              void renameNoteFileStem(selectedNote.id, v)
-                                .then(() => refreshNotes())
-                                .catch((err) => setErrorMessage(getErrorMessage(err)));
-                            }
-                            setRenameFileFor(null);
-                          }
-                          if (e.key === "Escape") setRenameFileFor(null);
-                        }}
-                        onBlur={() => setRenameFileFor(null)}
-                        autoFocus
-                        className="w-28 px-1.5 h-6 rounded text-[11px] font-mono text-ink bg-paper-warm border border-bamboo/40"
-                        onClick={(e) => e.stopPropagation()}
-                      />
-                    ) : (
-                      <button
-                        onClick={() => {
-                          if (selectedNote) {
-                            setRenameFileFor(selectedNote.id);
-                            setRenameFileValue(selectedNote.fileStem);
-                          }
-                        }}
-                        disabled={!selectedId}
-                        className="w-7 h-7 flex items-center justify-center rounded-lg text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-                        title={t("noteMenu.renameFile", { defaultValue: "重命名文件" })}
+                        onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+                        className="w-7 h-7 flex items-center justify-center rounded-lg text-ink-ghost hover:text-ink-faint hover:bg-paper-warm transition-all cursor-pointer"
+                        title={
+                          sidebarCollapsed
+                            ? t("main.window.expandSidebar", { defaultValue: "展开侧栏" })
+                            : t("main.window.collapseSidebar", { defaultValue: "收起侧栏" })
+                        }
                       >
                         <svg
                           width="14"
@@ -3005,188 +2944,403 @@ export function MainWindow({
                           strokeLinecap="round"
                           strokeLinejoin="round"
                         >
-                          <path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                          <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                          <line x1="9" y1="3" x2="9" y2="21" />
                         </svg>
                       </button>
-                    )}
-                    {/* Sync title to filename button */}
-                    <button
-                      onClick={() => {
-                        if (selectedNote) {
-                          void renameNoteFileStem(
-                            selectedNote.id,
-                            selectedNote.title || selectedNote.fileStem,
-                          )
-                            .then(() => refreshNotes())
-                            .catch((err) => setErrorMessage(getErrorMessage(err)));
-                        }
-                      }}
-                      disabled={!selectedId}
-                      className="w-7 h-7 flex items-center justify-center rounded-lg text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-                      title={t("noteMenu.syncTitleToFile", { defaultValue: "标题同步为文件名" })}
-                    >
-                      <svg
-                        width="14"
-                        height="14"
-                        viewBox="0 0 24 24"
-                        fill="none"
-                        stroke="currentColor"
-                        strokeWidth="2"
-                        strokeLinecap="round"
-                        strokeLinejoin="round"
+
+                      <div className="h-4 w-px bg-paper-deep/30 mx-1" />
+
+                      <button
+                        onClick={() => void handlePinEntry()}
+                        disabled={!selectedId}
+                        aria-label={pinTileButtonTitle(selectedTilePinned)}
+                        className={`w-7 h-7 flex items-center justify-center rounded-lg transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed ${
+                          selectedTilePinned
+                            ? "text-bamboo bg-bamboo-mist/40 hover:text-red-400 hover:bg-danger-bg"
+                            : "text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50"
+                        }`}
+                        title={pinTileButtonTitle(selectedTilePinned)}
                       >
-                        <polyline points="17 1 21 5 17 9" />
-                        <path d="M3 11V9a4 4 0 0 1 4-4h14" />
-                        <polyline points="7 23 3 19 7 15" />
-                        <path d="M21 13v2a4 4 0 0 1-4 4H3" />
-                      </svg>
-                    </button>
-                  </div>
-                </div>
+                        <svg
+                          width="13"
+                          height="13"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d="M12 17v5" />
+                          <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 1 1 0 0 0 1-1V4a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v1a1 1 0 0 0 1 1 1 1 0 0 1 1 1z" />
+                        </svg>
+                      </button>
 
-                <div
-                  key={`title-${noteTransitionKey}`}
-                  className="animate-note-enter px-6 pt-4 pb-2 shrink-0 border-b border-paper-deep/15"
-                >
-                  <input
-                    type="text"
-                    value={title}
-                    onChange={(event) => {
-                      setTitle(event.target.value);
-                      markDirty();
-                    }}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter") {
-                        event.preventDefault();
-                        // Focus is handled by WysiwygEditor internally
-                      }
-                    }}
-                    placeholder={t("common.untitledNote", { defaultValue: "无标题笔记" })}
-                    disabled={!selectedId || isReadOnlyExternal || isReadOnlyInternal}
-                    className="w-full text-[20px] font-display font-bold text-ink placeholder:text-ink-ghost/50 tracking-wide disabled:opacity-60"
-                  />
-                  <div className="flex items-center gap-3 mt-1.5">
-                    <span className="text-[10px] text-ink-ghost font-mono tabular-nums truncate max-w-[200px]">
-                      {selectedExternalFile
-                        ? t("main.externalFile.label", {
-                            path: selectedExternalFile.filePath,
-                            defaultValue: "外部文件 · {{path}}",
-                          })
-                        : selectedNote
-                          ? `${formatShortDate(selectedNote.updatedAt)} ${formatTime(selectedNote.updatedAt)}`
-                          : "--"}
-                    </span>
-                    <span className="text-[10px] text-ink-ghost/40">·</span>
-                    <span className="text-[10px] text-ink-ghost font-mono tabular-nums">
-                      {t("common.wordCount", { count: charCount, defaultValue: "{{count}} 字" })}
-                    </span>
-                    <span className="text-[10px] text-ink-ghost/40">·</span>
-                    <span
-                      key={saveState}
-                      className={`text-[10px] font-mono tabular-nums animate-status-fade ${
-                        saveState === "error"
-                          ? "text-red-400"
-                          : saveState === "dirty"
-                            ? "text-amber-500/70"
-                            : "text-bamboo/60"
-                      }`}
-                    >
-                      {isReadOnlyExternal || isReadOnlyInternal
-                        ? t("main.statusBar.readOnly", { defaultValue: "只读" })
-                        : saveStateLabel[saveState]}
-                    </span>
-                  </div>
-                </div>
+                      <button
+                        onMouseDown={(event) => event.preventDefault()}
+                        onClick={handleUndo}
+                        disabled={!selectedId}
+                        className="w-7 h-7 flex items-center justify-center rounded-lg text-ink-ghost hover:text-ink-faint hover:bg-paper-warm transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                        title={t("main.editor.undo", { defaultValue: "撤销（Ctrl+Z）" })}
+                        aria-label={t("main.editor.undoLabel", { defaultValue: "撤销" })}
+                      >
+                        <svg
+                          data-testid="main-editor-undo-icon"
+                          width="14"
+                          height="14"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          aria-hidden="true"
+                        >
+                          <path d="M9 14 4 9l5-5" />
+                          <path d="M4 9h10a6 6 0 0 1 0 12h-1" />
+                        </svg>
+                      </button>
 
-                <div
-                  key={`editor-${noteTransitionKey}`}
-                  ref={splitContainerRef}
-                  className="flex-1 flex flex-col min-h-0 animate-view-fade"
-                >
-                  {!selectedId && !isLoading ? (
-                    <div className="flex-1 flex items-center justify-center text-[13px] text-ink-ghost">
-                      {t("main.editor.emptyHint", { defaultValue: "选择或新建一篇笔记" })}
-                    </div>
-                  ) : isLoading && selectedId ? (
-                    <div className="flex-1 flex flex-col gap-3 px-6 pt-5 pb-4 animate-fade-in">
-                      {/* Loading skeleton — mimics title + content layout */}
-                      <div className="space-y-3">
-                        <div className="h-7 w-2/5 rounded bg-ink-ghost/15 animate-pulse" />
-                        <div className="flex items-center gap-3">
-                          <div className="h-3 w-24 rounded bg-ink-ghost/10 animate-pulse" />
-                          <div className="h-3 w-16 rounded bg-ink-ghost/10 animate-pulse" />
-                          <div className="h-3 w-16 rounded bg-ink-ghost/10 animate-pulse" />
+                      <button
+                        onClick={() => void saveCurrentNote()}
+                        disabled={!selectedId || saveState === "saving"}
+                        className="px-2.5 h-7 flex items-center justify-center rounded-lg text-[11px] text-ink-ghost hover:text-ink-faint hover:bg-paper-warm transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                        title={t("common.save", { defaultValue: "保存" })}
+                      >
+                        {t("common.save", { defaultValue: "保存" })}
+                      </button>
+
+                      {deleteConfirm ? (
+                        <div
+                          className={`flex items-center gap-1 ml-1 ${deleteExiting ? "animate-delete-confirm-exit" : "animate-delete-confirm"}`}
+                        >
+                          <span className="text-[11px] text-red-400 whitespace-nowrap">
+                            {t("main.editor.confirmDelete", { defaultValue: "确认删除？" })}
+                          </span>
+                          <button
+                            onClick={() => {
+                              setDeleteExiting(true);
+                              setTimeout(() => {
+                                setDeleteExiting(false);
+                                setDeleteConfirm(false);
+                                void handleDeleteNote();
+                              }, 150);
+                            }}
+                            className="px-2 h-6 rounded-md text-[11px] text-cloud bg-red-400 hover:bg-red-500 transition-colors cursor-pointer whitespace-nowrap"
+                          >
+                            {t("common.delete", { defaultValue: "删除" })}
+                          </button>
+                          <button
+                            onClick={() => {
+                              setDeleteExiting(true);
+                              setTimeout(() => {
+                                setDeleteExiting(false);
+                                setDeleteConfirm(false);
+                              }, 150);
+                            }}
+                            className="px-2 h-6 rounded-md text-[11px] text-ink-faint hover:text-ink-soft hover:bg-paper-warm transition-colors cursor-pointer"
+                          >
+                            {t("common.cancel", { defaultValue: "取消" })}
+                          </button>
                         </div>
-                      </div>
-                      <div className="border-t border-paper-deep/15 pt-4 space-y-2.5">
-                        {Array.from({ length: 8 }).map((_, i) => (
-                          <div
-                            key={i}
-                            className="h-4 rounded bg-ink-ghost/10 animate-pulse"
-                            style={{ width: `${60 + Math.random() * 35}%` }}
-                          />
-                        ))}
-                      </div>
+                      ) : (
+                        <button
+                          onClick={() => setDeleteConfirm(true)}
+                          disabled={!selectedId}
+                          className="w-7 h-7 flex items-center justify-center rounded-lg text-ink-ghost hover:text-red-400 hover:bg-danger-bg transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                          title={t("noteMenu.delete", { defaultValue: "删除笔记" })}
+                        >
+                          <svg
+                            width="13"
+                            height="13"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <polyline points="3,6 5,6 21,6" />
+                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                          </svg>
+                        </button>
+                      )}
+                      {/* Rename file button */}
+                      {renameFileFor === selectedNote?.id ? (
+                        <input
+                          type="text"
+                          value={renameFileValue}
+                          onChange={(e) => setRenameFileValue(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") {
+                              const v = renameFileValue.trim();
+                              if (v && selectedNote) {
+                                void renameNoteFileStem(selectedNote.id, v)
+                                  .then(() => refreshNotes())
+                                  .catch((err) => setErrorMessage(getErrorMessage(err)));
+                              }
+                              setRenameFileFor(null);
+                            }
+                            if (e.key === "Escape") setRenameFileFor(null);
+                          }}
+                          onBlur={() => setRenameFileFor(null)}
+                          autoFocus
+                          className="w-28 px-1.5 h-6 rounded text-[11px] font-mono text-ink bg-paper-warm border border-bamboo/40"
+                          onClick={(e) => e.stopPropagation()}
+                        />
+                      ) : (
+                        <button
+                          onClick={() => {
+                            if (selectedNote) {
+                              setRenameFileFor(selectedNote.id);
+                              setRenameFileValue(selectedNote.fileStem);
+                            }
+                          }}
+                          disabled={!selectedId}
+                          className="w-7 h-7 flex items-center justify-center rounded-lg text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                          title={t("noteMenu.renameFile", { defaultValue: "重命名文件" })}
+                        >
+                          <svg
+                            width="14"
+                            height="14"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          >
+                            <path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                          </svg>
+                        </button>
+                      )}
+                      {/* Sync title to filename button */}
+                      <button
+                        onClick={() => {
+                          if (selectedNote) {
+                            void renameNoteFileStem(
+                              selectedNote.id,
+                              selectedNote.title || selectedNote.fileStem,
+                            )
+                              .then(() => refreshNotes())
+                              .catch((err) => setErrorMessage(getErrorMessage(err)));
+                          }
+                        }}
+                        disabled={!selectedId}
+                        className="w-7 h-7 flex items-center justify-center rounded-lg text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                        title={t("noteMenu.syncTitleToFile", { defaultValue: "标题同步为文件名" })}
+                      >
+                        <svg
+                          width="14"
+                          height="14"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <polyline points="17 1 21 5 17 9" />
+                          <path d="M3 11V9a4 4 0 0 1 4-4h14" />
+                          <polyline points="7 23 3 19 7 15" />
+                          <path d="M21 13v2a4 4 0 0 1-4 4H3" />
+                        </svg>
+                      </button>
                     </div>
-                  ) : (
-                    <WysiwygEditor
-                      ref={wysiwygRef}
-                      key={selectedId}
-                      content={content}
-                      onChange={(newValue) => {
-                        setContent(newValue);
+                  </div>
+
+                  <div
+                    key={`title-${noteTransitionKey}`}
+                    className="animate-note-enter px-6 pt-4 pb-2 shrink-0 border-b border-paper-deep/15"
+                  >
+                    <input
+                      type="text"
+                      value={title}
+                      onChange={(event) => {
+                        setTitle(event.target.value);
                         markDirty();
                       }}
-                      fontSize={settingsConfig?.fontSize ?? 14}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter") {
+                          event.preventDefault();
+                          // Focus is handled by WysiwygEditor internally
+                        }
+                      }}
+                      placeholder={t("common.untitledNote", { defaultValue: "无标题笔记" })}
                       disabled={!selectedId || isReadOnlyExternal || isReadOnlyInternal}
-                      placeholder={t("main.editor.contentPlaceholder", {
-                        defaultValue: "开始写作……",
-                      })}
-                      onDirty={markDirty}
-                      hideFirstHeading={!!title.trim()}
-                      onScrollTop={handleEditorScroll}
-                      initialMode={
-                        settingsConfig?.defaultViewMode as "wysiwyg" | "source" | "read" | undefined
-                      }
+                      className="w-full text-[20px] font-display font-bold text-ink placeholder:text-ink-ghost/50 tracking-wide disabled:opacity-60"
                     />
-                  )}
-                </div>
+                    <div className="flex items-center gap-3 mt-1.5">
+                      <span className="text-[10px] text-ink-ghost font-mono tabular-nums truncate max-w-[200px]">
+                        {selectedExternalFile
+                          ? t("main.externalFile.label", {
+                              path: selectedExternalFile.filePath,
+                              defaultValue: "外部文件 · {{path}}",
+                            })
+                          : selectedNote
+                            ? `${formatShortDate(selectedNote.updatedAt)} ${formatTime(selectedNote.updatedAt)}`
+                            : "--"}
+                      </span>
+                      <span className="text-[10px] text-ink-ghost/40">·</span>
+                      <span className="text-[10px] text-ink-ghost font-mono tabular-nums">
+                        {t("common.wordCount", { count: charCount, defaultValue: "{{count}} 字" })}
+                      </span>
+                      <span className="text-[10px] text-ink-ghost/40">·</span>
+                      <span
+                        key={saveState}
+                        className={`text-[10px] font-mono tabular-nums animate-status-fade ${
+                          saveState === "error"
+                            ? "text-red-400"
+                            : saveState === "dirty"
+                              ? "text-amber-500/70"
+                              : "text-bamboo/60"
+                        }`}
+                      >
+                        {isReadOnlyExternal || isReadOnlyInternal
+                          ? t("main.statusBar.readOnly", { defaultValue: "只读" })
+                          : saveStateLabel[saveState]}
+                      </span>
+                    </div>
+                  </div>
 
-                <div className="flex items-center justify-between px-4 h-7 border-t border-paper-deep/20 bg-paper/30 shrink-0">
-                  <div className="flex items-center gap-3">
-                    <span className="text-[10px] text-ink-ghost font-mono tabular-nums">
-                      {t("main.statusBar.lineNumber", {
-                        count: lineCount,
-                        defaultValue: "Ln {{count}}",
-                      })}
-                    </span>
-                    <span className="text-[10px] text-ink-ghost/40">|</span>
-                    <span className="text-[10px] text-ink-ghost font-mono">
-                      {isReadOnlyInternal && selectedNote
-                        ? getFileTypeLabel(selectedNote)
-                        : isReadOnlyExternal && selectedExternalFile
-                          ? selectedExternalFile.contentFormat === "html"
-                            ? (selectedExternalFile.mimeType ?? "HTML")
-                            : (selectedExternalFile.mimeType ?? "Document")
-                          : t("main.statusBar.format", { defaultValue: "Markdown + LaTeX" })}
-                    </span>
+                  <div
+                    key={`editor-${noteTransitionKey}`}
+                    ref={splitContainerRef}
+                    className="flex-1 flex flex-col min-h-0 animate-view-fade"
+                  >
+                    {!selectedId && !isLoading ? (
+                      <div className="flex-1 flex items-center justify-center text-[13px] text-ink-ghost">
+                        {t("main.editor.emptyHint", { defaultValue: "选择或新建一篇笔记" })}
+                      </div>
+                    ) : isLoading && selectedId ? (
+                      <div className="flex-1 flex flex-col gap-3 px-6 pt-5 pb-4 animate-fade-in">
+                        {/* Loading skeleton — mimics title + content layout */}
+                        <div className="space-y-3">
+                          <div className="h-7 w-2/5 rounded bg-ink-ghost/15 animate-pulse" />
+                          <div className="flex items-center gap-3">
+                            <div className="h-3 w-24 rounded bg-ink-ghost/10 animate-pulse" />
+                            <div className="h-3 w-16 rounded bg-ink-ghost/10 animate-pulse" />
+                            <div className="h-3 w-16 rounded bg-ink-ghost/10 animate-pulse" />
+                          </div>
+                        </div>
+                        <div className="border-t border-paper-deep/15 pt-4 space-y-2.5">
+                          {Array.from({ length: 8 }).map((_, i) => (
+                            <div
+                              key={i}
+                              className="h-4 rounded bg-ink-ghost/10 animate-pulse"
+                              style={{ width: `${60 + Math.random() * 35}%` }}
+                            />
+                          ))}
+                        </div>
+                      </div>
+                    ) : (
+                      <WysiwygEditor
+                        ref={wysiwygRef}
+                        key={selectedId}
+                        content={content}
+                        onChange={(newValue) => {
+                          setContent(newValue);
+                          markDirty();
+                        }}
+                        fontSize={settingsConfig?.fontSize ?? 14}
+                        disabled={!selectedId || isReadOnlyExternal || isReadOnlyInternal}
+                        placeholder={t("main.editor.contentPlaceholder", {
+                          defaultValue: "开始写作……",
+                        })}
+                        onDirty={markDirty}
+                        hideFirstHeading={!!title.trim()}
+                        onScrollTop={handleEditorScroll}
+                        initialMode={
+                          settingsConfig?.defaultViewMode as
+                            | "wysiwyg"
+                            | "source"
+                            | "read"
+                            | undefined
+                        }
+                        onLinkClick={handleLinkClick}
+                      />
+                    )}
                   </div>
-                  <div className="flex items-center gap-3">
-                    <span className="text-[10px] text-ink-ghost font-mono">
-                      {t("main.statusBar.encoding", { defaultValue: "UTF-8" })}
-                    </span>
-                    <span className="text-[10px] text-ink-ghost/40">|</span>
-                    <span className="text-[10px] text-ink-ghost font-mono tabular-nums">
-                      {t("main.statusBar.byteSize", {
-                        size: byteSize,
-                        defaultValue: "{{size}} KB",
-                      })}
-                    </span>
+
+                  <div className="flex items-center justify-between px-4 h-7 border-t border-paper-deep/20 bg-paper/30 shrink-0">
+                    <div className="flex items-center gap-3">
+                      <span className="text-[10px] text-ink-ghost font-mono tabular-nums">
+                        {t("main.statusBar.lineNumber", {
+                          count: lineCount,
+                          defaultValue: "Ln {{count}}",
+                        })}
+                      </span>
+                      <span className="text-[10px] text-ink-ghost/40">|</span>
+                      <span className="text-[10px] text-ink-ghost font-mono">
+                        {isReadOnlyInternal && selectedNote
+                          ? getFileTypeLabel(selectedNote)
+                          : isReadOnlyExternal && selectedExternalFile
+                            ? selectedExternalFile.contentFormat === "html"
+                              ? (selectedExternalFile.mimeType ?? "HTML")
+                              : (selectedExternalFile.mimeType ?? "Document")
+                            : t("main.statusBar.format", { defaultValue: "Markdown + LaTeX" })}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-3">
+                      <span className="text-[10px] text-ink-ghost font-mono">
+                        {t("main.statusBar.encoding", { defaultValue: "UTF-8" })}
+                      </span>
+                      <span className="text-[10px] text-ink-ghost/40">|</span>
+                      <span className="text-[10px] text-ink-ghost font-mono tabular-nums">
+                        {t("main.statusBar.byteSize", {
+                          size: byteSize,
+                          defaultValue: "{{size}} KB",
+                        })}
+                      </span>
+                    </div>
                   </div>
-                </div>
-              </>
-            )}
+                </>
+              )}
+            </div>
+            {/* === End base content area === */}
           </div>
+          {/* Arrow toggle button between editor and right panel */}
+          {rightPanelOpen && (
+            <button
+              onClick={toggleRightPanelExpand}
+              className="w-5 shrink-0 flex items-center justify-center cursor-pointer text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/30 transition-colors border-l border-r border-paper-deep/15"
+              title={
+                rightPanelExpanded
+                  ? t("main.browser.collapseExpand", { defaultValue: "恢复左侧栏" })
+                  : t("main.browser.expandBrowser", { defaultValue: "收起左侧栏扩大浏览器" })
+              }
+            >
+              <svg
+                width="10"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className={`transition-transform duration-300 ${rightPanelExpanded ? "rotate-180" : ""}`}
+              >
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+            </button>
+          )}
+          {/* Right browser panel — fixed width, window expansion provides the space */}
+          {rightPanelOpen && (
+            <div
+              className="flex flex-col shrink-0 border-l border-paper-deep/30 bg-paper/40 overflow-hidden transition-all duration-[600ms]"
+              style={{ width: `${rightPanelWidth}px` }}
+            >
+              <RightBrowserPanel
+                isOpen={rightPanelOpen}
+                isExpanded={rightPanelExpanded}
+                width={rightPanelWidth}
+                onToggleExpand={toggleRightPanelExpand}
+                onClose={toggleRightPanel}
+              />
+            </div>
+          )}
         </div>
       </div>
       {noteMenu && noteMenuTarget && (

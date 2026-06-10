@@ -45,4 +45,14 @@ export interface AppConfig {
   tabLayout?: "compact" | "default";
   /** Auto-open outline panel when scrolling past headings */
   autoOpenOutline?: boolean;
+  /** Browser panel: whether it was open last session */
+  rightPanelOpen?: boolean;
+  /** Browser panel: whether expanded mode was active */
+  rightPanelExpanded?: boolean;
+  /** Browser panel: window base width (without panel) */
+  windowBaseWidth?: number;
+  /** Browser panel: persisted tab URLs */
+  browserTabs?: { id: string; url: string; title: string }[];
+  /** Browser panel: last active browser tab id */
+  browserActiveTabId?: string;
 }

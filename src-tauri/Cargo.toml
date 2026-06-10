@@ -18,7 +18,7 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["protocol-asset", "tray-icon", "macos-private-api"] }
+tauri = { version = "2", features = ["protocol-asset", "tray-icon", "macos-private-api", "unstable"] }
 tauri-plugin-opener = "2"
 tauri-plugin-dialog = "2"
 tauri-plugin-autostart = "2"
@@ -35,6 +35,7 @@ resvg = "0.45"
 fontdb = "0.23"
 base64 = "0.22"
 notify = "6"
+url = "2"
 
 [dev-dependencies]
 tempfile = "3"

@@ -1,3 +1,4 @@
+pub mod browser_webview;
 pub mod file_viewer;
 pub mod git;
 pub mod notes;

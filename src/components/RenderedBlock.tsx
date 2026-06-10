@@ -11,6 +11,7 @@ export interface RenderedBlockProps {
   onChange: (newSource: string) => void;
   onBlur: () => void;
   fontSize: number;
+  onLinkClick?: (url: string, event: React.MouseEvent<HTMLAnchorElement>) => void;
 }
 
 export function RenderedBlock({
@@ -20,6 +21,7 @@ export function RenderedBlock({
   onChange,
   onBlur,
   fontSize,
+  onLinkClick,
 }: RenderedBlockProps) {
   const editorRef = useRef<MarkdownEditorHandle>(null);
 
@@ -61,7 +63,7 @@ export function RenderedBlock({
         }
       }}
     >
-      <MarkdownPreview content={block.source} fontSize={fontSize} />
+      <MarkdownPreview content={block.source} fontSize={fontSize} onLinkClick={onLinkClick} />
     </div>
   );
 }
