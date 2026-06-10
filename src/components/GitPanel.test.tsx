@@ -21,39 +21,10 @@ vi.mock("@tauri-apps/api/event", () => ({
   listen: vi.fn().mockResolvedValue(() => {}),
 }));
 
-import {
-  checkGitInstalled,
-  commit,
-  getLog,
-  getStatus,
-  initRepo,
-  isGitRepo,
-  revertFile,
-  stageFiles,
-  stageAll,
-  unstageFiles,
-} from "../features/git/api";
+import { checkGitInstalled, isGitRepo, stageAll } from "../features/git/api";
 
 const mockCheck = vi.mocked(checkGitInstalled);
 const mockIsRepo = vi.mocked(isGitRepo);
-const mockGetStatus = vi.mocked(getStatus);
-const mockGetLog = vi.mocked(getLog);
-const mockInitRepo = vi.mocked(initRepo);
-const mockStageFiles = vi.mocked(stageFiles);
-const mockStageAll = vi.mocked(stageAll);
-const mockUnstageFiles = vi.mocked(unstageFiles);
-const mockCommit = vi.mocked(commit);
-const mockRevertFile = vi.mocked(revertFile);
-
-function status(files: Array<{ path: string; status: string }>) {
-  return {
-    branch: "main",
-    files: files.map((f) => ({ ...f, status: f.status, oldPath: undefined })),
-    ahead: 0,
-    behind: 0,
-  };
-}
-
 describe("GitPanel states", () => {
   beforeEach(() => {
     vi.clearAllMocks();
