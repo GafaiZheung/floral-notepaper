@@ -17,7 +17,7 @@
         "title": "花笺",
         "width": 1180,
         "height": 760,
-        "minWidth": 900,
+        "minWidth": 480,
         "minHeight": 620,
         "decorations": false,
         "transparent": true,

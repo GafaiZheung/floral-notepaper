@@ -2,6 +2,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { emit, listen } from "@tauri-apps/api/event";
+import { LogicalSize } from "@tauri-apps/api/dpi";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { exportMarkdownNote, importMarkdownNote } from "../features/importExport/api";
 import { extractHeadings } from "../features/markdown/extractHeadings";
@@ -105,6 +107,19 @@ export function pinTileButtonTitle(isPinned: boolean): string {
   return isPinned ? "取消钉屏" : "钉到屏幕";
 }
 
+// ---------------------------------------------------------------------------
+// Layout constants — keep the editor toolbar fully visible at all times
+// ---------------------------------------------------------------------------
+
+/** Narrowest editor width that still shows every toolbar button */
+const MIN_EDITOR_WIDTH = 360;
+/** Approximate width of the left icon-only sidebar */
+const LEFT_ICON_SIDEBAR_WIDTH = 48;
+/** The draggable resizer between sidebar and editor */
+const RESIZER_WIDTH = 4;
+/** Arrow button that sits between editor and right browser panel */
+const RIGHT_PANEL_TOGGLE_WIDTH = 22;
+
 interface MainWindowProps {
   initialSettingsOpen?: boolean;
   initialConfig?: AppConfig;
@@ -179,6 +194,7 @@ export function MainWindow({
     : rightPanelBaseWidth;
   const splitContainerRef = useRef<HTMLDivElement>(null);
   const wysiwygRef = useRef<WysiwygEditorHandle>(null);
+  const cascadeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [categoryMenu, setCategoryMenu] = useState<CategoryMenuState | null>(null);
   const [categoryMenuClosing, setCategoryMenuClosing] = useState(false);
   const [categoryMenuConfirmDelete, setCategoryMenuConfirmDelete] = useState(false);
@@ -916,6 +932,79 @@ export function MainWindow({
     }, 150);
     return () => window.clearTimeout(timer);
   }, [categoryMenuClosing, categoryMenu]);
+
+  // -----------------------------------------------------------------------
+  // Dynamic minimum window width — keep the editor toolbar fully visible
+  // -----------------------------------------------------------------------
+  useEffect(() => {
+    const updateMinSize = async () => {
+      try {
+        const minWidth =
+          LEFT_ICON_SIDEBAR_WIDTH +
+          MIN_EDITOR_WIDTH +
+          (rightPanelOpen ? rightPanelWidth + RIGHT_PANEL_TOGGLE_WIDTH : 0);
+        await getCurrentWindow().setMinSize(new LogicalSize(minWidth, 620));
+      } catch {
+        // Ignore — window API may not be ready on first paint
+      }
+    };
+    void updateMinSize();
+  }, [rightPanelOpen, rightPanelWidth]);
+
+  // -----------------------------------------------------------------------
+  // Cascade: when the user keeps shrinking the window, auto-collapse panels
+  // so the editor toolbar never gets clipped.
+  //
+  // Order: ① un-expand browser → ② close browser → ③ hide sidebar
+  // After everything is collapsed the hard min-width (setMinSize above)
+  // stops further shrinking.
+  // -----------------------------------------------------------------------
+  useEffect(() => {
+    const handleResize = () => {
+      if (cascadeTimerRef.current) return;
+
+      cascadeTimerRef.current = setTimeout(() => {
+        cascadeTimerRef.current = null;
+
+        const editorWidth =
+          window.innerWidth -
+          LEFT_ICON_SIDEBAR_WIDTH -
+          (sidebarCollapsed ? 0 : sidebarWidth + RESIZER_WIDTH) -
+          (rightPanelOpen ? rightPanelWidth + RIGHT_PANEL_TOGGLE_WIDTH : 0);
+
+        if (editorWidth >= MIN_EDITOR_WIDTH) return;
+
+        // --- cascade step 1: collapse expanded browser ---
+        if (rightPanelExpanded) {
+          setRightPanelExpanded(false);
+          return;
+        }
+
+        // --- cascade step 2: close browser panel entirely ---
+        if (rightPanelOpen) {
+          const newWidth = window.innerWidth - rightPanelWidth - RIGHT_PANEL_TOGGLE_WIDTH;
+          setRightPanelExpanded(false);
+          setSidebarCollapsed(false);
+          void getCurrentWindowBounds()
+            .then((b) => setCurrentWindowBounds({ ...b, width: newWidth }))
+            .catch(() => {});
+          setRightPanelOpen(false);
+          return;
+        }
+
+        // --- cascade step 3: hide left sidebar ---
+        if (!sidebarCollapsed) {
+          setSidebarCollapsed(true);
+        }
+      }, 200);
+    };
+
+    window.addEventListener("resize", handleResize);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      if (cascadeTimerRef.current) clearTimeout(cascadeTimerRef.current);
+    };
+  }, [sidebarCollapsed, sidebarWidth, rightPanelOpen, rightPanelExpanded, rightPanelWidth]);
 
   const saveCurrentNote = useCallback(async () => {
     if (!selectedId) return null;
