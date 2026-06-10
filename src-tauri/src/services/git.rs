@@ -1,9 +1,31 @@
 use std::path::Path;
 use std::process::Command;
 
+#[cfg(windows)]
+use std::os::windows::process::CommandExt;
+
 use serde::{Deserialize, Serialize};
 
 use super::notes::AppError;
+
+// ---------------------------------------------------------------------------
+// Windows: prevents console windows from appearing for each git subprocess.
+// Without this flag, a GUI app (windows_subsystem = "windows") will spawn a
+// new console window for every child process, causing the app to freeze.
+// ---------------------------------------------------------------------------
+
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+/// Create a `Command` pre-configured to suppress console windows on Windows.
+fn git_command() -> Command {
+    let mut cmd = Command::new("git");
+    #[cfg(windows)]
+    {
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+    cmd
+}
 
 // ---------------------------------------------------------------------------
 // Output types — shared with the frontend via Tauri commands
@@ -36,12 +58,45 @@ pub struct GitStatus {
     pub behind: u32,
 }
 
+// --- Branch types ----------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitBranch {
+    pub name: String,
+    pub is_current: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub upstream: Option<String>,
+}
+
+// --- Remote types ----------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitRemote {
+    pub name: String,
+    pub url: String,
+    pub fetch: bool,
+    pub push: bool,
+}
+
+// --- Stash types -----------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GitStashEntry {
+    pub index: u32,
+    pub message: String,
+    pub branch: String,
+    pub date: String,
+}
+
 // ---------------------------------------------------------------------------
 // Helper: run a git command and capture stdout + stderr
 // ---------------------------------------------------------------------------
 
 fn run_git(repo_path: &Path, args: &[&str]) -> Result<String, AppError> {
-    let output = Command::new("git")
+    let output = git_command()
         .args(args)
         .current_dir(repo_path)
         .output()
@@ -73,7 +128,7 @@ fn run_git(repo_path: &Path, args: &[&str]) -> Result<String, AppError> {
 
 /// Check whether git CLI is available on the system.
 pub fn check_git_installed() -> bool {
-    Command::new("git")
+    git_command()
         .arg("--version")
         .output()
         .map(|o| o.status.success())
@@ -82,7 +137,7 @@ pub fn check_git_installed() -> bool {
 
 /// Check whether `path` is inside a git repository.
 pub fn is_git_repo(path: &Path) -> bool {
-    Command::new("git")
+    git_command()
         .args(["rev-parse", "--is-inside-work-tree"])
         .current_dir(path)
         .output()
@@ -257,7 +312,7 @@ pub fn git_log(path: &Path, count: Option<u32>) -> Result<Vec<GitCommit>, AppErr
 
     // In a fresh repo with no commits, `git log` exits non-zero.
     // Treat that as an empty history instead of an error.
-    let output = Command::new("git")
+    let output = git_command()
         .args([
             "log",
             &format!("-{n_str}"),
@@ -309,13 +364,307 @@ pub fn git_revert_file(path: &Path, file: &str) -> Result<String, AppError> {
 }
 
 // ---------------------------------------------------------------------------
+// Branch management
+// ---------------------------------------------------------------------------
+
+/// List all local branches.
+pub fn git_branch_list(path: &Path) -> Result<Vec<GitBranch>, AppError> {
+    let output = run_git(
+        path,
+        &[
+            "branch",
+            "--format=%(refname:short)%00%(HEAD)%00%(upstream:short)",
+        ],
+    )?;
+    let mut branches = Vec::new();
+    for line in output.lines() {
+        let parts: Vec<&str> = line.split('\0').collect();
+        if parts.len() >= 2 {
+            branches.push(GitBranch {
+                name: parts[0].to_string(),
+                is_current: parts[1] == "*",
+                upstream: parts
+                    .get(2)
+                    .filter(|s| !s.is_empty())
+                    .map(|s| s.to_string()),
+            });
+        }
+    }
+    Ok(branches)
+}
+
+/// Create a new branch from HEAD.
+pub fn git_branch_create(path: &Path, name: &str) -> Result<String, AppError> {
+    if name.trim().is_empty() {
+        return Err(AppError {
+            code: "gitEmptyName".into(),
+            message: "Branch name cannot be empty".into(),
+            details: Default::default(),
+        });
+    }
+    run_git(path, &["branch", name.trim()])
+}
+
+/// Switch to another branch (git switch).
+pub fn git_branch_switch(path: &Path, name: &str) -> Result<String, AppError> {
+    run_git(path, &["switch", name])
+}
+
+/// Delete a branch. Set `force` to true for `-D`, otherwise `-d`.
+pub fn git_branch_delete(path: &Path, name: &str, force: bool) -> Result<String, AppError> {
+    let flag = if force { "-D" } else { "-d" };
+    run_git(path, &["branch", flag, name])
+}
+
+/// Merge another branch into the current branch.
+pub fn git_branch_merge(path: &Path, name: &str) -> Result<String, AppError> {
+    run_git(path, &["merge", name, "--no-edit"])
+}
+
+// ---------------------------------------------------------------------------
+// Remote operations
+// ---------------------------------------------------------------------------
+
+/// List configured remotes.
+pub fn git_remote_list(path: &Path) -> Result<Vec<GitRemote>, AppError> {
+    // Fallback: if no remotes, `git remote` returns empty output.
+    let output = run_git(path, &["remote", "-v"])?;
+    let mut remotes: Vec<GitRemote> = Vec::new();
+    for line in output.lines() {
+        let line = line.trim_end();
+        if line.is_empty() {
+            continue;
+        }
+        // Format: "origin  https://github.com/user/repo.git (fetch)"
+        let mut parts = line.split_whitespace();
+        let name = parts.next().unwrap_or("").to_string();
+        let url = parts.next().unwrap_or("").to_string();
+        let kind = parts.next().unwrap_or("").replace("(", "").replace(")", "");
+        if name.is_empty() || url.is_empty() {
+            continue;
+        }
+        // Deduplicate: each remote appears twice (fetch/push). Merge.
+        if let Some(existing) = remotes.iter_mut().find(|r| r.name == name) {
+            if kind == "fetch" {
+                existing.fetch = true;
+            } else if kind == "push" {
+                existing.push = true;
+            }
+        } else {
+            remotes.push(GitRemote {
+                name,
+                url,
+                fetch: kind == "fetch",
+                push: kind == "push",
+            });
+        }
+    }
+    Ok(remotes)
+}
+
+/// Add a new remote.
+pub fn git_remote_add(path: &Path, name: &str, url: &str) -> Result<String, AppError> {
+    run_git(path, &["remote", "add", name, url])
+}
+
+/// Remove a remote.
+pub fn git_remote_remove(path: &Path, name: &str) -> Result<String, AppError> {
+    run_git(path, &["remote", "remove", name])
+}
+
+/// Push to a remote. `remote` defaults to "origin", `branch` defaults to current.
+pub fn git_push(
+    path: &Path,
+    remote: Option<&str>,
+    branch: Option<&str>,
+) -> Result<String, AppError> {
+    let remote = remote.unwrap_or("origin");
+    let mut args: Vec<&str> = vec!["push"];
+    if let Some(b) = branch {
+        args.push(remote);
+        args.push(b);
+    } else {
+        args.push(remote);
+    }
+    run_git(path, &args)
+}
+
+/// Pull from a remote. `remote` defaults to "origin", `branch` defaults to current.
+pub fn git_pull(
+    path: &Path,
+    remote: Option<&str>,
+    branch: Option<&str>,
+) -> Result<String, AppError> {
+    let remote = remote.unwrap_or("origin");
+    let mut args: Vec<&str> = vec!["pull", "--ff-only"];
+    if let Some(b) = branch {
+        args.push(remote);
+        args.push(b);
+    } else {
+        args.push(remote);
+    }
+    run_git(path, &args)
+}
+
+/// Fetch from a remote (or all remotes).
+pub fn git_fetch(path: &Path, remote: Option<&str>) -> Result<String, AppError> {
+    let mut args: Vec<&str> = vec!["fetch"];
+    if let Some(r) = remote {
+        args.push(r);
+    } else {
+        args.push("--all");
+    }
+    run_git(path, &args)
+}
+
+// ---------------------------------------------------------------------------
+// Diff viewing
+// ---------------------------------------------------------------------------
+
+/// Get the diff for unstaged changes (working directory vs HEAD).
+/// If `file` is provided, only diff that file.
+pub fn git_diff_unstaged(path: &Path, file: Option<&str>) -> Result<String, AppError> {
+    let mut args: Vec<&str> = vec!["diff"];
+    if let Some(f) = file {
+        args.push("--");
+        args.push(f);
+    }
+    run_git(path, &args)
+}
+
+/// Get the diff for staged changes (index vs HEAD).
+pub fn git_diff_staged(path: &Path, file: Option<&str>) -> Result<String, AppError> {
+    let mut args: Vec<&str> = vec!["diff", "--cached"];
+    if let Some(f) = file {
+        args.push("--");
+        args.push(f);
+    }
+    run_git(path, &args)
+}
+
+/// Get the diff for a specific commit.
+pub fn git_diff_commit(path: &Path, hash: &str) -> Result<String, AppError> {
+    run_git(path, &["diff", &format!("{hash}~1..{hash}")])
+}
+
+// ---------------------------------------------------------------------------
+// Stash
+// ---------------------------------------------------------------------------
+
+/// Stash working directory changes (both staged and unstaged).
+pub fn git_stash_push(path: &Path, message: Option<&str>) -> Result<String, AppError> {
+    let mut args: Vec<String> = vec!["stash".into(), "push".into(), "--include-untracked".into()];
+    if let Some(m) = message {
+        if !m.trim().is_empty() {
+            args.push("-m".into());
+            args.push(m.trim().to_string());
+        }
+    }
+    let refs: Vec<&str> = args.iter().map(|s| s.as_str()).collect();
+    run_git(path, &refs)
+}
+
+/// Pop the most recent stash (or a specific one by index).
+pub fn git_stash_pop(path: &Path, index: Option<u32>) -> Result<String, AppError> {
+    let stash_ref = match index {
+        Some(i) => format!("stash@{{{i}}}"),
+        None => "stash@{0}".to_string(),
+    };
+    run_git(path, &["stash", "pop", &stash_ref])
+}
+
+/// List all stash entries.
+pub fn git_stash_list(path: &Path) -> Result<Vec<GitStashEntry>, AppError> {
+    let output = run_git(path, &["stash", "list", "--format=%gd%x00%s%x00%gd%x00%ai"])?;
+    let mut entries = Vec::new();
+    for (i, line) in output.lines().enumerate() {
+        let parts: Vec<&str> = line.split('\0').collect();
+        if parts.len() >= 3 {
+            // Extract branch name from the stash message "WIP on <branch>: ..."
+            let branch = parts[1]
+                .strip_prefix("WIP on ")
+                .and_then(|s| s.split(':').next())
+                .unwrap_or("unknown")
+                .to_string();
+            entries.push(GitStashEntry {
+                index: i as u32,
+                message: parts[1].to_string(),
+                branch,
+                date: parts.get(2).map(|s| s.to_string()).unwrap_or_default(),
+            });
+        }
+    }
+    Ok(entries)
+}
+
+/// Drop a specific stash by index.
+pub fn git_stash_drop(path: &Path, index: Option<u32>) -> Result<String, AppError> {
+    let stash_ref = match index {
+        Some(i) => format!("stash@{{{i}}}"),
+        None => "stash@{0}".to_string(),
+    };
+    run_git(path, &["stash", "drop", &stash_ref])
+}
+
+// ---------------------------------------------------------------------------
+// Advanced operations
+// ---------------------------------------------------------------------------
+
+/// Amend the last commit (keep the same message).
+pub fn git_commit_amend(path: &Path) -> Result<String, AppError> {
+    run_git(path, &["commit", "--amend", "--no-edit"])
+}
+
+/// Check if the repository has merge conflicts.
+pub fn git_has_conflicts(path: &Path) -> Result<bool, AppError> {
+    // Check for conflict markers in the index via `git diff --name-only --diff-filter=U`
+    let output = run_git(path, &["diff", "--name-only", "--diff-filter=U"])?;
+    Ok(!output.trim().is_empty())
+}
+
+/// Get the list of files with merge conflicts.
+pub fn git_conflicted_files(path: &Path) -> Result<Vec<String>, AppError> {
+    let output = run_git(path, &["diff", "--name-only", "--diff-filter=U"])?;
+    Ok(output.lines().map(|s| s.to_string()).collect())
+}
+
+/// Abort a merge/rebase/cherry-pick in progress.
+pub fn git_abort_merge(path: &Path) -> Result<String, AppError> {
+    run_git(path, &["merge", "--abort"])
+}
+
+/// Read or write the .gitignore file content.
+pub fn git_read_gitignore(path: &Path) -> Result<String, AppError> {
+    let gitignore_path = path.join(".gitignore");
+    if gitignore_path.exists() {
+        std::fs::read_to_string(&gitignore_path).map_err(|e| AppError {
+            code: "io".into(),
+            message: e.to_string(),
+            details: Default::default(),
+        })
+    } else {
+        Ok(String::new())
+    }
+}
+
+/// Write the .gitignore file content.
+pub fn git_write_gitignore(path: &Path, content: &str) -> Result<(), AppError> {
+    let gitignore_path = path.join(".gitignore");
+    std::fs::write(&gitignore_path, content).map_err(|e| AppError {
+        code: "io".into(),
+        message: e.to_string(),
+        details: Default::default(),
+    })
+}
+
+// ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
 
 fn get_current_branch(path: &Path) -> Result<String, AppError> {
     // `git rev-parse --abbrev-ref HEAD` fails in an empty repo (no commits yet).
     // Fall back to checking .git/HEAD for the default branch name.
-    let output = Command::new("git")
+    let output = git_command()
         .args(["rev-parse", "--abbrev-ref", "HEAD"])
         .current_dir(path)
         .output()

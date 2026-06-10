@@ -20,3 +20,26 @@ export interface GitStatus {
   ahead: number;
   behind: number;
 }
+
+/** A single branch. */
+export interface GitBranch {
+  name: string;
+  isCurrent: boolean;
+  upstream?: string;
+}
+
+/** A configured remote. */
+export interface GitRemote {
+  name: string;
+  url: string;
+  fetch: boolean;
+  push: boolean;
+}
+
+/** A stash entry. */
+export interface GitStashEntry {
+  index: number;
+  message: string;
+  branch: string;
+  date: string;
+}

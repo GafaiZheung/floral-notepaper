@@ -569,6 +569,152 @@ fn git_revert_file(path: String, file: String) -> Result<String, AppError> {
     git::git_revert_file(std::path::Path::new(&path), &file)
 }
 
+// --- Branch commands ---
+
+#[tauri::command]
+fn git_branch_list(path: String) -> Result<Vec<git::GitBranch>, AppError> {
+    git::git_branch_list(std::path::Path::new(&path))
+}
+
+#[tauri::command]
+fn git_branch_create(path: String, name: String) -> Result<String, AppError> {
+    git::git_branch_create(std::path::Path::new(&path), &name)
+}
+
+#[tauri::command]
+fn git_branch_switch(path: String, name: String) -> Result<String, AppError> {
+    git::git_branch_switch(std::path::Path::new(&path), &name)
+}
+
+#[tauri::command]
+fn git_branch_delete(path: String, name: String, force: bool) -> Result<String, AppError> {
+    git::git_branch_delete(std::path::Path::new(&path), &name, force)
+}
+
+#[tauri::command]
+fn git_branch_merge(path: String, name: String) -> Result<String, AppError> {
+    git::git_branch_merge(std::path::Path::new(&path), &name)
+}
+
+// --- Remote commands ---
+
+#[tauri::command]
+fn git_remote_list(path: String) -> Result<Vec<git::GitRemote>, AppError> {
+    git::git_remote_list(std::path::Path::new(&path))
+}
+
+#[tauri::command]
+fn git_remote_add(path: String, name: String, url: String) -> Result<String, AppError> {
+    git::git_remote_add(std::path::Path::new(&path), &name, &url)
+}
+
+#[tauri::command]
+fn git_remote_remove(path: String, name: String) -> Result<String, AppError> {
+    git::git_remote_remove(std::path::Path::new(&path), &name)
+}
+
+#[tauri::command]
+fn git_push(
+    path: String,
+    remote: Option<String>,
+    branch: Option<String>,
+) -> Result<String, AppError> {
+    git::git_push(
+        std::path::Path::new(&path),
+        remote.as_deref(),
+        branch.as_deref(),
+    )
+}
+
+#[tauri::command]
+fn git_pull(
+    path: String,
+    remote: Option<String>,
+    branch: Option<String>,
+) -> Result<String, AppError> {
+    git::git_pull(
+        std::path::Path::new(&path),
+        remote.as_deref(),
+        branch.as_deref(),
+    )
+}
+
+#[tauri::command]
+fn git_fetch(path: String, remote: Option<String>) -> Result<String, AppError> {
+    git::git_fetch(std::path::Path::new(&path), remote.as_deref())
+}
+
+// --- Diff commands ---
+
+#[tauri::command]
+fn git_diff_unstaged(path: String, file: Option<String>) -> Result<String, AppError> {
+    git::git_diff_unstaged(std::path::Path::new(&path), file.as_deref())
+}
+
+#[tauri::command]
+fn git_diff_staged(path: String, file: Option<String>) -> Result<String, AppError> {
+    git::git_diff_staged(std::path::Path::new(&path), file.as_deref())
+}
+
+#[tauri::command]
+fn git_diff_commit(path: String, hash: String) -> Result<String, AppError> {
+    git::git_diff_commit(std::path::Path::new(&path), &hash)
+}
+
+// --- Stash commands ---
+
+#[tauri::command]
+fn git_stash_push(path: String, message: Option<String>) -> Result<String, AppError> {
+    git::git_stash_push(std::path::Path::new(&path), message.as_deref())
+}
+
+#[tauri::command]
+fn git_stash_pop(path: String, index: Option<u32>) -> Result<String, AppError> {
+    git::git_stash_pop(std::path::Path::new(&path), index)
+}
+
+#[tauri::command]
+fn git_stash_list(path: String) -> Result<Vec<git::GitStashEntry>, AppError> {
+    git::git_stash_list(std::path::Path::new(&path))
+}
+
+#[tauri::command]
+fn git_stash_drop(path: String, index: Option<u32>) -> Result<String, AppError> {
+    git::git_stash_drop(std::path::Path::new(&path), index)
+}
+
+// --- Advanced commands ---
+
+#[tauri::command]
+fn git_commit_amend(path: String) -> Result<String, AppError> {
+    git::git_commit_amend(std::path::Path::new(&path))
+}
+
+#[tauri::command]
+fn git_has_conflicts(path: String) -> Result<bool, AppError> {
+    git::git_has_conflicts(std::path::Path::new(&path))
+}
+
+#[tauri::command]
+fn git_conflicted_files(path: String) -> Result<Vec<String>, AppError> {
+    git::git_conflicted_files(std::path::Path::new(&path))
+}
+
+#[tauri::command]
+fn git_abort_merge(path: String) -> Result<String, AppError> {
+    git::git_abort_merge(std::path::Path::new(&path))
+}
+
+#[tauri::command]
+fn git_read_gitignore(path: String) -> Result<String, AppError> {
+    git::git_read_gitignore(std::path::Path::new(&path))
+}
+
+#[tauri::command]
+fn git_write_gitignore(path: String, content: String) -> Result<(), AppError> {
+    git::git_write_gitignore(std::path::Path::new(&path), &content)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -652,7 +798,36 @@ pub fn run() {
             git_unstage_files,
             git_commit,
             git_log,
-            git_revert_file
+            git_revert_file,
+            // Git – Branch
+            git_branch_list,
+            git_branch_create,
+            git_branch_switch,
+            git_branch_delete,
+            git_branch_merge,
+            // Git – Remote
+            git_remote_list,
+            git_remote_add,
+            git_remote_remove,
+            git_push,
+            git_pull,
+            git_fetch,
+            // Git – Diff
+            git_diff_unstaged,
+            git_diff_staged,
+            git_diff_commit,
+            // Git – Stash
+            git_stash_push,
+            git_stash_pop,
+            git_stash_list,
+            git_stash_drop,
+            // Git – Advanced
+            git_commit_amend,
+            git_has_conflicts,
+            git_conflicted_files,
+            git_abort_merge,
+            git_read_gitignore,
+            git_write_gitignore
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

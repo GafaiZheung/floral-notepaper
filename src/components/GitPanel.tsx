@@ -1,18 +1,46 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
+  abortMerge,
+  branchCreate,
+  branchDelete,
+  branchList,
+  branchMerge,
+  branchSwitch,
   checkGitInstalled,
   commit,
+  commitAmend,
+  conflictedFiles,
+  diffStaged,
+  diffUnstaged,
+  fetch,
   getLog,
   getStatus,
+  hasConflicts,
   initRepo,
   isGitRepo,
+  pull,
+  push,
+  remoteAdd,
+  remoteList,
+  remoteRemove,
   revertFile,
-  stageFiles,
   stageAll,
+  stageFiles,
+  stashDrop,
+  stashList,
+  stashPop,
+  stashPush,
   unstageFiles,
 } from "../features/git/api";
-import type { GitCommit, GitFileStatus, GitStatus } from "../features/git/types";
+import type {
+  GitBranch,
+  GitCommit,
+  GitFileStatus,
+  GitRemote,
+  GitStashEntry,
+  GitStatus,
+} from "../features/git/types";
 
 interface GitPanelProps {
   repoPath: string;
@@ -32,10 +60,34 @@ export function GitPanel({ repoPath, onRefresh }: GitPanelProps) {
   const [loading, setLoading] = useState(false);
   const [initializing, setInitializing] = useState(false);
   const [showLog, setShowLog] = useState(false);
+  const [activeTab, setActiveTab] = useState<"changes" | "history" | "stash">("changes");
+  // Branch
+  const [branches, setBranches] = useState<GitBranch[]>([]);
+  const [showBranchPopup, setShowBranchPopup] = useState(false);
+  const [newBranchName, setNewBranchName] = useState("");
+  // Diff
+  const [diffContent, setDiffContent] = useState<string | null>(null);
+  const [diffTitle, setDiffTitle] = useState("");
+  // Remote
+  const [remotes, setRemotes] = useState<GitRemote[]>([]);
+  const [showRemotePopup, setShowRemotePopup] = useState(false);
+  const [newRemoteName, setNewRemoteName] = useState("");
+  const [newRemoteUrl, setNewRemoteUrl] = useState("");
+  // Stash
+  const [stashEntries, setStashEntries] = useState<GitStashEntry[]>([]);
+  const [showStashPush, setShowStashPush] = useState(false);
+  const [stashMessage, setStashMessage] = useState("");
+  // Conflicts
+  const [conflicts, setConflicts] = useState<string[]>([]);
+  // Gitignore
+  const [gitignoreContent, setGitignoreContent] = useState("");
+  const [showGitignoreEditor, setShowGitignoreEditor] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const refreshingRef = useRef(false);
 
   const refresh = useCallback(async () => {
-    if (!repoPath) return;
+    if (!repoPath || refreshingRef.current) return;
+    refreshingRef.current = true;
     try {
       const installed = await checkGitInstalled();
       if (!installed) {
@@ -50,25 +102,51 @@ export function GitPanel({ repoPath, onRefresh }: GitPanelProps) {
       }
 
       setState("ready");
-      const [gitStatus, gitLog] = await Promise.all([getStatus(repoPath), getLog(repoPath, 30)]);
+      const [gitStatus, gitLog, gitBranches, gitRemotes, gitStashes, hasConf] = await Promise.all([
+        getStatus(repoPath),
+        getLog(repoPath, 30),
+        branchList(repoPath).catch(() => [] as GitBranch[]),
+        remoteList(repoPath).catch(() => [] as GitRemote[]),
+        stashList(repoPath).catch(() => [] as GitStashEntry[]),
+        hasConflicts(repoPath).catch(() => false),
+      ]);
       setStatus(gitStatus);
       setCommits(gitLog);
+      setBranches(gitBranches);
+      setRemotes(gitRemotes);
+      setStashEntries(gitStashes);
+      if (hasConf) {
+        const cf = await conflictedFiles(repoPath).catch(() => [] as string[]);
+        setConflicts(cf);
+      } else {
+        setConflicts([]);
+      }
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setState("error");
+    } finally {
+      refreshingRef.current = false;
     }
   }, [repoPath]);
 
-  // Initial load and periodic refresh
+  // Initial load and periodic refresh.
+  // Uses a ref-based interval to avoid resetting the timer when `refresh`
+  // callback identity changes (which would otherwise cause missed intervals
+  // or duplicate timers on React re-renders).
+  const refreshRef = useRef(refresh);
+  refreshRef.current = refresh;
+
   useEffect(() => {
-    refresh();
-    // Poll every 5s while the panel is active
-    intervalRef.current = setInterval(refresh, 5000);
+    refreshRef.current();
+    intervalRef.current = setInterval(() => refreshRef.current(), 5000);
     return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
     };
-  }, [refresh]);
+  }, []); // stable — only mounts once
 
   // Also refresh when notes change (via Tauri event)
   useEffect(() => {
@@ -79,7 +157,7 @@ export function GitPanel({ repoPath, onRefresh }: GitPanelProps) {
       .then(({ listen: tauriListen }) => {
         if (cancelled) return;
         return tauriListen("notes-changed", () => {
-          refresh();
+          refreshRef.current();
         });
       })
       .then((fn) => {
@@ -91,7 +169,7 @@ export function GitPanel({ repoPath, onRefresh }: GitPanelProps) {
       cancelled = true;
       unlisten?.();
     };
-  }, [refresh]);
+  }, []); // stable — only mounts once
 
   const handleInitRepo = async () => {
     setInitializing(true);
@@ -179,6 +257,211 @@ export function GitPanel({ repoPath, onRefresh }: GitPanelProps) {
     if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
       e.preventDefault();
       handleCommit();
+    }
+  };
+
+  // --- Branch handlers ---
+
+  const handleBranchSwitch = async (name: string) => {
+    setLoading(true);
+    setShowBranchPopup(false);
+    try {
+      await branchSwitch(repoPath, name);
+      await refreshRef.current();
+      onRefresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleBranchCreate = async () => {
+    if (!newBranchName.trim()) return;
+    setLoading(true);
+    try {
+      await branchCreate(repoPath, newBranchName.trim());
+      setNewBranchName("");
+      await refreshRef.current();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleBranchDelete = async (name: string) => {
+    setLoading(true);
+    try {
+      await branchDelete(repoPath, name, false);
+      await refreshRef.current();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleBranchMerge = async (name: string) => {
+    setLoading(true);
+    try {
+      await branchMerge(repoPath, name);
+      await refreshRef.current();
+      onRefresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // --- Remote handlers ---
+
+  const handlePush = async () => {
+    setLoading(true);
+    try {
+      await push(repoPath);
+      await refreshRef.current();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handlePull = async () => {
+    setLoading(true);
+    try {
+      await pull(repoPath);
+      await refreshRef.current();
+      onRefresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleFetch = async () => {
+    setLoading(true);
+    try {
+      await fetch(repoPath);
+      await refreshRef.current();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRemoteAdd = async () => {
+    if (!newRemoteName.trim() || !newRemoteUrl.trim()) return;
+    setLoading(true);
+    try {
+      await remoteAdd(repoPath, newRemoteName.trim(), newRemoteUrl.trim());
+      setNewRemoteName("");
+      setNewRemoteUrl("");
+      await refreshRef.current();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRemoteRemove = async (name: string) => {
+    setLoading(true);
+    try {
+      await remoteRemove(repoPath, name);
+      await refreshRef.current();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // --- Diff handlers ---
+
+  const handleViewDiff = async (file: string, staged: boolean) => {
+    setLoading(true);
+    try {
+      const diff = staged ? await diffStaged(repoPath, file) : await diffUnstaged(repoPath, file);
+      setDiffContent(diff || t("git.noDiff", { defaultValue: "无差异" }));
+      setDiffTitle(file);
+    } catch (e) {
+      setDiffContent(`Error: ${e instanceof Error ? e.message : String(e)}`);
+      setDiffTitle(file);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // --- Stash handlers ---
+
+  const handleStashPush = async () => {
+    setLoading(true);
+    setShowStashPush(false);
+    try {
+      await stashPush(repoPath, stashMessage || undefined);
+      setStashMessage("");
+      await refreshRef.current();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleStashPop = async (index?: number) => {
+    setLoading(true);
+    try {
+      await stashPop(repoPath, index);
+      await refreshRef.current();
+      onRefresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleStashDrop = async (index?: number) => {
+    setLoading(true);
+    try {
+      await stashDrop(repoPath, index);
+      await refreshRef.current();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // --- Advanced handlers ---
+
+  const handleAmend = async () => {
+    setLoading(true);
+    try {
+      await commitAmend(repoPath);
+      await refreshRef.current();
+      onRefresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleAbortMerge = async () => {
+    setLoading(true);
+    try {
+      await abortMerge(repoPath);
+      await refreshRef.current();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -307,56 +590,165 @@ export function GitPanel({ repoPath, onRefresh }: GitPanelProps) {
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden">
-      {/* Header: branch + ahead/behind */}
+      {/* Header: branch selector + remote actions + tabs */}
       {status && (
-        <div className="shrink-0 px-3 py-2 border-b border-paper-deep/20 flex items-center gap-2 flex-wrap">
-          <span className="inline-flex items-center gap-1 text-xs font-mono text-ink-faint">
-            <svg
-              width="12"
-              height="12"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-              strokeLinecap="round"
-              strokeLinejoin="round"
+        <div className="shrink-0 border-b border-paper-deep/20">
+          {/* Row 1: branch + push/pull */}
+          <div className="px-3 py-1.5 flex items-center gap-1.5">
+            {/* Branch selector button */}
+            <div className="relative">
+              <button
+                onClick={() => {
+                  setShowBranchPopup(!showBranchPopup);
+                  setShowRemotePopup(false);
+                }}
+                className="inline-flex items-center gap-1 text-xs font-mono text-ink-faint bg-paper-warm/60 hover:bg-paper-warm px-1.5 py-0.5 rounded cursor-pointer transition-colors"
+              >
+                <svg
+                  width="12"
+                  height="12"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <line x1="6" y1="3" x2="6" y2="15" />
+                  <circle cx="18" cy="6" r="3" />
+                  <circle cx="6" cy="18" r="3" />
+                  <path d="M18 9a9 9 0 0 1-9 9" />
+                </svg>
+                {status.branch}
+                <svg
+                  width="8"
+                  height="8"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.5"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                >
+                  <path d="M6 9l6 6 6-6" />
+                </svg>
+              </button>
+              {showBranchPopup && (
+                <BranchPopup
+                  branches={branches}
+                  currentBranch={status.branch}
+                  newBranchName={newBranchName}
+                  onNewBranchNameChange={setNewBranchName}
+                  onCreateBranch={handleBranchCreate}
+                  onSwitchBranch={handleBranchSwitch}
+                  onDeleteBranch={handleBranchDelete}
+                  onMergeBranch={handleBranchMerge}
+                  onClose={() => setShowBranchPopup(false)}
+                  t={t}
+                />
+              )}
+            </div>
+            {status.ahead > 0 && (
+              <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-mono">
+                ↑{status.ahead}
+              </span>
+            )}
+            {status.behind > 0 && (
+              <span className="text-[10px] text-amber-600 dark:text-amber-400 font-mono">
+                ↓{status.behind}
+              </span>
+            )}
+            <div className="flex-1" />
+            <button
+              onClick={handleFetch}
+              disabled={loading || remotes.length === 0}
+              className="text-[10px] px-1 py-0.5 rounded text-ink-ghost hover:text-ink-faint hover:bg-paper-warm transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+              title={t("git.fetch", { defaultValue: "获取" }) as string}
             >
-              <line x1="6" y1="3" x2="6" y2="15" />
-              <circle cx="18" cy="6" r="3" />
-              <circle cx="6" cy="18" r="3" />
-              <path d="M18 9a9 9 0 0 1-9 9" />
-            </svg>
-            {status.branch}
-          </span>
-          {status.ahead > 0 && (
-            <span className="text-[10px] text-emerald-600 dark:text-emerald-400 font-mono">
-              ↑{status.ahead}
-            </span>
-          )}
-          {status.behind > 0 && (
-            <span className="text-[10px] text-amber-600 dark:text-amber-400 font-mono">
-              ↓{status.behind}
-            </span>
-          )}
-          <div className="flex-1" />
-          <button
-            onClick={() => setShowLog(!showLog)}
-            className={`text-[10px] px-1.5 py-0.5 rounded transition-colors cursor-pointer ${
-              showLog ? "text-bamboo bg-bamboo-mist/30" : "text-ink-ghost hover:text-ink-faint"
-            }`}
-          >
-            {showLog
-              ? t("git.showChanges", { defaultValue: "变更" })
-              : t("git.showLog", { defaultValue: "历史" })}
-          </button>
-          <button
-            onClick={refresh}
-            disabled={loading}
-            className="text-[10px] px-1.5 py-0.5 rounded text-ink-ghost hover:text-ink-faint transition-colors cursor-pointer"
-            title={t("common.refresh", { defaultValue: "刷新" })}
-          >
-            ↻
-          </button>
+              ↓
+            </button>
+            <button
+              onClick={handlePull}
+              disabled={loading || remotes.length === 0}
+              className="text-[10px] px-1 py-0.5 rounded text-ink-ghost hover:text-ink-faint hover:bg-paper-warm transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+              title={t("git.pull", { defaultValue: "拉取" }) as string}
+            >
+              ⇣
+            </button>
+            <button
+              onClick={handlePush}
+              disabled={loading || remotes.length === 0}
+              className="text-[10px] px-1 py-0.5 rounded text-ink-ghost hover:text-ink-faint hover:bg-paper-warm transition-colors cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+              title={t("git.push", { defaultValue: "推送" }) as string}
+            >
+              ⇡
+            </button>
+            <div className="relative">
+              <button
+                onClick={() => {
+                  setShowRemotePopup(!showRemotePopup);
+                  setShowBranchPopup(false);
+                }}
+                className="text-[10px] px-1 py-0.5 rounded text-ink-ghost hover:text-ink-faint hover:bg-paper-warm transition-colors cursor-pointer"
+                title={t("git.remotes", { defaultValue: "远程仓库" }) as string}
+              >
+                ⚙
+              </button>
+              {showRemotePopup && (
+                <RemotePopup
+                  remotes={remotes}
+                  newName={newRemoteName}
+                  newUrl={newRemoteUrl}
+                  onNameChange={setNewRemoteName}
+                  onUrlChange={setNewRemoteUrl}
+                  onAdd={handleRemoteAdd}
+                  onRemove={handleRemoteRemove}
+                  onClose={() => setShowRemotePopup(false)}
+                  t={t}
+                />
+              )}
+            </div>
+          </div>
+          {/* Row 2: Tabs + refresh */}
+          <div className="px-3 pb-1.5 flex items-center gap-1">
+            {(["changes", "history", "stash"] as const).map((tab) => (
+              <button
+                key={tab}
+                onClick={() => {
+                  setActiveTab(tab);
+                  setShowLog(tab === "history");
+                }}
+                className={`text-[10px] px-2 py-0.5 rounded-full transition-colors cursor-pointer ${
+                  activeTab === tab
+                    ? "text-bamboo bg-bamboo-mist/30 font-medium"
+                    : "text-ink-ghost hover:text-ink-faint"
+                }`}
+              >
+                {tab === "changes"
+                  ? t("git.changesTab", { defaultValue: "变更" })
+                  : tab === "history"
+                    ? t("git.historyTab", { defaultValue: "历史" })
+                    : t("git.stashTab", { defaultValue: "暂存" })}
+                {tab === "stash" && stashEntries.length > 0 && (
+                  <span className="ml-1 text-[9px]">{stashEntries.length}</span>
+                )}
+              </button>
+            ))}
+            {conflicts.length > 0 && (
+              <span className="text-[10px] text-red-500 font-medium ml-1">
+                ⚠ {conflicts.length}
+              </span>
+            )}
+            <div className="flex-1" />
+            <button
+              onClick={() => refreshRef.current()}
+              disabled={loading}
+              className="text-[10px] px-1.5 py-0.5 rounded text-ink-ghost hover:text-ink-faint transition-colors cursor-pointer"
+              title={t("common.refresh", { defaultValue: "刷新" }) as string}
+            >
+              ↻
+            </button>
+          </div>
         </div>
       )}
 
@@ -370,9 +762,39 @@ export function GitPanel({ repoPath, onRefresh }: GitPanelProps) {
         </div>
       )}
 
+      {/* Conflicts banner */}
+      {conflicts.length > 0 && (
+        <div className="shrink-0 px-3 py-1.5 bg-amber-100/60 dark:bg-amber-900/20 text-[11px] text-amber-700 dark:text-amber-400 flex items-center gap-2">
+          <span className="flex-1">
+            {t("git.conflictsDetected", {
+              count: conflicts.length,
+              defaultValue: `检测到 ${conflicts.length} 个冲突文件`,
+            })}
+          </span>
+          <button
+            onClick={handleAbortMerge}
+            className="text-[10px] px-1.5 py-0.5 rounded bg-amber-200/50 dark:bg-amber-800/30 hover:bg-amber-300/50 cursor-pointer transition-colors"
+          >
+            {t("git.abortMerge", { defaultValue: "中止合并" })}
+          </button>
+        </div>
+      )}
+
+      {/* Diff modal */}
+      {diffContent !== null && (
+        <DiffModal
+          content={diffContent}
+          title={diffTitle}
+          onClose={() => {
+            setDiffContent(null);
+            setDiffTitle("");
+          }}
+        />
+      )}
+
       {/* Content area */}
       <div className="flex-1 overflow-y-auto scrollbar-hidden">
-        {showLog ? (
+        {activeTab === "history" ? (
           /* Commit log view */
           <div className="p-2">
             {commits.length === 0 ? (
@@ -396,6 +818,88 @@ export function GitPanel({ repoPath, onRefresh }: GitPanelProps) {
                       <span className="text-[10px] text-ink-ghost">{c.author}</span>
                       <span className="text-[10px] text-ink-ghost">{c.date}</span>
                     </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        ) : activeTab === "stash" ? (
+          /* Stash view */
+          <div className="p-2">
+            <div className="flex items-center gap-2 mb-2">
+              <button
+                onClick={() => setShowStashPush(!showStashPush)}
+                className="text-[10px] px-2 py-0.5 rounded bg-bamboo text-white hover:bg-bamboo-dark transition-colors cursor-pointer"
+              >
+                {t("git.stashPush", { defaultValue: "暂存更改" })}
+              </button>
+              {stashEntries.length > 0 && (
+                <button
+                  onClick={() => handleStashPop(0)}
+                  className="text-[10px] px-2 py-0.5 rounded text-ink-faint bg-paper-warm hover:bg-paper-deep/20 transition-colors cursor-pointer"
+                >
+                  {t("git.stashPopLatest", { defaultValue: "恢复最近" })}
+                </button>
+              )}
+            </div>
+            {showStashPush && (
+              <div className="mb-2 p-2 rounded bg-paper-warm/60 border border-paper-deep/20">
+                <input
+                  value={stashMessage}
+                  onChange={(e) => setStashMessage(e.target.value)}
+                  placeholder={
+                    t("git.stashMessagePlaceholder", {
+                      defaultValue: "暂存消息（可选）…",
+                    }) as string
+                  }
+                  className="w-full text-[11px] bg-transparent border-b border-paper-deep/30 px-1 py-0.5 outline-none focus:border-bamboo/50 placeholder:text-ink-ghost mb-1"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") handleStashPush();
+                  }}
+                />
+                <div className="flex gap-1 justify-end">
+                  <button
+                    onClick={() => setShowStashPush(false)}
+                    className="text-[10px] px-1.5 py-0.5 rounded text-ink-ghost hover:text-ink-faint cursor-pointer"
+                  >
+                    {t("common.cancel", { defaultValue: "取消" })}
+                  </button>
+                  <button
+                    onClick={handleStashPush}
+                    className="text-[10px] px-1.5 py-0.5 rounded bg-bamboo text-white hover:bg-bamboo-dark cursor-pointer"
+                  >
+                    {t("git.stash", { defaultValue: "暂存" })}
+                  </button>
+                </div>
+              </div>
+            )}
+            {stashEntries.length === 0 ? (
+              <p className="text-xs text-ink-ghost text-center py-6">
+                {t("git.noStashes", { defaultValue: "暂无暂存" })}
+              </p>
+            ) : (
+              <div className="space-y-1">
+                {stashEntries.map((s) => (
+                  <div
+                    key={s.index}
+                    className="flex items-center gap-2 px-2 py-1 rounded hover:bg-paper-warm/60 transition-colors group"
+                  >
+                    <span className="text-[10px] font-mono text-bamboo/70 shrink-0">
+                      stash@&#123;{s.index}&#125;
+                    </span>
+                    <span className="text-[11px] text-ink-soft truncate flex-1">{s.message}</span>
+                    <button
+                      onClick={() => handleStashPop(s.index)}
+                      className="text-[10px] px-1 rounded text-ink-ghost hover:text-bamboo cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      {t("git.pop", { defaultValue: "恢复" })}
+                    </button>
+                    <button
+                      onClick={() => handleStashDrop(s.index)}
+                      className="text-[10px] px-1 rounded text-ink-ghost hover:text-red-400 cursor-pointer opacity-0 group-hover:opacity-100 transition-opacity"
+                    >
+                      {t("git.drop", { defaultValue: "删除" })}
+                    </button>
                   </div>
                 ))}
               </div>
@@ -499,8 +1003,8 @@ export function GitPanel({ repoPath, onRefresh }: GitPanelProps) {
         ) : null}
       </div>
 
-      {/* Commit area (always at bottom) */}
-      {status && !showLog && (
+      {/* Commit area (always at bottom, only on changes tab) */}
+      {status && activeTab === "changes" && (
         <div className="shrink-0 border-t border-paper-deep/20 p-2 space-y-2">
           <div className="flex items-center gap-2">
             <button
@@ -555,6 +1059,10 @@ interface FileGroupProps {
     label: string;
     onClick: (file: GitFileStatus) => void;
   };
+  tertiaryAction?: {
+    label: string;
+    onClick: (file: GitFileStatus) => void;
+  };
   groupAction?: {
     label: string;
     onClick: () => void;
@@ -567,6 +1075,7 @@ function FileGroup({
   files,
   primaryAction,
   secondaryAction,
+  tertiaryAction,
   groupAction,
 }: FileGroupProps) {
   const [collapsed, setCollapsed] = useState(false);
@@ -635,6 +1144,14 @@ function FileGroup({
                     {secondaryAction.label}
                   </button>
                 )}
+                {tertiaryAction && (
+                  <button
+                    onClick={() => tertiaryAction.onClick(f)}
+                    className="text-[10px] px-1 py-0.5 rounded text-ink-ghost hover:text-blue-400 hover:bg-blue-100/40 dark:hover:bg-blue-900/20 transition-colors cursor-pointer"
+                  >
+                    {tertiaryAction.label}
+                  </button>
+                )}
               </div>
             </div>
           ))}
@@ -668,4 +1185,216 @@ function FileStatusIcon({ status }: { status: GitFileStatus["status"] }) {
     default:
       return <span className="w-3 h-3 shrink-0" />;
   }
+}
+
+/* ------------------------------------------------------------------ */
+/* Branch popup */
+/* ------------------------------------------------------------------ */
+
+interface BranchPopupProps {
+  branches: GitBranch[];
+  currentBranch: string;
+  newBranchName: string;
+  onNewBranchNameChange: (v: string) => void;
+  onCreateBranch: () => void;
+  onSwitchBranch: (name: string) => void;
+  onDeleteBranch: (name: string) => void;
+  onMergeBranch: (name: string) => void;
+  onClose: () => void;
+  t: ReturnType<typeof useTranslation>["t"];
+}
+
+function BranchPopup({
+  branches,
+  currentBranch,
+  newBranchName,
+  onNewBranchNameChange,
+  onCreateBranch,
+  onSwitchBranch,
+  onDeleteBranch,
+  onMergeBranch,
+  onClose,
+  t,
+}: BranchPopupProps) {
+  return (
+    <div className="absolute top-full left-0 mt-1 w-52 bg-white dark:bg-slate-800 rounded-lg shadow-lg border border-paper-deep/20 z-50 overflow-hidden">
+      {/* Create new branch */}
+      <div className="p-2 border-b border-paper-deep/10">
+        <div className="flex gap-1">
+          <input
+            value={newBranchName}
+            onChange={(e) => onNewBranchNameChange(e.target.value)}
+            placeholder={t("git.newBranchPlaceholder", { defaultValue: "新分支名…" }) as string}
+            className="flex-1 text-[11px] bg-paper-warm/40 rounded px-1.5 py-1 outline-none focus:bg-paper-warm"
+            onKeyDown={(e) => {
+              if (e.key === "Enter") onCreateBranch();
+            }}
+          />
+          <button
+            onClick={onCreateBranch}
+            disabled={!newBranchName.trim()}
+            className="text-[10px] px-2 py-1 rounded bg-bamboo text-white hover:bg-bamboo-dark disabled:opacity-30 cursor-pointer"
+          >
+            +
+          </button>
+        </div>
+      </div>
+      {/* Branch list */}
+      <div className="max-h-48 overflow-y-auto">
+        {branches.map((b) => (
+          <div
+            key={b.name}
+            className={`flex items-center gap-1.5 px-2 py-1.5 hover:bg-paper-warm/60 transition-colors ${b.isCurrent ? "bg-bamboo-mist/20" : ""}`}
+          >
+            <span
+              className={`text-[11px] flex-1 truncate ${b.isCurrent ? "text-bamboo font-medium" : "text-ink-soft"}`}
+              onClick={() => {
+                if (!b.isCurrent) onSwitchBranch(b.name);
+              }}
+              title={
+                b.isCurrent
+                  ? (t("git.currentBranch", { defaultValue: "当前分支" }) as string)
+                  : undefined
+              }
+            >
+              {b.name}
+              {b.isCurrent && " ✓"}
+            </span>
+            {!b.isCurrent && (
+              <div className="flex gap-0.5">
+                <button
+                  onClick={() => onMergeBranch(b.name)}
+                  className="text-[9px] px-1 rounded text-ink-ghost hover:text-bamboo cursor-pointer"
+                  title={t("git.mergeIntoCurrent", { defaultValue: "合并到当前分支" }) as string}
+                >
+                  {t("git.merge", { defaultValue: "合并" })}
+                </button>
+                <button
+                  onClick={() => onDeleteBranch(b.name)}
+                  className="text-[9px] px-1 rounded text-ink-ghost hover:text-red-400 cursor-pointer"
+                  title={t("git.deleteBranch", { defaultValue: "删除分支" }) as string}
+                >
+                  ✕
+                </button>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Remote popup */
+/* ------------------------------------------------------------------ */
+
+interface RemotePopupProps {
+  remotes: GitRemote[];
+  newName: string;
+  newUrl: string;
+  onNameChange: (v: string) => void;
+  onUrlChange: (v: string) => void;
+  onAdd: () => void;
+  onRemove: (name: string) => void;
+  onClose: () => void;
+  t: ReturnType<typeof useTranslation>["t"];
+}
+
+function RemotePopup({
+  remotes,
+  newName,
+  newUrl,
+  onNameChange,
+  onUrlChange,
+  onAdd,
+  onRemove,
+  onClose,
+  t,
+}: RemotePopupProps) {
+  return (
+    <div className="absolute top-full right-0 mt-1 w-64 bg-white dark:bg-slate-800 rounded-lg shadow-lg border border-paper-deep/20 z-50 overflow-hidden">
+      {/* Add remote */}
+      <div className="p-2 border-b border-paper-deep/10 space-y-1">
+        <input
+          value={newName}
+          onChange={(e) => onNameChange(e.target.value)}
+          placeholder={
+            t("git.remoteNamePlaceholder", { defaultValue: "名称 (如 origin)" }) as string
+          }
+          className="w-full text-[11px] bg-paper-warm/40 rounded px-1.5 py-1 outline-none focus:bg-paper-warm"
+        />
+        <input
+          value={newUrl}
+          onChange={(e) => onUrlChange(e.target.value)}
+          placeholder={
+            t("git.remoteUrlPlaceholder", { defaultValue: "URL (如 https://…)" }) as string
+          }
+          className="w-full text-[11px] bg-paper-warm/40 rounded px-1.5 py-1 outline-none focus:bg-paper-warm"
+        />
+        <button
+          onClick={onAdd}
+          disabled={!newName.trim() || !newUrl.trim()}
+          className="w-full text-[10px] px-2 py-1 rounded bg-bamboo text-white hover:bg-bamboo-dark disabled:opacity-30 cursor-pointer"
+        >
+          {t("git.addRemote", { defaultValue: "添加远程仓库" })}
+        </button>
+      </div>
+      {/* Remote list */}
+      {remotes.length > 0 ? (
+        <div className="max-h-36 overflow-y-auto">
+          {remotes.map((r) => (
+            <div
+              key={r.name}
+              className="flex items-center gap-1.5 px-2 py-1.5 hover:bg-paper-warm/60 transition-colors"
+            >
+              <div className="flex-1 min-w-0">
+                <div className="text-[11px] text-ink-soft font-medium">{r.name}</div>
+                <div className="text-[9px] text-ink-ghost truncate">{r.url}</div>
+              </div>
+              <button
+                onClick={() => onRemove(r.name)}
+                className="text-[9px] px-1 rounded text-ink-ghost hover:text-red-400 cursor-pointer shrink-0"
+              >
+                ✕
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="text-xs text-ink-ghost text-center py-3">
+          {t("git.noRemotes", { defaultValue: "无远程仓库" })}
+        </p>
+      )}
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
+/* Diff modal */
+/* ------------------------------------------------------------------ */
+
+interface DiffModalProps {
+  content: string;
+  title: string;
+  onClose: () => void;
+}
+
+function DiffModal({ content, title, onClose }: DiffModalProps) {
+  return (
+    <div className="absolute inset-0 z-40 flex flex-col bg-white/95 dark:bg-slate-900/95">
+      <div className="shrink-0 px-3 py-1.5 flex items-center gap-2 border-b border-paper-deep/20">
+        <span className="text-xs text-ink-faint font-mono truncate flex-1">{title}</span>
+        <button
+          onClick={onClose}
+          className="text-[10px] px-1.5 py-0.5 rounded text-ink-ghost hover:text-ink-faint hover:bg-paper-warm cursor-pointer"
+        >
+          ✕
+        </button>
+      </div>
+      <pre className="flex-1 overflow-auto p-3 text-[10px] font-mono text-ink-soft whitespace-pre-wrap leading-relaxed">
+        {content}
+      </pre>
+    </div>
+  );
 }
