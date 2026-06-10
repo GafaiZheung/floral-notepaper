@@ -156,7 +156,7 @@ export function RightBrowserPanel({ isOpen, width, onClose }: RightBrowserPanelP
     void navigateBrowserWebview(activeTab.url).catch(() => {});
   }, [isOpen, activeTab]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ── ResizeObserver: sync webview bounds on content area resize ──
+  // ── ResizeObserver + window.resize: sync webview bounds on any layout change ──
   useEffect(() => {
     if (!isOpen) return;
     const el = contentRef.current;
@@ -168,7 +168,14 @@ export function RightBrowserPanel({ isOpen, width, onClose }: RightBrowserPanelP
       raf = requestAnimationFrame(syncBounds);
     });
     observer.observe(el);
-    return () => observer.disconnect();
+
+    // window resize catches position shifts (ResizeObserver only covers size)
+    window.addEventListener("resize", syncBounds);
+
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", syncBounds);
+    };
   }, [isOpen, width, syncBounds]);
 
   // ── Tab actions ──

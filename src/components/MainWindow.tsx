@@ -173,8 +173,9 @@ export function MainWindow({
   const [rightPanelExpanded, setRightPanelExpanded] = useState(false);
   // Window width without the right panel (restored when panel closes)
   const [windowBaseWidth, setWindowBaseWidth] = useState<number | null>(null);
+  const rightPanelExpandRatio = 0.35;
   const rightPanelWidth = rightPanelExpanded
-    ? rightPanelBaseWidth + sidebarWidth + 4
+    ? Math.round((windowBaseWidth ?? window.innerWidth) * rightPanelExpandRatio)
     : rightPanelBaseWidth;
   const splitContainerRef = useRef<HTMLDivElement>(null);
   const wysiwygRef = useRef<WysiwygEditorHandle>(null);
@@ -2124,7 +2125,7 @@ export function MainWindow({
 
         <div className="relative z-10 flex flex-1 min-h-0">
           {/* === Base content area — always flex:1, naturally shrinks when right panel appears === */}
-          <div className="flex flex-1 min-h-0 min-w-0">
+          <div className="flex flex-1 min-h-0 min-w-0 overflow-hidden">
             <LeftIconSidebar
               activePanel={sidebarTab}
               onSelectPanel={setSidebarTab}
@@ -2133,10 +2134,12 @@ export function MainWindow({
               browserOpen={rightPanelOpen}
             />
             <div
-              className={`border-r border-paper-deep/30 bg-paper/40 flex flex-col shrink-0 ${
-                sidebarCollapsed ? "w-0 overflow-hidden transition-all duration-[600ms]" : ""
-              }`}
-              style={sidebarCollapsed ? undefined : { width: `${sidebarWidth}px` }}
+              className="border-r border-paper-deep/30 bg-paper/40 flex flex-col shrink-0 overflow-hidden"
+              style={{
+                width: sidebarCollapsed ? 0 : `${sidebarWidth}px`,
+                transition: "width 600ms cubic-bezier(0.22, 1, 0.36, 1)",
+                willChange: "width",
+              }}
             >
               {sidebarTab !== "git" && (
                 <div className="px-3 pt-3 pb-2 shrink-0">
@@ -2886,7 +2889,7 @@ export function MainWindow({
               </div>
             )}
 
-            <div className="flex-1 flex flex-col min-w-0">
+            <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
               <div
                 className="grid transition-[grid-template-rows] duration-300 ease-in-out"
                 style={{
@@ -2923,8 +2926,8 @@ export function MainWindow({
                 />
               ) : (
                 <>
-                  <div className="flex items-center justify-between px-4 h-10 border-b border-paper-deep/20 shrink-0 bg-paper/20">
-                    <div className="flex items-center gap-1">
+                  <div className="flex items-center gap-1 px-4 h-10 border-b border-paper-deep/20 shrink-0 bg-paper/20 overflow-x-auto">
+                    <div className="flex items-center gap-1 shrink-0">
                       <button
                         onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
                         className="w-7 h-7 flex items-center justify-center rounded-lg text-ink-ghost hover:text-ink-faint hover:bg-paper-warm transition-all cursor-pointer"
@@ -3329,8 +3332,12 @@ export function MainWindow({
           {/* Right browser panel — fixed width, window expansion provides the space */}
           {rightPanelOpen && (
             <div
-              className="flex flex-col shrink-0 border-l border-paper-deep/30 bg-paper/40 overflow-hidden transition-all duration-[600ms]"
-              style={{ width: `${rightPanelWidth}px` }}
+              className="flex flex-col shrink-0 border-l border-paper-deep/30 bg-paper/40 overflow-hidden"
+              style={{
+                width: `${rightPanelWidth}px`,
+                transition: "width 600ms cubic-bezier(0.22, 1, 0.36, 1)",
+                willChange: "width",
+              }}
             >
               <RightBrowserPanel
                 isOpen={rightPanelOpen}
