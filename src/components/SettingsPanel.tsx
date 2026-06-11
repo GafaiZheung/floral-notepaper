@@ -21,6 +21,7 @@ import { applyTheme, watchSystemTheme } from "../features/settings/theme";
 import { SUPPORTED_LOCALES } from "../locales/locale-whitelist";
 import { SlidingButtonGroup } from "./SlidingButtonGroup";
 import { OneDriveSettings } from "../features/onedrive/OneDriveSettings";
+import { GitHostingSettings } from "../features/git/GitHostingSettings";
 
 const HARMONY_FONT_LICENSE_URL = new URL("../assets/fonts/LICENSE_Fonts", import.meta.url).href;
 
@@ -497,6 +498,8 @@ export function SettingsPanel({ config, onChange, onChooseNotesDir, onClose }: S
 
         <OneDriveSettings config={config} onChange={onChange} />
 
+        <GitHostingSettings />
+
         <section className="pt-2 border-t border-paper-deep/25">
           <p className="text-[10px] leading-relaxed text-ink-ghost/75">
             <span>
@@ -520,22 +523,28 @@ export function SettingsPanel({ config, onChange, onChooseNotesDir, onClose }: S
   );
 }
 
-interface ToggleRowProps {
+export interface ToggleRowProps {
   label: string;
   checked: boolean;
   onChange: (checked: boolean) => void;
 }
 
-function ToggleRow({ label, checked, onChange }: ToggleRowProps) {
+export function ToggleRow({ label, checked, onChange }: ToggleRowProps) {
   return (
-    <label className="flex items-center justify-between h-9 rounded-lg px-2.5 bg-paper-warm/45 border border-paper-deep/25 cursor-pointer">
+    <div
+      role="switch"
+      aria-checked={checked}
+      tabIndex={0}
+      className="flex items-center justify-between h-9 rounded-lg px-2.5 bg-paper-warm/45 border border-paper-deep/25 cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-bamboo/40"
+      onClick={() => onChange(!checked)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onChange(!checked);
+        }
+      }}
+    >
       <span className="text-[12px] text-ink-soft">{label}</span>
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(event) => onChange(event.target.checked)}
-        className="sr-only"
-      />
       <div
         className={`relative w-8 h-[18px] rounded-full transition-colors duration-250 ease-[cubic-bezier(0.22,1,0.36,1)] ${
           checked ? "bg-bamboo" : "bg-paper-deep/50"
@@ -547,7 +556,7 @@ function ToggleRow({ label, checked, onChange }: ToggleRowProps) {
           }`}
         />
       </div>
-    </label>
+    </div>
   );
 }
 
@@ -561,7 +570,7 @@ interface RangeRowProps {
   onChange: (value: number) => void;
 }
 
-function RangeRow({ label, value, min, max, step, format, onChange }: RangeRowProps) {
+export function RangeRow({ label, value, min, max, step, format, onChange }: RangeRowProps) {
   return (
     <div className="flex items-center gap-3 h-9 rounded-lg px-2.5 bg-paper-warm/45 border border-paper-deep/25">
       <span className="w-9 text-[11px] text-ink-faint">{label}</span>
@@ -588,7 +597,7 @@ interface ShortcutRecorderProps {
 
 type ShortcutMsg = { key: string; params?: Record<string, string> } | { raw: string };
 
-function ShortcutRecorder({ value, onChange }: ShortcutRecorderProps) {
+export function ShortcutRecorder({ value, onChange }: ShortcutRecorderProps) {
   const { t } = useTranslation();
   const [heldKeys, setHeldKeys] = useState<string[]>([]);
   const [checkState, setCheckState] = useState<"idle" | "checking" | "ok" | "warning" | "error">(

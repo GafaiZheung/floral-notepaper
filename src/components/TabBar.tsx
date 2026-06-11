@@ -5,15 +5,12 @@ export interface TabInfo {
   noteId: string;
   title: string;
   saveState: "idle" | "dirty" | "saving" | "saved" | "error";
+  /** When true, renders the tab title in italic to indicate a temporary preview tab */
+  isPreview?: boolean;
 }
 
 /** Menu action identifier for right-click context menu */
-export type TabMenuAction =
-  | "close"
-  | "closeOthers"
-  | "closeRight"
-  | "closeAll"
-  | "closeSaved";
+export type TabMenuAction = "close" | "closeOthers" | "closeRight" | "closeAll" | "closeSaved";
 
 export interface TabBarProps {
   tabs: TabInfo[];
@@ -22,6 +19,10 @@ export interface TabBarProps {
   onCloseTab: (noteId: string) => void;
   onNewTab: () => void;
   onTabMenuAction: (action: TabMenuAction, noteId: string) => void;
+  /** When true, renders compact without border — for titlebar integration */
+  inTitlebar?: boolean;
+  /** When true, hides the new-tab button */
+  hideNewTab?: boolean;
 }
 
 function getDisplayTitle(title: string): string {
@@ -35,6 +36,8 @@ export function TabBar({
   onCloseTab,
   onNewTab,
   onTabMenuAction,
+  inTitlebar = false,
+  hideNewTab = false,
 }: TabBarProps) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -95,7 +98,11 @@ export function TabBar({
   };
 
   return (
-    <div className="relative flex items-center shrink-0 select-none h-9 px-1 border-b border-paper-deep/15">
+    <div
+      className={`relative flex items-center shrink-0 select-none px-1 ${
+        inTitlebar ? "h-full flex-1 min-w-0" : "h-9 border-b border-paper-deep/15"
+      }`}
+    >
       {/* Left fade */}
       {showLeftFade && (
         <div className="absolute left-0 top-0 bottom-0 w-6 bg-gradient-to-r from-paper/70 to-transparent z-10 pointer-events-none" />
@@ -131,10 +138,10 @@ export function TabBar({
               title={getDisplayTitle(tab.title)}
             >
               {/* Dirty indicator */}
-              {isDirty && (
-                <span className="w-1.5 h-1.5 rounded-full bg-bamboo mr-1.5 shrink-0" />
-              )}
-              <span className="text-[11.5px] truncate leading-snug">
+              {isDirty && <span className="w-1.5 h-1.5 rounded-full bg-bamboo mr-1.5 shrink-0" />}
+              <span
+                className={`text-[11.5px] truncate leading-snug ${tab.isPreview ? "italic" : ""}`}
+              >
                 {getDisplayTitle(tab.title)}
               </span>
               <button
@@ -158,33 +165,39 @@ export function TabBar({
 
       {/* Right fade */}
       {showRightFade && (
-        <div className="absolute right-8 top-0 bottom-0 w-6 bg-gradient-to-l from-paper/70 to-transparent z-10 pointer-events-none" />
+        <div
+          className={`absolute top-0 bottom-0 w-6 bg-gradient-to-l from-paper/70 to-transparent z-10 pointer-events-none ${
+            hideNewTab ? "right-0" : "right-8"
+          }`}
+        />
       )}
 
       {/* New tab button */}
-      <button
-        onClick={onNewTab}
-        className="w-8 h-8 flex items-center justify-center text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 rounded-md transition-all shrink-0 mr-1 cursor-pointer"
-        title={t("tabs.newTab", { defaultValue: "新建标签页" })}
-      >
-        <svg
-          width="14"
-          height="14"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeLinecap="round"
+      {!hideNewTab && (
+        <button
+          onClick={onNewTab}
+          className="w-8 h-8 flex items-center justify-center text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 rounded-md transition-all shrink-0 mr-1 cursor-pointer"
+          title={t("tabs.newTab", { defaultValue: "新建标签页" })}
         >
-          <line x1="12" y1="5" x2="12" y2="19" />
-          <line x1="5" y1="12" x2="19" y2="12" />
-        </svg>
-      </button>
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+          >
+            <line x1="12" y1="5" x2="12" y2="19" />
+            <line x1="5" y1="12" x2="19" y2="12" />
+          </svg>
+        </button>
+      )}
 
       {/* Context menu */}
       {contextMenu && (
         <div
-          className="fixed z-[9999] min-w-[148px] py-1.5 bg-cloud/95 backdrop-blur-sm border border-paper-deep/50 rounded-lg overflow-hidden shadow-lg"
+          className="fixed z-[99999] min-w-[148px] py-1.5 bg-cloud/95 backdrop-blur-sm border border-paper-deep/50 rounded-lg overflow-hidden shadow-lg"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onMouseDown={(e) => e.stopPropagation()}
         >

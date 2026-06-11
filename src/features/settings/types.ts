@@ -1,4 +1,4 @@
-export type ViewMode = "wysiwyg" | "source";
+export type ViewMode = "wysiwyg" | "source" | "read";
 
 export type ThemeOption = "light" | "dark" | "system";
 
@@ -41,4 +41,8 @@ export interface AppConfig {
   openTabs?: string[];
   /** Tab management: last active tab id */
   activeTabId?: string;
+  /** Tab layout mode: "compact" embeds tabs in the title bar, "default" places them below */
+  tabLayout?: "compact" | "default";
+  /** Auto-open outline panel when scrolling past headings */
+  autoOpenOutline?: boolean;
 }
