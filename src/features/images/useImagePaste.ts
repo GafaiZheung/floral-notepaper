@@ -1,6 +1,7 @@
 import { useCallback, useRef } from "react";
 import type { TFunction } from "i18next";
 import { saveImage } from "./api";
+import type { MarkdownEditorHandle } from "../../components/MarkdownEditor";
 
 const MAX_IMAGE_SIZE = 20 * 1024 * 1024; // 20 MB
 
@@ -15,13 +16,34 @@ const MIME_TO_EXT: Record<string, string> = {
 
 interface UseImagePasteOptions {
   noteId: string | null;
-  textareaRef: React.RefObject<HTMLTextAreaElement | null>;
+  /** 兼容 textarea（旧编辑器）与 MarkdownEditorHandle（CodeMirror 编辑器） */
+  textareaRef: React.RefObject<HTMLTextAreaElement | MarkdownEditorHandle | null>;
   setContent: (content: string) => void;
   markDirty: () => void;
   onEnsureNoteSaved: () => Promise<string | null>;
   disabled?: boolean;
   onError?: (message: string) => void;
   t?: TFunction;
+}
+
+/** 在 CodeMirror 或 textarea 光标处插入文本 */
+export function insertTextAtCursor(
+  textarea: HTMLTextAreaElement | MarkdownEditorHandle,
+  setContent: (value: string) => void,
+  text: string,
+) {
+  if ("insertAtCursor" in textarea && typeof textarea.insertAtCursor === "function") {
+    textarea.insertAtCursor(text);
+    return;
+  }
+  const el = textarea as HTMLTextAreaElement;
+  const before = el.value.slice(0, el.selectionStart);
+  const needsLeadingNewline = before.length > 0 && !before.endsWith("\n");
+  const insertion = (needsLeadingNewline ? "\n" : "") + text + "\n";
+
+  el.focus();
+  document.execCommand("insertText", false, insertion);
+  setContent(el.value);
 }
 
 async function processImageFile(file: File, noteId: string, t?: TFunction): Promise<string | null> {
@@ -37,20 +59,6 @@ async function processImageFile(file: File, noteId: string, t?: TFunction): Prom
 
   const buffer = await file.arrayBuffer();
   return saveImage(noteId, new Uint8Array(buffer), ext);
-}
-
-export function insertTextAtCursor(
-  textarea: HTMLTextAreaElement,
-  setContent: (value: string) => void,
-  text: string,
-) {
-  const before = textarea.value.slice(0, textarea.selectionStart);
-  const needsLeadingNewline = before.length > 0 && !before.endsWith("\n");
-  const insertion = (needsLeadingNewline ? "\n" : "") + text + "\n";
-
-  textarea.focus();
-  document.execCommand("insertText", false, insertion);
-  setContent(textarea.value);
 }
 
 function getImageFiles(dataTransfer: DataTransfer): File[] {
@@ -118,7 +126,7 @@ export function useImagePaste({
   );
 
   const handlePaste = useCallback(
-    (event: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    (event: React.ClipboardEvent<Element>) => {
       if (disabled) return;
       const files = getImageFiles(event.clipboardData);
       if (files.length === 0) return;
@@ -129,7 +137,7 @@ export function useImagePaste({
   );
 
   const handleDrop = useCallback(
-    (event: React.DragEvent<HTMLTextAreaElement>) => {
+    (event: React.DragEvent<Element>) => {
       if (disabled) return;
       const files = getImageFiles(event.dataTransfer);
       if (files.length === 0) return;
@@ -140,7 +148,7 @@ export function useImagePaste({
   );
 
   const handleDragOver = useCallback(
-    (event: React.DragEvent<HTMLTextAreaElement>) => {
+    (event: React.DragEvent<Element>) => {
       if (disabled) return;
       const hasImage = Array.from(event.dataTransfer.items).some(
         (item) => item.kind === "file" && item.type in MIME_TO_EXT,

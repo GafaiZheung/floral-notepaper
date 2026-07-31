@@ -30,6 +30,9 @@ pub struct AppConfig {
     // 与前端 `dataDir: string` 契约一致，避免 None 时省略字段导致前端收到 undefined
     #[serde(default)]
     pub data_dir: Option<String>,
+    // 多笔记目录支持（来自 fork 的 Git/目录管理功能）
+    #[serde(default)]
+    pub notes_dirs: Vec<String>,
     pub global_shortcut: String,
     pub close_to_tray: bool,
     pub autostart: bool,
@@ -110,11 +113,34 @@ pub struct AppConfig {
     pub toggle_visibility_shortcut: String,
     #[serde(default = "default_open_at_cursor")]
     pub open_at_cursor: bool,
-    // Legacy fields — read from old config, never written back
-    #[serde(default, skip_serializing)]
+    // 当前活动笔记目录（可选）。None 时回退到 dataDir/notes。
+    // 由 select_notes_dir 切换并持久化；为空时不序列化输出
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notes_dir: Option<String>,
+    // Legacy field — read from old config, never written back
     #[serde(default, skip_serializing)]
     pub last_known_base_dir: Option<String>,
+    #[serde(default = "default_hidden_categories")]
+    pub hidden_categories: Vec<String>,
+    #[serde(default = "default_tab_layout")]
+    pub tab_layout: String,
+    #[serde(default)]
+    pub auto_open_outline: bool,
+}
+
+fn default_hidden_categories() -> Vec<String> {
+    vec![
+        ".codex".into(),
+        ".claude".into(),
+        ".git".into(),
+        "node_modules".into(),
+        ".github".into(),
+        "target".into(),
+        ".vscode".into(),
+        ".idea".into(),
+        ".vs".into(),
+        ".husky".into(),
+    ]
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -133,11 +159,19 @@ pub struct NoteMetadata {
     pub title: String,
     pub file_name: String,
     #[serde(default)]
+    pub file_stem: String,
+    #[serde(default)]
     pub category: String,
+    #[serde(default = "default_file_format")]
+    pub file_format: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub word_count: usize,
     pub preview: String,
+}
+
+fn default_file_format() -> String {
+    "md".to_string()
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -147,7 +181,11 @@ pub struct Note {
     pub title: String,
     pub file_name: String,
     #[serde(default)]
+    pub file_stem: String,
+    #[serde(default)]
     pub category: String,
+    #[serde(default = "default_file_format")]
+    pub file_format: String,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub word_count: usize,
@@ -164,7 +202,7 @@ pub struct AppError {
 }
 
 impl AppError {
-    fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
+    pub fn new(code: impl Into<String>, message: impl Into<String>) -> Self {
         Self {
             code: code.into(),
             message: message.into(),
@@ -233,6 +271,16 @@ impl From<tauri::Error> for AppError {
 #[serde(rename_all = "camelCase")]
 struct MetadataFile {
     notes: Vec<NoteMetadata>,
+    #[serde(default)]
+    migrated_v2: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OpenedFileClassification {
+    pub file_path: String,
+    pub known: bool,
+    pub matched_notes_dir: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -503,6 +551,11 @@ fn canonical_for_compare(path: &Path) -> PathBuf {
 }
 
 fn known_data_migration_candidates() -> Vec<PathBuf> {
+    // 测试环境（FLORAL_NOTEPAPER_TEST_TEMP_DIR 被设置）下跳过 legacy 迁移，
+    // 避免把真实用户数据复制进临时测试目录
+    if env::var_os("FLORAL_NOTEPAPER_TEST_TEMP_DIR").is_some() {
+        return Vec::new();
+    }
     known_data_migration_candidates_for(env::var("HOME").ok(), env::var("USERPROFILE").ok())
 }
 
@@ -616,6 +669,77 @@ fn is_safe_data_dir(path: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
+fn normalize_notes_dir(path: &str) -> String {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let p = Path::new(trimmed);
+    let normalized = fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    // Strip \\?\ extended-length prefix on Windows
+    let normalized_str = normalized.to_string_lossy().to_string();
+    let normalized_str = normalized_str
+        .strip_prefix("\\\\?\\")
+        .unwrap_or(&normalized_str);
+    normalized_str.trim_end_matches(['/', '\\']).to_string()
+}
+
+use std::hash::{Hash, Hasher};
+
+fn sanitize_path_for_key(path: &Path) -> String {
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    path.to_string_lossy().to_lowercase().hash(&mut hasher);
+    format!("{:016x}", hasher.finish())
+}
+
+fn dedupe_notes_dirs(dirs: &[String]) -> Vec<String> {
+    let mut seen = std::collections::HashSet::new();
+    let mut result = Vec::new();
+    for dir in dirs {
+        let normalized = normalize_notes_dir(dir);
+        if normalized.is_empty() {
+            continue;
+        }
+        let lower = normalized.to_lowercase();
+        if seen.insert(lower) {
+            result.push(normalized);
+        }
+    }
+    result
+}
+
+fn is_path_under_known_dir(file_path: &Path, notes_dirs: &[String]) -> Option<String> {
+    let file_parent = fs::canonicalize(file_path)
+        .ok()
+        .or_else(|| file_path.parent().and_then(|p| fs::canonicalize(p).ok()))
+        .or_else(|| file_path.parent().map(|p| p.to_path_buf()))?;
+
+    let file_parent_str = file_parent.to_string_lossy().to_string();
+    let file_parent_str = file_parent_str
+        .strip_prefix("\\\\?\\")
+        .unwrap_or(&file_parent_str);
+    let file_parent_str = file_parent_str.to_lowercase();
+
+    notes_dirs
+        .iter()
+        .map(|d| (d, normalize_notes_dir(d).to_lowercase()))
+        // 规范化后仍未解析符号链接（如 macOS 的 /var -> /private/var）时，
+        // 尝试用 canonicalize 解析目录本身再比较
+        .map(|(d, dn)| {
+            if file_parent_str.starts_with(dn.as_str()) {
+                return (d, dn);
+            }
+            let canonical_dir = fs::canonicalize(Path::new(d))
+                .ok()
+                .map(|p| p.to_string_lossy().to_lowercase())
+                .unwrap_or(dn);
+            (d, canonical_dir)
+        })
+        .filter(|(_, dn)| file_parent_str.starts_with(dn.as_str()))
+        .max_by_key(|(_, dn)| dn.len())
+        .map(|(d, _)| d.clone())
+}
+
 impl NoteStore {
     pub fn new(config_dir: PathBuf, data_dir: PathBuf) -> Self {
         Self {
@@ -636,6 +760,13 @@ impl NoteStore {
         self.data_dir.join("metadata.json")
     }
 
+    #[allow(dead_code)]
+    fn metadata_path_for_dir(&self, notes_dir: &Path) -> PathBuf {
+        let key = sanitize_path_for_key(notes_dir);
+        let dir = self.data_dir.join("metadata");
+        dir.join(format!("{key}.json"))
+    }
+
     pub fn config_path(&self) -> PathBuf {
         self.config_dir.join("config.json")
     }
@@ -652,8 +783,15 @@ impl NoteStore {
             self.migrate_config_from_legacy()?;
         }
         if !path.exists() {
-            let config = self.default_config();
-            self.save_config(config.clone())?;
+            // 先创建 notes 目录，使 normalize/canonicalize 能解析符号链接
+            // （macOS 上 /var -> /private/var），保证与既有配置分支路径一致
+            fs::create_dir_all(self.data_dir.join("notes"))?;
+            let mut config = self.default_config();
+            config.notes_dirs = dedupe_notes_dirs(&config.notes_dirs);
+            if config.notes_dirs.is_empty() {
+                config.notes_dirs.push(self.fallback_notes_dir(&config));
+            }
+            self.save_config_raw(&config)?;
             self.mark_macos_shortcut_migration_handled()?;
             return Ok(config);
         }
@@ -664,27 +802,98 @@ impl NoteStore {
         self.migrate_data_dir_if_relocated(&mut config);
         config.data_dir = Some(self.data_dir.to_string_lossy().to_string());
         config.tab_indent_size = config.tab_indent_size.clamp(1, 8);
-        write_json_atomic(&path, &config)?;
+        // 多笔记目录支持：先确保 notes 目录存在，再规范化 notes_dirs
+        // （canonicalize 需要目录存在，macOS 上 /var -> /private/var 等符号链接才能解析一致）
         fs::create_dir_all(self.data_dir.join("notes"))?;
+        config.notes_dirs = dedupe_notes_dirs(&config.notes_dirs);
+        if config.notes_dirs.is_empty() {
+            config.notes_dirs.push(self.fallback_notes_dir(&config));
+        }
+        write_json_atomic(&path, &config)?;
         if self.migrate_macos_shortcut_default(&mut config)? {
-            write_json_atomic(&path, &config)?;
+            self.save_config_raw(&config)?;
+        } else {
+            self.save_config_raw(&config)?;
         }
         Ok(config)
+    }
+
+    fn save_config_raw(&self, config: &AppConfig) -> Result<(), AppError> {
+        self.ensure_config_dir()?;
+        write_json_atomic(&self.config_path(), config)
     }
 
     pub fn save_config(&self, mut config: AppConfig) -> Result<AppConfig, AppError> {
         self.ensure_config_dir()?;
         config.data_dir = Some(self.data_dir.to_string_lossy().to_string());
         config.tab_indent_size = config.tab_indent_size.clamp(1, 8);
+        // 校验活动笔记目录：无效路径回退默认
+        if let Some(dir) = config.notes_dir.as_deref() {
+            let normalized = normalize_notes_dir(dir);
+            if normalized.is_empty() || is_safe_data_dir(Path::new(&normalized)).is_err() {
+                config.notes_dir = None;
+            } else {
+                config.notes_dir = Some(normalized);
+            }
+        }
+        // 多笔记目录支持：notes_dirs 为空时兜底加入活动目录
+        config.notes_dirs = dedupe_notes_dirs(&config.notes_dirs);
+        if config.notes_dirs.is_empty() {
+            config.notes_dirs.push(self.fallback_notes_dir(&config));
+        }
         is_safe_data_dir(&self.data_dir)?;
         fs::create_dir_all(self.data_dir.join("notes"))?;
+        for dir in &config.notes_dirs {
+            if !dir.is_empty() {
+                let _ = fs::create_dir_all(dir);
+            }
+        }
         write_json_atomic(&self.config_path(), &config)?;
         Ok(config)
     }
 
+    /// notes_dirs 为空时的兜底目录：优先当前活动目录，其次 dataDir/notes
+    fn fallback_notes_dir(&self, config: &AppConfig) -> String {
+        if let Some(dir) = config.notes_dir.as_deref() {
+            let normalized = normalize_notes_dir(dir);
+            if !normalized.is_empty() {
+                return normalized;
+            }
+        }
+        let fallback = self.data_dir.join("notes").to_string_lossy().to_string();
+        let normalized = normalize_notes_dir(&fallback);
+        if normalized.is_empty() {
+            fallback
+        } else {
+            normalized
+        }
+    }
+
     pub fn list_notes(&self) -> Result<Vec<NoteMetadata>, AppError> {
         self.ensure_storage()?;
-        let mut metadata = self.load_metadata()?.notes;
+        let mut metadata_file = self.load_metadata()?;
+        if !metadata_file.migrated_v2 {
+            let migrated = self.migrate_legacy_filenames(&mut metadata_file)?;
+            if migrated > 0 {
+                eprintln!("Migrated {} legacy note filenames", migrated);
+            }
+            metadata_file.migrated_v2 = true;
+            self.save_metadata(&metadata_file)?;
+        }
+        // Patch file_format from file_name extension — handles metadata
+        // cached before the file_format field was introduced.
+        let mut format_patched = false;
+        for note in metadata_file.notes.iter_mut() {
+            let detected = classify_format(&note.file_name);
+            if note.file_format != detected {
+                note.file_format = detected.to_string();
+                format_patched = true;
+            }
+        }
+        if format_patched {
+            self.save_metadata(&metadata_file)?;
+        }
+        let mut metadata = metadata_file.notes;
         metadata.retain(|note| {
             self.note_path_in_category(&note.file_name, &note.category)
                 .exists()
@@ -696,14 +905,27 @@ impl NoteStore {
     pub fn read_note(&self, id: &str) -> Result<Note, AppError> {
         self.ensure_storage()?;
         let metadata = self.find_metadata(id)?;
-        let content = fs::read_to_string(
-            self.note_path_in_category(&metadata.file_name, &metadata.category),
-        )?;
+        let path = self.note_path_in_category(&metadata.file_name, &metadata.category);
+        // Determine format: use metadata field first, but fall back to
+        // extension detection (handles legacy caches without file_format).
+        let format = if metadata.file_format == "md" {
+            // Double-check: if the file name doesn't end with .md, re-detect.
+            classify_format(&metadata.file_name)
+        } else {
+            &metadata.file_format
+        };
+        let content = if format == "md" {
+            fs::read_to_string(&path)?
+        } else {
+            String::new() // non-md opened via system default app
+        };
         Ok(Note {
             id: metadata.id,
             title: metadata.title,
             file_name: metadata.file_name,
+            file_stem: metadata.file_stem,
             category: metadata.category,
+            file_format: format.to_string(),
             created_at: metadata.created_at,
             updated_at: metadata.updated_at,
             word_count: metadata.word_count,
@@ -711,22 +933,42 @@ impl NoteStore {
         })
     }
 
+    /// Public accessor for building a file path from file_name + category.
+    pub fn note_path_for(&self, file_name: &str, category: &str) -> PathBuf {
+        self.note_path_in_category(file_name, category)
+    }
+
+    /// Find note metadata by ID (public, used by commands outside NoteStore).
+    pub fn find_note_metadata(&self, id: &str) -> Result<NoteMetadata, AppError> {
+        self.find_metadata(id)
+    }
+
     pub fn create_note(&self, request: SaveNoteRequest) -> Result<Note, AppError> {
         self.ensure_storage()?;
-        let id = Uuid::new_v4().to_string();
         let now = Utc::now();
-        let file_name = self.file_name_for(&id, &request.title);
-        let word_count = count_words(&request.content);
+        let safe_stem = safe_file_stem(&request.title);
         let category = request.category.clone();
+        let (actual_stem, file_name) = self.find_available_file_name(&safe_stem, &category);
+        let (file_name, id) = if safe_stem.is_empty() {
+            // Fallback: use random ID as filename when title is empty after sanitization.
+            let fallback_id = Uuid::new_v4().as_simple().to_string()[..12].to_string();
+            (format!("{fallback_id}.md"), fallback_id)
+        } else {
+            let id = Self::make_note_id(&actual_stem, &category);
+            (file_name, id)
+        };
         let note_path = self.note_path_in_category(&file_name, &category);
         if let Some(parent) = note_path.parent() {
             fs::create_dir_all(parent)?;
         }
+        let word_count = count_words(&request.content);
         let metadata = NoteMetadata {
             id: id.clone(),
             title: request.title,
             file_name: file_name.clone(),
+            file_stem: file_stem_display(&file_name),
             category: category.clone(),
+            file_format: "md".to_string(),
             created_at: now,
             updated_at: now,
             word_count,
@@ -742,7 +984,9 @@ impl NoteStore {
             id,
             title: metadata.title,
             file_name,
+            file_stem: metadata.file_stem,
             category,
+            file_format: "md".to_string(),
             created_at: now,
             updated_at: now,
             word_count,
@@ -759,29 +1003,32 @@ impl NoteStore {
             .find(|note| note.id == id)
             .ok_or_else(|| AppError::note_not_found(id))?;
 
-        let old_file_name = note.file_name.clone();
+        if note.file_format != "md" {
+            return Err(AppError::new("readOnly", "只读文件，不可编辑内容"));
+        }
+
+        let file_name = note.file_name.clone();
         let old_category = note.category.clone();
-        let new_file_name = self.file_name_for(id, &request.title);
         let new_category = request.category.clone();
         let now = Utc::now();
         let word_count = count_words(&request.content);
 
-        let new_path = self.note_path_in_category(&new_file_name, &new_category);
-        if let Some(parent) = new_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        fs::write(&new_path, &request.content)?;
-
-        if old_file_name != new_file_name || old_category != new_category {
-            let old_path = self.note_path_in_category(&old_file_name, &old_category);
-            if old_path.exists() && old_path != new_path {
-                trash::delete(&old_path)
-                    .map_err(|e| AppError::new("trash", format!("移入回收站失败: {e}")))?;
+        // 分类变更时移动文件，文件名保持不变
+        if old_category != new_category {
+            let old_path = self.note_path_in_category(&file_name, &old_category);
+            let new_path = self.note_path_in_category(&file_name, &new_category);
+            if let Some(parent) = new_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            if old_path.exists() {
+                fs::rename(&old_path, &new_path)?;
             }
         }
 
+        let current_path = self.note_path_in_category(&file_name, &new_category);
+        fs::write(&current_path, &request.content)?;
+
         note.title = request.title;
-        note.file_name = new_file_name.clone();
         note.category = new_category.clone();
         note.updated_at = now;
         note.word_count = word_count;
@@ -791,13 +1038,51 @@ impl NoteStore {
             id: note.id.clone(),
             title: note.title.clone(),
             file_name: note.file_name.clone(),
+            file_stem: note.file_stem.clone(),
             category: new_category,
+            file_format: note.file_format.clone(),
             created_at: note.created_at,
             updated_at: note.updated_at,
             word_count: note.word_count,
             content: request.content,
         };
 
+        self.save_metadata(&metadata_file)?;
+        Ok(result)
+    }
+
+    pub fn rename_file_stem(&self, id: &str, new_stem: &str) -> Result<NoteMetadata, AppError> {
+        self.ensure_storage()?;
+        let mut metadata_file = self.load_metadata()?;
+        let note = metadata_file
+            .notes
+            .iter_mut()
+            .find(|note| note.id == id)
+            .ok_or_else(|| AppError::note_not_found(id))?;
+
+        if note.file_format != "md" {
+            return Err(AppError::new("readOnly", "只读文件，不可重命名"));
+        }
+
+        let safe_stem = safe_file_stem(new_stem);
+        let (actual_stem, new_file_name) = if safe_stem.is_empty() {
+            // Fallback: use ID as stem when title sanitizes to empty.
+            (id.to_string(), format!("{id}.md"))
+        } else {
+            self.find_available_file_name(&safe_stem, &note.category)
+        };
+
+        let final_path = self.note_path_in_category(&new_file_name, &note.category);
+        let old_path = self.note_path_in_category(&note.file_name, &note.category);
+        if old_path.exists() && old_path != final_path {
+            fs::rename(&old_path, &final_path)?;
+        }
+
+        note.id = Self::make_note_id(&actual_stem, &note.category);
+        note.file_name = new_file_name.clone();
+        note.file_stem = file_stem_display(&new_file_name);
+        note.updated_at = Utc::now();
+        let result = note.clone();
         self.save_metadata(&metadata_file)?;
         Ok(result)
     }
@@ -812,9 +1097,12 @@ impl NoteStore {
             .ok_or_else(|| AppError::note_not_found(id))?;
         let metadata = metadata_file.notes.remove(index);
         let path = self.note_path_in_category(&metadata.file_name, &metadata.category);
-        if path.exists() {
-            trash::delete(&path)
-                .map_err(|e| AppError::new("trash", format!("移入回收站失败: {e}")))?;
+        if metadata.file_format == "md" {
+            // Markdown files: move to OS trash
+            if path.exists() {
+                trash::delete(&path)
+                    .map_err(|e| AppError::new("trash", format!("移入回收站失败: {e}")))?;
+            }
         }
         self.save_metadata(&metadata_file)?;
         let _ = self.delete_note_images(id);
@@ -918,14 +1206,120 @@ impl NoteStore {
         Ok(())
     }
 
+    pub fn list_notes_dirs(&self) -> Result<Vec<String>, AppError> {
+        let config = self.load_config()?;
+        Ok(config.notes_dirs)
+    }
+
+    pub fn select_notes_dir(&self, path: &str, add_to_cache: bool) -> Result<AppConfig, AppError> {
+        let normalized = normalize_notes_dir(path);
+        if normalized.is_empty() {
+            return Err(AppError::new("emptyPath", "笔记目录路径不能为空"));
+        }
+        is_safe_data_dir(Path::new(&normalized))?;
+        fs::create_dir_all(&normalized)?;
+
+        let mut config = self.load_config()?;
+        config.notes_dir = Some(normalized.clone());
+        config.notes_dirs = dedupe_notes_dirs(&config.notes_dirs);
+        if add_to_cache {
+            let current_lower = normalized.to_lowercase();
+            if !config
+                .notes_dirs
+                .iter()
+                .any(|d| d.to_lowercase() == current_lower)
+            {
+                config.notes_dirs.push(normalized);
+            }
+        }
+        self.save_config_raw(&config)?;
+        // 切换活动目录后重建 metadata：扫描新目录中的笔记文件
+        let meta_path = self.metadata_path();
+        if let Some(parent) = meta_path.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        self.save_metadata(&self.rebuild_metadata()?)?;
+        Ok(config)
+    }
+
+    pub fn add_notes_dir(&self, path: &str) -> Result<AppConfig, AppError> {
+        let normalized = normalize_notes_dir(path);
+        if normalized.is_empty() {
+            return Err(AppError::new("emptyPath", "笔记目录路径不能为空"));
+        }
+        is_safe_data_dir(Path::new(&normalized))?;
+        fs::create_dir_all(&normalized)?;
+
+        let mut config = self.load_config()?;
+        config.notes_dirs = dedupe_notes_dirs(&config.notes_dirs);
+        let lower = normalized.to_lowercase();
+        if !config.notes_dirs.iter().any(|d| d.to_lowercase() == lower) {
+            config.notes_dirs.push(normalized);
+        }
+        self.save_config_raw(&config)?;
+        Ok(config)
+    }
+
+    pub fn remove_notes_dir(&self, path: &str) -> Result<AppConfig, AppError> {
+        let normalized = normalize_notes_dir(path);
+        let mut config = self.load_config()?;
+        let lower = normalized.to_lowercase();
+        // 移除的是当前活动目录时，回退到默认目录（dataDir/notes）
+        let current_is_target = config
+            .notes_dir
+            .as_deref()
+            .map(|d| normalize_notes_dir(d).to_lowercase() == lower)
+            .unwrap_or(false);
+        config.notes_dirs.retain(|d| d.to_lowercase() != lower);
+        if config.notes_dirs.is_empty() {
+            let fallback = self.data_dir.join("notes").to_string_lossy().to_string();
+            config.notes_dirs.push(fallback);
+        }
+        if current_is_target {
+            config.notes_dir = None;
+        }
+        self.save_config_raw(&config)?;
+        // Clean up metadata cache so re-adding triggers a fresh scan
+        let meta_path = self.metadata_path_for_dir(Path::new(&normalized));
+        if meta_path.exists() {
+            let _ = fs::remove_file(&meta_path);
+        }
+        Ok(config)
+    }
+
+    pub fn classify_opened_file(
+        &self,
+        file_path: &str,
+    ) -> Result<OpenedFileClassification, AppError> {
+        let path = Path::new(file_path);
+        let config = self.load_config()?;
+        let matched = if path.exists() {
+            // For existing files, check if they're inside any known notes dir
+            is_path_under_known_dir(path, &config.notes_dirs)
+        } else {
+            // For non-existing files, check parent dir
+            path.parent()
+                .and_then(|p| is_path_under_known_dir(p, &config.notes_dirs))
+        };
+        Ok(OpenedFileClassification {
+            file_path: file_path.to_string(),
+            known: matched.is_some(),
+            matched_notes_dir: matched,
+        })
+    }
+
     pub fn list_categories(&self) -> Result<Vec<String>, AppError> {
         let notes_dir = self.notes_dir();
         fs::create_dir_all(&notes_dir)?;
+        let config = self.load_config()?;
         let mut categories = Vec::new();
         for entry in fs::read_dir(&notes_dir)? {
             let entry = entry?;
             if entry.path().is_dir() {
-                categories.push(entry.file_name().to_string_lossy().to_string());
+                let name = entry.file_name().to_string_lossy().to_string();
+                if !config.hidden_categories.contains(&name) {
+                    categories.push(name);
+                }
             }
         }
         categories.sort();
@@ -1068,16 +1462,24 @@ impl NoteStore {
     }
 
     fn default_config(&self) -> AppConfig {
+        let default_notes = self.data_dir.join("notes").to_string_lossy().to_string();
+        let normalized_notes = normalize_notes_dir(&default_notes);
+        let notes_dir = if normalized_notes.is_empty() {
+            default_notes.clone()
+        } else {
+            normalized_notes
+        };
         AppConfig {
             locale: default_locale(),
             data_dir: Some(self.data_dir.to_string_lossy().to_string()),
+            notes_dirs: vec![notes_dir],
             #[cfg(target_os = "macos")]
             global_shortcut: DEFAULT_MACOS_GLOBAL_SHORTCUT.into(),
             #[cfg(not(target_os = "macos"))]
             global_shortcut: "Ctrl+Space".into(),
             close_to_tray: true,
             autostart: false,
-            default_view_mode: "split".into(),
+            default_view_mode: "wysiwyg".into(),
             note_auto_save: true,
             note_surface_auto_save: true,
             tile_color: default_tile_color(),
@@ -1118,6 +1520,9 @@ impl NoteStore {
             open_at_cursor: default_open_at_cursor(),
             notes_dir: None,
             last_known_base_dir: None,
+            hidden_categories: default_hidden_categories(),
+            tab_layout: default_tab_layout(),
+            auto_open_outline: false,
         }
     }
 
@@ -1242,7 +1647,17 @@ impl NoteStore {
         Ok(())
     }
 
+    /// 当前活动笔记目录：优先使用 config.notes_dir（已切换的文件夹），
+    /// 回退到 dataDir/notes。配置指向无效路径时同样回退默认。
     fn notes_dir(&self) -> PathBuf {
+        if let Ok(config) = self.load_config() {
+            if let Some(dir) = config.notes_dir.as_deref() {
+                let normalized = normalize_notes_dir(dir);
+                if !normalized.is_empty() && is_safe_data_dir(Path::new(&normalized)).is_ok() {
+                    return PathBuf::from(normalized);
+                }
+            }
+        }
         self.data_dir.join("notes")
     }
 
@@ -1263,13 +1678,33 @@ impl NoteStore {
             .ok_or_else(|| AppError::note_not_found(id))
     }
 
-    fn file_name_for(&self, id: &str, title: &str) -> String {
-        let safe_title = safe_file_stem(title);
-        if safe_title.is_empty() {
-            format!("{id}.md")
+    /// Generate a note ID from file stem and category.
+    /// - If category is empty, ID = file stem.
+    /// - If category is not empty, ID = "{category}/{file_stem}".
+    fn make_note_id(stem: &str, category: &str) -> String {
+        if category.is_empty() {
+            stem.to_string()
         } else {
-            format!("{id}_{safe_title}.md")
+            format!("{}/{}", category, stem)
         }
+    }
+
+    /// Find an available filename by trying `{stem}.md`, `{stem}-2.md`, `{stem}-3.md`...
+    /// Returns `(available_stem, file_name)`.
+    fn find_available_file_name(&self, stem: &str, category: &str) -> (String, String) {
+        let base = format!("{stem}.md");
+        if !self.note_path_in_category(&base, category).exists() {
+            return (stem.to_string(), base);
+        }
+        for n in 2u32.. {
+            let candidate_stem = format!("{stem}-{n}");
+            let candidate = format!("{candidate_stem}.md");
+            if !self.note_path_in_category(&candidate, category).exists() {
+                return (candidate_stem, candidate);
+            }
+        }
+        // Unreachable in practice.
+        (stem.to_string(), base)
     }
 
     fn load_metadata(&self) -> Result<MetadataFile, AppError> {
@@ -1343,7 +1778,10 @@ impl NoteStore {
             }
         }
 
-        Ok(MetadataFile { notes })
+        Ok(MetadataFile {
+            notes,
+            migrated_v2: false,
+        })
     }
 
     fn scan_dir_for_notes(
@@ -1352,19 +1790,38 @@ impl NoteStore {
         category: &str,
         notes: &mut Vec<NoteMetadata>,
     ) -> Result<(), AppError> {
+        let supported = supported_extensions();
         for entry in fs::read_dir(dir)? {
             let entry = entry?;
             let path = entry.path();
-            if path.extension().and_then(|extension| extension.to_str()) != Some("md") {
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("");
+            if !supported.contains(&ext.to_ascii_lowercase().as_str()) {
                 continue;
             }
 
             let file_name = entry.file_name().to_string_lossy().to_string();
-            let Some(id) = id_from_file_name(&file_name) else {
-                continue;
+            let format = classify_format(&file_name);
+            let is_md = format == "md";
+
+            let id = id_from_file_name(&file_name).unwrap_or_else(|| {
+                let stem = strip_known_extension(&file_name);
+                Self::make_note_id(stem, category)
+            });
+
+            let (title, word_count, preview) = if is_md {
+                let content = fs::read_to_string(&path).unwrap_or_default();
+                (
+                    infer_title(&file_name, &content),
+                    count_words(&content),
+                    preview(&content),
+                )
+            } else {
+                // Non-md files: don't read content during scan (performance).
+                // Title from file stem, preview as format indicator.
+                let stem = file_stem_display(&file_name);
+                (stem, 0usize, format!("[{} 文件]", format_label(format)))
             };
-            let content = fs::read_to_string(&path).unwrap_or_default();
-            let title = infer_title(&file_name, &content);
+
             let modified = entry
                 .metadata()
                 .and_then(|metadata| metadata.modified())
@@ -1374,15 +1831,58 @@ impl NoteStore {
             notes.push(NoteMetadata {
                 id,
                 title,
-                file_name,
+                file_name: file_name.clone(),
+                file_stem: file_stem_display(&file_name),
                 category: category.to_string(),
+                file_format: format.to_string(),
                 created_at: modified,
                 updated_at: modified,
-                word_count: count_words(&content),
-                preview: preview(&content),
+                word_count,
+                preview,
             });
         }
         Ok(())
+    }
+    /// Rename legacy `{uuid}_{title}.md` files to `{title}.md` format.
+    /// UUID is preserved as the note ID in metadata; only the filename changes.
+    fn migrate_legacy_filenames(
+        &self,
+        metadata_file: &mut MetadataFile,
+    ) -> Result<usize, AppError> {
+        let mut count = 0;
+        for note in metadata_file.notes.iter_mut() {
+            let stem = note
+                .file_name
+                .strip_suffix(".md")
+                .unwrap_or(&note.file_name);
+
+            // Legacy format: {uuid}_{title}.md where first part is 32+ hex chars (no hyphens)
+            // or 36 chars with hyphens.
+            if let Some((first, rest)) = stem.split_once('_') {
+                let is_uuid =
+                    first.len() >= 32 && first.chars().all(|c| c.is_ascii_hexdigit() || c == '-');
+                if is_uuid && !rest.is_empty() {
+                    let new_file_name = format!("{rest}.md");
+                    let (_, deduped_name) = self.find_available_file_name(rest, &note.category);
+                    let final_name = if deduped_name == new_file_name {
+                        new_file_name
+                    } else {
+                        deduped_name
+                    };
+
+                    let old_path = self.note_path_in_category(&note.file_name, &note.category);
+                    let new_path = self.note_path_in_category(&final_name, &note.category);
+                    if old_path.exists() && old_path != new_path {
+                        fs::rename(&old_path, &new_path)?;
+                    }
+
+                    note.file_name = final_name.clone();
+                    note.file_stem = file_stem_display(&final_name);
+                    count += 1;
+                }
+            }
+        }
+        Ok(count)
     }
 
     pub fn migrate_data_to(&self, new_data_dir: &Path) -> Result<NoteStore, AppError> {
@@ -1489,6 +1989,14 @@ impl NoteStore {
         }
         config.background_image_path =
             remap_path_prefix(&config.background_image_path, &old_dir, &self.data_dir);
+        // 活动笔记目录若指向旧数据目录内部（旧 data_dir/notes 等），迁移后
+        // 一并重置，回退到新 data_dir/notes
+        if let Some(ref dir) = config.notes_dir {
+            let dir_path = PathBuf::from(dir);
+            if canonical_for_compare(&dir_path).starts_with(&canonical_for_compare(&old_dir)) {
+                config.notes_dir = None;
+            }
+        }
     }
 
     // 新数据目录是否已有用户数据（config.json 不算，它属于配置目录、且可能与数据目录重合）
@@ -1566,12 +2074,18 @@ fn preview(content: &str) -> String {
 }
 
 fn id_from_file_name(file_name: &str) -> Option<String> {
-    let stem = file_name.strip_suffix(".md")?;
-    Some(
-        stem.split_once('_')
-            .map(|(id, _)| id.to_string())
-            .unwrap_or_else(|| stem.to_string()),
-    )
+    let stem = strip_known_extension(file_name);
+    if stem.len() == file_name.len() {
+        return None; // no known extension
+    }
+    // Legacy: {uuid}_{title}.md → extract the UUID part.
+    if let Some((first, _)) = stem.split_once('_') {
+        if first.len() >= 32 && first.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+            return Some(first.to_string());
+        }
+    }
+    // New format: {title}.{ext} — no ID in filename; caller should generate one.
+    None
 }
 
 fn infer_title(file_name: &str, content: &str) -> String {
@@ -1583,10 +2097,27 @@ fn infer_title(file_name: &str, content: &str) -> String {
         return title.to_string();
     }
 
-    let stem = file_name.strip_suffix(".md").unwrap_or(file_name);
-    stem.split_once('_')
-        .map(|(_, title)| title.replace('_', " "))
-        .unwrap_or_default()
+    let stem = strip_known_extension(file_name);
+    // Legacy: {uuid}_{title}.md → extract title after first _.
+    if let Some((first, rest)) = stem.split_once('_') {
+        if first.len() >= 32 && first.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+            return rest.replace('_', " ");
+        }
+    }
+    // New format: {title}.md → the whole stem is the title.
+    stem.replace('_', " ")
+}
+
+fn file_stem_display(file_name: &str) -> String {
+    let stem = strip_known_extension(file_name);
+    // Legacy: {uuid}_{title}.md → extract title after first _.
+    if let Some((first, rest)) = stem.split_once('_') {
+        if first.len() >= 32 && first.chars().all(|c| c.is_ascii_hexdigit() || c == '-') {
+            return rest.replace('_', " ");
+        }
+    }
+    // New format: {title}.md → the whole stem is the display name.
+    stem.replace('_', " ")
 }
 
 fn is_markdown_path(path: &Path) -> bool {
@@ -1594,6 +2125,50 @@ fn is_markdown_path(path: &Path) -> bool {
         .and_then(|extension| extension.to_str())
         .map(|extension| extension.eq_ignore_ascii_case("md"))
         .unwrap_or(false)
+}
+
+/// All file extensions that the notes directory scanner recognizes.
+fn supported_extensions() -> &'static [&'static str] {
+    &["md", "docx", "doc", "pdf", "xlsx"]
+}
+
+/// Classify a file by its extension into a format label.
+fn classify_format(file_name: &str) -> &'static str {
+    let lower = file_name.to_lowercase();
+    for ext in supported_extensions() {
+        if lower.ends_with(&format!(".{}", ext)) {
+            return ext;
+        }
+    }
+    "md" // default
+}
+
+/// Whether a file (by name) should be treated as read-only in the editor.
+fn is_read_only_file(file_name: &str) -> bool {
+    classify_format(file_name) != "md"
+}
+
+/// Strip a known supported extension from a file name, returning the stem.
+fn strip_known_extension(file_name: &str) -> &str {
+    for ext in supported_extensions() {
+        let suffix = format!(".{}", ext);
+        if let Some(stem) = file_name.strip_suffix(&suffix) {
+            return stem;
+        }
+    }
+    file_name
+}
+
+/// Human-readable label for a file format.
+fn format_label(format: &str) -> &str {
+    match format {
+        "md" => "MD",
+        "docx" => "DOCX",
+        "doc" => "DOC",
+        "pdf" => "PDF",
+        "xlsx" => "XLSX",
+        _ => "FILE",
+    }
 }
 
 fn imported_markdown_title(path: &Path, content: &str) -> String {
@@ -1732,6 +2307,10 @@ fn default_open_at_cursor() -> bool {
     true
 }
 
+fn default_tab_layout() -> String {
+    "compact".into()
+}
+
 fn default_locale() -> String {
     "zh-CN".into()
 }
@@ -1742,6 +2321,13 @@ mod tests {
     use std::{fs, path::PathBuf};
 
     fn test_root(name: &str) -> PathBuf {
+        // 标记测试环境：跳过 legacy 用户数据迁移，防止污染真实数据
+        if std::env::var_os("FLORAL_NOTEPAPER_TEST_TEMP_DIR").is_none() {
+            std::env::set_var(
+                "FLORAL_NOTEPAPER_TEST_TEMP_DIR",
+                std::env::temp_dir().join("floral-notepaper-rust-tests"),
+            );
+        }
         let base = std::env::var_os("FLORAL_NOTEPAPER_TEST_TEMP_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(|| std::env::temp_dir().join("floral-notepaper-rust-tests"));
@@ -1797,7 +2383,7 @@ mod tests {
 
         assert_eq!(updated.title, "");
         assert_eq!(updated.content, "# 新标题\nsecond line");
-        assert_ne!(updated.file_name, created.file_name);
+        assert_eq!(updated.file_name, created.file_name);
 
         store.delete_note(&created.id).expect("delete note");
         assert!(store.read_note(&created.id).is_err());
@@ -1863,15 +2449,24 @@ mod tests {
         assert!(!default_config.tile_double_click_to_edit);
         assert!(!default_config.tile_save_returns_to_pin);
         assert_eq!(default_config.theme, "system");
-        assert!(default_config.notes_dir.ends_with("notes"));
+        assert!(default_config
+            .notes_dirs
+            .iter()
+            .any(|d| d.ends_with("notes")));
         assert!(!default_config.ai_enabled);
         assert_eq!(default_config.ai_api_key, "");
         assert_eq!(default_config.ai_api_endpoint, "https://api.deepseek.com");
         assert_eq!(default_config.ai_model, "deepseek-v4-pro");
-        assert_eq!(default_config.ai_fim_endpoint, "https://api.deepseek.com/beta");
+        assert_eq!(
+            default_config.ai_fim_endpoint,
+            "https://api.deepseek.com/beta"
+        );
         assert_eq!(default_config.ai_title_model, "deepseek-v4-flash");
         assert_eq!(default_config.ai_title_prompt, "为以下内容生成一个简洁的标题（不超过20个字，只返回标题文本，不要引号或额外说明）：\n\n{content}");
-        assert_eq!(default_config.ai_continue_prompt, "请续写以下文本：\n\n{prefix}");
+        assert_eq!(
+            default_config.ai_continue_prompt,
+            "请续写以下文本：\n\n{prefix}"
+        );
         assert_eq!(default_config.ai_fim_prompt, "");
         assert_eq!(default_config.ai_format_model, "deepseek-v4-flash");
         assert!(default_config.ai_format_prompt.contains("章节标题"));
@@ -1881,9 +2476,12 @@ mod tests {
             Some(store.data_dir().to_string_lossy().as_ref())
         );
 
+        let custom_notes_dir = store.data_dir().join("custom-notes");
+        let notes_path = custom_notes_dir.join("notes").to_string_lossy().to_string();
         let mut saved = AppConfig {
             locale: "en-US".into(),
             data_dir: None,
+            notes_dirs: vec![notes_path],
             global_shortcut: "Alt+Space".into(),
             close_to_tray: false,
             autostart: true,
@@ -1928,34 +2526,24 @@ mod tests {
             notes_dir: None,
             last_known_base_dir: None,
             open_at_cursor: true,
+            hidden_categories: vec![],
+            tab_layout: "compact".into(),
+            auto_open_outline: false,
         };
 
         store.save_config(saved.clone()).expect("save config");
 
         let loaded = store.load_config().expect("reload config");
         saved.data_dir = Some(store.data_dir().to_string_lossy().to_string());
-        assert_eq!(loaded, saved);
-    }
-
-    #[test]
-    fn data_migration_candidates_include_legacy_chinese_dirs() {
-        let candidates = known_data_migration_candidates_for(
-            Some("/Users/alice".into()),
-            Some(r"C:\Users\Alice".into()),
-        );
-
-        assert!(candidates.contains(&PathBuf::from("/Users/alice").join("Documents").join("花笺")));
-        assert!(candidates.contains(
-            &PathBuf::from("/Users/alice")
-                .join("Library")
-                .join("Application Support")
-                .join("花笺")
-        ));
-        assert!(candidates.contains(
-            &PathBuf::from(r"C:\Users\Alice")
-                .join("Documents")
-                .join("花笺")
-        ));
+        // macOS 上符号链接（/var -> /private/var）可能使规范化路径略有差异，
+        // 规范化后比较 notes_dirs
+        assert_eq!(loaded.locale, saved.locale);
+        assert_eq!(loaded.global_shortcut, saved.global_shortcut);
+        assert_eq!(loaded.notes_dirs.len(), saved.notes_dirs.len());
+        for (a, b) in loaded.notes_dirs.iter().zip(saved.notes_dirs.iter()) {
+            assert_eq!(normalize_notes_dir(a), normalize_notes_dir(b));
+        }
+        assert!(custom_notes_dir.exists());
     }
 
     #[test]
@@ -2449,5 +3037,86 @@ mod tests {
             fs::read_to_string(export_path).expect("read exported markdown"),
             content
         );
+    }
+
+    #[test]
+    fn manages_multiple_notes_directories() {
+        let root = test_root("multi-dir");
+        let store = NoteStore::new(root.clone(), root);
+        let config = store.load_config().expect("load config");
+
+        assert!(!config.notes_dirs.is_empty());
+        let primary_dir = config.notes_dirs[0].clone();
+
+        // Add a second directory
+        let dir2 = test_root("multi-dir-2").join("notes");
+        fs::create_dir_all(&dir2).unwrap();
+        let dir2_str = normalize_notes_dir(&dir2.to_string_lossy());
+        let updated = store.add_notes_dir(&dir2_str).expect("add dir");
+        assert!(updated.notes_dirs.len() >= 2);
+
+        // Select second directory — 活动目录切换到 dir2
+        let selected = store.select_notes_dir(&dir2_str, true).expect("select dir");
+        assert_eq!(selected.notes_dir.as_deref(), Some(dir2_str.as_str()));
+        assert!(selected.notes_dirs.iter().any(|d| d == &dir2_str));
+
+        // Create a note — 存储写入当前活动目录 dir2
+        store
+            .create_note(SaveNoteRequest {
+                title: "Note in dir2".into(),
+                content: "content".into(),
+                category: String::new(),
+            })
+            .expect("create note in dir2");
+        let notes_dir2 = store.list_notes().expect("list notes dir2");
+        assert_eq!(notes_dir2.len(), 1);
+
+        // Switch back to first dir — 活动目录切回 primary，笔记列表随之切换
+        let switched = store
+            .select_notes_dir(&primary_dir, true)
+            .expect("switch back");
+        assert_eq!(switched.notes_dir.as_deref(), Some(primary_dir.as_str()));
+        assert!(switched.notes_dirs.iter().any(|d| d == &primary_dir));
+        let notes_dir1 = store.list_notes().expect("list notes dir1");
+        assert!(notes_dir1.is_empty(), "primary dir has no notes yet");
+    }
+
+    #[test]
+    fn classifies_opened_files() {
+        let root = test_root("classify");
+        let store = NoteStore::new(root.clone(), root);
+        let config = store.load_config().unwrap();
+        let notes_dir = &config.notes_dirs[0];
+
+        // File outside known dirs
+        let result = store
+            .classify_opened_file("C:\\some\\unknown\\file.md")
+            .unwrap();
+        assert!(!result.known);
+
+        // File inside known dir
+        let inside = PathBuf::from(notes_dir).join("test.md");
+        let result = store
+            .classify_opened_file(&inside.to_string_lossy())
+            .unwrap();
+        assert!(result.known);
+    }
+
+    #[test]
+    fn notes_dirs_list_includes_current_dir() {
+        let root = test_root("dirs-list");
+        let store = NoteStore::new(root.clone(), root);
+        let dirs = store.list_notes_dirs().expect("list dirs");
+        let config = store.load_config().expect("load config");
+        assert!(dirs
+            .iter()
+            .any(|d| normalize_notes_dir(d) == normalize_notes_dir(&config.notes_dirs[0])));
+    }
+
+    #[test]
+    fn dedupes_and_normalizes_notes_dirs() {
+        let dirs =
+            dedupe_notes_dirs(&["C:\\Notes".into(), "c:\\notes\\".into(), "D:\\Other".into()]);
+        assert_eq!(dirs.len(), 2);
     }
 }

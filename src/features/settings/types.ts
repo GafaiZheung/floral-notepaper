@@ -1,4 +1,4 @@
-export type ViewMode = "edit" | "split" | "preview";
+export type ViewMode = "wysiwyg" | "source" | "read";
 
 export type ThemeOption = "light" | "dark" | "system";
 
@@ -8,6 +8,9 @@ export type BackgroundFit = "cover" | "contain" | "repeat";
 export interface AppConfig {
   locale: string;
   dataDir: string;
+  /** Legacy single notes dir（旧配置读取，新配置不再写入） */
+  notesDir?: string;
+  notesDirs: string[];
   globalShortcut: string;
   closeToTray: boolean;
   autostart: boolean;
@@ -50,4 +53,13 @@ export interface AppConfig {
   backgroundScale?: number;
   backgroundPositionX?: number;
   backgroundPositionY?: number;
+  hiddenCategories?: string[];
+  /** Tab management: persisted tab list (noteId array) */
+  openTabs?: string[];
+  /** Tab management: last active tab id */
+  activeTabId?: string;
+  /** Tab layout mode: "compact" embeds tabs in the title bar, "default" places them below */
+  tabLayout?: "compact" | "default";
+  /** Auto-open outline panel when scrolling past headings */
+  autoOpenOutline?: boolean;
 }

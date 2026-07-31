@@ -2,11 +2,13 @@ import { t, type TFunction } from "i18next";
 import type { Note, NoteMetadata } from "./types";
 
 export function getDisplayTitle(
-  note: Pick<NoteMetadata, "title" | "preview">,
+  note: Pick<NoteMetadata, "title" | "preview" | "fileStem">,
   translate: TFunction = t,
 ): string {
   const title = note.title.trim();
   if (title) return title;
+
+  if ("fileStem" in note && note.fileStem) return note.fileStem;
 
   const preview = note.preview.trim();
   if (preview) return preview.slice(0, 20);
@@ -31,7 +33,9 @@ export function metadataFromNote(note: Note): NoteMetadata {
     id: note.id,
     title: note.title,
     fileName: note.fileName,
+    fileStem: note.fileStem,
     category: note.category,
+    fileFormat: note.fileFormat || "md",
     createdAt: note.createdAt,
     updatedAt: note.updatedAt,
     wordCount: note.wordCount,
@@ -109,4 +113,40 @@ export function formatTime(value: string): string {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return "--:--";
   return `${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+
+/** Check if a note is read-only (non-markdown formats). */
+export function isReadOnlyNote(note: Pick<NoteMetadata, "fileFormat">): boolean {
+  return note.fileFormat !== undefined && note.fileFormat !== "md";
+}
+
+/** Get a compact label for the file format. */
+export function getFileTypeLabel(note: Pick<NoteMetadata, "fileFormat">): string {
+  switch (note.fileFormat) {
+    case "docx":
+      return "DOCX";
+    case "doc":
+      return "DOC";
+    case "pdf":
+      return "PDF";
+    case "xlsx":
+      return "XLSX";
+    default:
+      return "MD";
+  }
+}
+
+/** Get an SVG icon element name/identifier for the file type. */
+export function getFileTypeIconColor(note: Pick<NoteMetadata, "fileFormat">): string {
+  switch (note.fileFormat) {
+    case "docx":
+    case "doc":
+      return "text-blue-600/70";
+    case "pdf":
+      return "text-red-500/70";
+    case "xlsx":
+      return "text-green-600/70";
+    default:
+      return "text-ink-ghost/60";
+  }
 }

@@ -490,6 +490,21 @@ input::placeholder {
   animation: view-fade 0.72s ease-out forwards;
 }
 
+/* Tab switch transition — fast, subtle */
+@keyframes tab-switch {
+  from {
+    opacity: 0.6;
+    transform: translateY(3px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.animate-tab-switch {
+  animation: tab-switch 0.18s cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
 /* Category folder expand/collapse */
 .category-body {
   display: grid;

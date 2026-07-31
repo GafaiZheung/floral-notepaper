@@ -29,6 +29,15 @@ export async function chooseDataDirectory(): Promise<string | null> {
   return typeof path === "string" ? path : null;
 }
 
+export async function chooseNotesDirectory(): Promise<string | null> {
+  const path = await open({
+    directory: true,
+    multiple: false,
+  });
+
+  return typeof path === "string" ? path : null;
+}
+
 export function migrateDataDir(newDataDir: string): Promise<AppConfig> {
   return invoke("config_migrate_data_dir", { newDataDir });
 }
@@ -44,9 +53,41 @@ export async function chooseBackgroundImage(): Promise<string | null> {
 }
 
 export function normalizeViewMode(value: string): ViewMode {
-  if (value === "edit" || value === "split" || value === "preview") {
+  if (value === "wysiwyg" || value === "source" || value === "read") {
     return value;
   }
+  // Migrate legacy values
+  if (value === "edit" || value === "split") {
+    return "source";
+  }
+  if (value === "preview") {
+    return "wysiwyg";
+  }
+  return "wysiwyg";
+}
 
-  return "split";
+export interface OpenedFileClassification {
+  filePath: string;
+  known: boolean;
+  matchedNotesDir: string | null;
+}
+
+export function listNotesDirs(): Promise<string[]> {
+  return invoke("notes_dirs_list");
+}
+
+export function selectNotesDir(path: string, addToCache?: boolean): Promise<AppConfig> {
+  return invoke("notes_dirs_select", { path, addToCache: addToCache ?? true });
+}
+
+export function addNotesDir(path: string): Promise<AppConfig> {
+  return invoke("notes_dirs_add", { path });
+}
+
+export function deleteNotesDir(path: string): Promise<AppConfig> {
+  return invoke("notes_dirs_delete", { path });
+}
+
+export function classifyOpenedFile(filePath: string): Promise<OpenedFileClassification> {
+  return invoke("open_file_classify", { filePath });
 }

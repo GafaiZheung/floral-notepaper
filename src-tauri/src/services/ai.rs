@@ -64,12 +64,14 @@ fn load_ai_config() -> Result<AppConfig, AppError> {
         return Err(AppError {
             code: "aiDisabled".into(),
             message: "AI Agent 未启用".into(),
+            details: Default::default(),
         });
     }
     if config.ai_api_key.trim().is_empty() {
         return Err(AppError {
             code: "aiNoKey".into(),
             message: "未配置 AI API Key".into(),
+            details: Default::default(),
         });
     }
     Ok(config)
@@ -82,6 +84,7 @@ fn build_client() -> Result<reqwest::Client, AppError> {
         .map_err(|e| AppError {
             code: "aiHttp".into(),
             message: format!("failed to create HTTP client: {e}"),
+            details: Default::default(),
         })
 }
 
@@ -110,6 +113,7 @@ async fn send_chat_request(
         .map_err(|e| AppError {
             code: "aiHttp".into(),
             message: format!("AI 请求失败: {e}"),
+            details: Default::default(),
         })?;
 
     if !response.status().is_success() {
@@ -118,12 +122,14 @@ async fn send_chat_request(
         return Err(AppError {
             code: "aiApi".into(),
             message: format!("AI API 错误 {status}: {error_body}"),
+            details: Default::default(),
         });
     }
 
     let data: AiChatResponse = response.json().await.map_err(|e| AppError {
         code: "aiJson".into(),
         message: format!("解析 AI 响应失败: {e}"),
+        details: Default::default(),
     })?;
 
     data.choices
@@ -133,6 +139,7 @@ async fn send_chat_request(
         .ok_or_else(|| AppError {
             code: "aiEmpty".into(),
             message: "AI 返回空响应".into(),
+            details: Default::default(),
         })
 }
 
@@ -159,12 +166,25 @@ pub async fn ai_chat(prompt: String, context: Option<String>) -> Result<String, 
         prefix: None,
     });
 
-    let endpoint = format!("{}/chat/completions", config.ai_api_endpoint.trim_end_matches('/'));
-    send_chat_request(&client, &endpoint, config.ai_api_key.trim(), &config.ai_model, messages).await
+    let endpoint = format!(
+        "{}/chat/completions",
+        config.ai_api_endpoint.trim_end_matches('/')
+    );
+    send_chat_request(
+        &client,
+        &endpoint,
+        config.ai_api_key.trim(),
+        &config.ai_model,
+        messages,
+    )
+    .await
 }
 
 #[tauri::command]
-pub async fn ai_prefix_completion(prefix: String, prompt: Option<String>) -> Result<String, AppError> {
+pub async fn ai_prefix_completion(
+    prefix: String,
+    prompt: Option<String>,
+) -> Result<String, AppError> {
     let config = load_ai_config()?;
     let client = build_client()?;
 
@@ -186,8 +206,18 @@ pub async fn ai_prefix_completion(prefix: String, prompt: Option<String>) -> Res
         prefix: Some(true),
     });
 
-    let endpoint = format!("{}/chat/completions", config.ai_api_endpoint.trim_end_matches('/'));
-    send_chat_request(&client, &endpoint, config.ai_api_key.trim(), &config.ai_model, messages).await
+    let endpoint = format!(
+        "{}/chat/completions",
+        config.ai_api_endpoint.trim_end_matches('/')
+    );
+    send_chat_request(
+        &client,
+        &endpoint,
+        config.ai_api_key.trim(),
+        &config.ai_model,
+        messages,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -205,17 +235,24 @@ pub async fn ai_fim_completion(prefix: String, suffix: String) -> Result<String,
         stream: false,
     };
 
-    let endpoint = format!("{}/completions", config.ai_fim_endpoint.trim_end_matches('/'));
+    let endpoint = format!(
+        "{}/completions",
+        config.ai_fim_endpoint.trim_end_matches('/')
+    );
 
     let response = client
         .post(&endpoint)
-        .header("Authorization", format!("Bearer {}", config.ai_api_key.trim()))
+        .header(
+            "Authorization",
+            format!("Bearer {}", config.ai_api_key.trim()),
+        )
         .json(&body)
         .send()
         .await
         .map_err(|e| AppError {
             code: "aiHttp".into(),
             message: format!("AI 请求失败: {e}"),
+            details: Default::default(),
         })?;
 
     if !response.status().is_success() {
@@ -224,12 +261,14 @@ pub async fn ai_fim_completion(prefix: String, suffix: String) -> Result<String,
         return Err(AppError {
             code: "aiApi".into(),
             message: format!("AI API 错误 {status}: {error_body}"),
+            details: Default::default(),
         });
     }
 
     let data: AiFimResponse = response.json().await.map_err(|e| AppError {
         code: "aiJson".into(),
         message: format!("解析 AI 响应失败: {e}"),
+        details: Default::default(),
     })?;
 
     data.choices
@@ -239,6 +278,7 @@ pub async fn ai_fim_completion(prefix: String, suffix: String) -> Result<String,
         .ok_or_else(|| AppError {
             code: "aiEmpty".into(),
             message: "AI 返回空响应".into(),
+            details: Default::default(),
         })
 }
 
@@ -260,9 +300,26 @@ pub async fn ai_generate_title(content: String) -> Result<String, AppError> {
         prefix: None,
     }];
 
-    let endpoint = format!("{}/chat/completions", config.ai_api_endpoint.trim_end_matches('/'));
-    let result = send_chat_request(&client, &endpoint, config.ai_api_key.trim(), &config.ai_title_model, messages).await?;
-    Ok(result.trim().trim_matches('"').trim_matches('"').trim_matches('「').trim_matches('」').trim().to_string())
+    let endpoint = format!(
+        "{}/chat/completions",
+        config.ai_api_endpoint.trim_end_matches('/')
+    );
+    let result = send_chat_request(
+        &client,
+        &endpoint,
+        config.ai_api_key.trim(),
+        &config.ai_title_model,
+        messages,
+    )
+    .await?;
+    Ok(result
+        .trim()
+        .trim_matches('"')
+        .trim_matches('"')
+        .trim_matches('「')
+        .trim_matches('」')
+        .trim()
+        .to_string())
 }
 
 #[tauri::command]
@@ -283,8 +340,18 @@ pub async fn ai_format_note(content: String) -> Result<String, AppError> {
         prefix: None,
     }];
 
-    let endpoint = format!("{}/chat/completions", config.ai_api_endpoint.trim_end_matches('/'));
-    send_chat_request(&client, &endpoint, config.ai_api_key.trim(), &config.ai_format_model, messages).await
+    let endpoint = format!(
+        "{}/chat/completions",
+        config.ai_api_endpoint.trim_end_matches('/')
+    );
+    send_chat_request(
+        &client,
+        &endpoint,
+        config.ai_api_key.trim(),
+        &config.ai_format_model,
+        messages,
+    )
+    .await
 }
 
 #[cfg(test)]
@@ -364,10 +431,7 @@ mod tests {
     fn deserializes_chat_response() {
         let json = r#"{"choices":[{"message":{"content":"def quick_sort(arr):"}}]}"#;
         let resp: AiChatResponse = serde_json::from_str(json).expect("deserialize");
-        assert_eq!(
-            resp.choices[0].message.content,
-            "def quick_sort(arr):"
-        );
+        assert_eq!(resp.choices[0].message.content, "def quick_sort(arr):");
     }
 
     #[test]

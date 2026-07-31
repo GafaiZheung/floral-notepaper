@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type { MouseEvent } from "react";
 import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
+import { MarkdownEditor } from "./MarkdownEditor";
+import type { MarkdownEditorHandle } from "./MarkdownEditor";
 import { createNote, getErrorMessage, getNote, listNotes, updateNote } from "../features/notes/api";
 import { useImagePaste } from "../features/images/useImagePaste";
 import { useImageBaseDir } from "../features/images/useImageBaseDir";
@@ -145,7 +147,7 @@ export function NotePad({
   );
   const [isExiting, setIsExiting] = useState(false);
   const titleRef = useRef<HTMLInputElement>(null);
-  const contentRef = useRef<HTMLTextAreaElement>(null);
+  const contentRef = useRef<MarkdownEditorHandle>(null);
   const tileDragIntentRef = useRef<{ x: number; y: number } | null>(null);
   const windowLabelRef = useRef("");
   const statusRef = useRef<NotePadStatus>("empty");
@@ -859,12 +861,11 @@ export function NotePad({
                   style={{ fontSize: `${surfaceFontSize}px` }}
                 />
 
-                <textarea
+                <MarkdownEditor
                   ref={contentRef}
-                  data-tab-indent="true"
                   value={content}
-                  onChange={(event) => {
-                    setContent(event.target.value);
+                  onChange={(newValue) => {
+                    setContent(newValue);
                     setStatus("dirty");
                   }}
                   onPaste={imagePasteHandler}
@@ -872,20 +873,24 @@ export function NotePad({
                   onDragOver={imageDragOverHandler}
                   onKeyDown={(event) => {
                     if (event.key === "ArrowUp") {
-                      const ta = contentRef.current;
-                      if (ta && ta.selectionStart === ta.selectionEnd) {
-                        const textBeforeCursor = content.slice(0, ta.selectionStart);
-                        if (!textBeforeCursor.includes("\n")) {
-                          event.preventDefault();
-                          titleRef.current?.focus();
+                      const editor = contentRef.current;
+                      if (editor) {
+                        const { from, to } = editor.getSelectionRange();
+                        if (from === to) {
+                          const textBeforeCursor = content.slice(0, from);
+                          if (!textBeforeCursor.includes("\n")) {
+                            event.preventDefault();
+                            titleRef.current?.focus();
+                          }
                         }
                       }
                       return;
                     }
                     if (event.key !== "Enter") return;
-                    const textarea = event.currentTarget;
-                    const before = textarea.value.slice(0, textarea.selectionStart);
-                    const after = textarea.value.slice(textarea.selectionEnd);
+                    const editor = contentRef.current;
+                    if (!editor) return;
+                    const { from, to } = editor.getSelectionRange();
+                    const before = content.slice(0, from);
                     const lineStart = before.lastIndexOf("\n") + 1;
                     const currentLine = before.slice(lineStart);
                     const taskMatch = currentLine.match(/^(\s*)- \[([ x])\] /);
@@ -895,30 +900,19 @@ export function NotePad({
                     const restOfLine = currentLine.slice(taskMatch[0].length);
                     if (!restOfLine.trim()) {
                       // Only checkbox, no text — remove the checkbox line
-                      const newBefore = before.slice(0, lineStart);
-                      const newContent = newBefore + after;
-                      setContent(newContent);
+                      editor.replaceRangeAndSelect(lineStart, to, "", lineStart, lineStart);
                       setStatus("dirty");
-                      requestAnimationFrame(() => {
-                        textarea.focus();
-                        textarea.setSelectionRange(newBefore.length, newBefore.length);
-                      });
                     } else {
                       // Has text — add new checkbox on next line
                       const insertion = `\n${indent}- [ ] `;
-                      const newContent = before + insertion + after;
-                      setContent(newContent);
+                      const cursor = from + insertion.length;
+                      editor.replaceRangeAndSelect(from, to, insertion, cursor, cursor);
                       setStatus("dirty");
-                      requestAnimationFrame(() => {
-                        textarea.focus();
-                        const cursor = before.length + insertion.length;
-                        textarea.setSelectionRange(cursor, cursor);
-                      });
                     }
                   }}
                   placeholder={t("notepad.placeholder.content", { defaultValue: "写点什么……" })}
-                  className="w-full flex-1 min-h-0 pb-2 leading-relaxed text-ink-soft font-body placeholder:text-ink-ghost/50"
-                  style={{ fontSize: `${surfaceFontSize}px`, tabSize: `var(--tab-indent-size, 2)` }}
+                  className="w-full flex-1 min-h-0 pb-2"
+                  fontSize={surfaceFontSize}
                 />
 
                 <div className="flex items-center justify-between mt-auto pt-2 border-t border-paper-deep/30 shrink-0">

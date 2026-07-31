@@ -13,6 +13,7 @@ const notes: NoteMetadata[] = [
     id: "1",
     title: "读书笔记",
     fileName: "1.md",
+    fileStem: "1",
     category: "",
     createdAt: "2026-04-28T01:00:00Z",
     updatedAt: "2026-04-28T01:00:00Z",
@@ -23,6 +24,7 @@ const notes: NoteMetadata[] = [
     id: "2",
     title: "",
     fileName: "2.md",
+    fileStem: "2",
     category: "日常",
     createdAt: "2026-04-28T02:00:00Z",
     updatedAt: "2026-04-28T02:00:00Z",
@@ -32,10 +34,11 @@ const notes: NoteMetadata[] = [
 ];
 
 describe("note utilities", () => {
-  it("uses title, preview, then untitled fallback for display title", () => {
+  it("uses title, fileStem, preview, then untitled fallback for display title", () => {
     expect(getDisplayTitle(notes[0])).toBe("读书笔记");
-    expect(getDisplayTitle(notes[1])).toBe("周末采购清单");
-    expect(getDisplayTitle({ ...notes[1], preview: "" })).toBe("无标题笔记");
+    expect(getDisplayTitle(notes[1])).toBe("2");
+    expect(getDisplayTitle({ ...notes[1], fileStem: "" })).toBe("周末采购清单");
+    expect(getDisplayTitle({ ...notes[1], fileStem: "", preview: "" })).toBe("无标题笔记");
   });
 
   it("builds compact previews and counts non-whitespace characters", () => {

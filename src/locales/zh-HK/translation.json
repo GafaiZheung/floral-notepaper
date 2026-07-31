@@ -24,7 +24,9 @@
     "untitledNote": "無標題筆記",
     "untitledFile": "未命名檔案",
     "wordCount": "{{count}} 字",
-    "wordCountUnit": "字"
+    "wordCountUnit": "字",
+    "retry": "重試",
+    "refresh": "重新整理"
   },
   "contextMenu": {
     "edit": {
@@ -68,6 +70,14 @@
       "caution": "注意"
     }
   },
+  "mermaid": {
+    "clickToZoom": "點擊放大",
+    "downloadPng": "下載 PNG",
+    "downloadSvg": "下載 SVG",
+    "renderError": "Mermaid 渲染錯誤",
+    "rendering": "渲染圖表中…",
+    "zoomIn": "放大"
+  },
   "main": {
     "category": {
       "confirmDelete": "確認刪除「{{category}}」？",
@@ -78,6 +88,21 @@
       "placeholder": "輸入分類名稱…",
       "rename": "重新命名",
       "uncategorized": "未分類"
+    },
+    "notesDir": {
+      "label": "筆記目錄",
+      "select": "切換筆記目錄",
+      "add": "添加目錄",
+      "delete": "刪除目錄",
+      "confirmDelete": "確認刪除「{{path}}」？",
+      "confirmDeleteAction": "確認刪除"
+    },
+    "externalPathPrompt": {
+      "title": "記錄新的筆記目錄？",
+      "message": "開啟的檔案不在已知筆記目錄下。是否將以下路徑記錄為筆記目錄？",
+      "pathLabel": "筆記目錄路徑",
+      "save": "儲存並切換",
+      "cancel": "取消記錄"
     },
     "confirm": {
       "unsavedExternalFile": "「{{title}}」有未儲存的變更，是否儲存到原檔案？"
@@ -116,7 +141,13 @@
       "clearSearch": "清除搜尋",
       "importMarkdown": "匯入 Markdown",
       "newNote": "新增筆記",
-      "searchPlaceholder": "搜尋筆記…"
+      "searchPlaceholder": "搜尋筆記…",
+      "tabDirectory": "目錄",
+      "tabOutline": "大綱",
+      "tabGit": "Git 版本管理"
+    },
+    "outline": {
+      "empty": "目前文件暫無標題"
     },
     "images": {
       "cleanUnused": "清理未使用圖片",
@@ -163,7 +194,9 @@
   "noteMenu": {
     "delete": "刪除筆記",
     "export": "匯出 Markdown",
-    "moveToCategory": "移至分類…"
+    "moveToCategory": "移至分類…",
+    "renameFile": "重新命名檔案",
+    "syncTitleToFile": "標題同步為檔案名稱"
   },
   "notepad": {
     "button": {
@@ -211,10 +244,9 @@
     "closeTitle": "關閉設定",
     "closeToTray": "關閉至系統匣",
     "defaultView": {
-      "edit": "編輯",
       "label": "預設檢視",
-      "preview": "預覽",
-      "split": "分欄"
+      "wysiwyg": "閱讀編輯",
+      "source": "源碼編輯"
     },
     "fontSize": {
       "editor": "編輯器字級",
@@ -227,6 +259,8 @@
       "zhHK": "繁體中文"
     },
     "dataDir": "數據目錄",
+    "notesDir": "筆記目錄",
+    "notesDirs": "已記錄筆記目錄",
     "openAtCursor": "快捷鍵開啟時跟隨滑鼠位置",
     "quickNoteShortcut": "快捷記錄快捷鍵",
     "rememberSurfaceSize": "記住小窗尺寸",
@@ -269,6 +303,11 @@
     "tileSaveReturnsToPin": "儲存後回到磁貼",
     "renderHtmlMarkdown": "允許 HTML 標籤渲染",
     "splitScrollSync": "分欄同步捲動",
+    "hiddenCategories": {
+      "label": "隱藏的分類目錄",
+      "placeholder": "輸入目錄名稱後按 Enter…",
+      "hint": "這些目錄不會在側欄顯示為分類"
+    },
     "title": "應用程式設定",
     "update": {
       "advanced": "進階",
@@ -419,5 +458,89 @@
   },
   "tile": {
     "empty": "空"
+  },
+  "git": {
+    "checking": "檢查中…",
+    "commit": "提交",
+    "committing": "提交中…",
+    "commitMessagePlaceholder": "輸入提交訊息…",
+    "downloadGit": "下載 Git →",
+    "error": "取得 Git 狀態失敗",
+    "initDescription": "初始化後可透過 Git 管理筆記的版本歷史",
+    "initializing": "初始化中…",
+    "initRepo": "初始化 Git 倉庫",
+    "noChanges": "沒有待提交的變更",
+    "noCommits": "暫無提交記錄",
+    "notAGitRepo": "目前目錄尚未初始化 Git 倉庫",
+    "notInstalled": "未檢測到 Git",
+    "notInstalledHint": "請先安裝 Git 後再使用版本管理功能",
+    "revert": "還原",
+    "showChanges": "變更",
+    "showLog": "歷史",
+    "stage": "暫存",
+    "stageAll": "全部暫存",
+    "stageAllShort": "全部暫存",
+    "stagedChanges": "已暫存 ({{count}})",
+    "unstage": "取消暫存",
+    "unstageAll": "全部取消暫存",
+    "unstagedChanges": "未暫存 ({{count}})",
+    "untrackedFiles": "未追蹤 ({{count}})",
+    "workingTreeClean": "工作目錄乾淨",
+    "changesTab": "變更",
+    "historyTab": "歷史",
+    "stashTab": "暫存",
+    "branches": "分支",
+    "currentBranch": "目前分支",
+    "newBranchPlaceholder": "新分支名…",
+    "deleteBranch": "刪除分支",
+    "merge": "合併",
+    "mergeIntoCurrent": "合併到目前分支",
+    "push": "推送",
+    "pull": "拉取",
+    "fetch": "取得",
+    "remotes": "遠端倉庫",
+    "remoteNamePlaceholder": "名稱 (如 origin)",
+    "remoteUrlPlaceholder": "URL (如 https://…)",
+    "addRemote": "新增遠端倉庫",
+    "noRemotes": "無遠端倉庫",
+    "diff": "差異",
+    "noDiff": "無差異",
+    "stashPush": "暫存更改",
+    "stashPopLatest": "恢復最近",
+    "stashMessagePlaceholder": "暫存訊息（可選）…",
+    "stash": "暫存",
+    "noStashes": "暫無暫存",
+    "pop": "恢復",
+    "drop": "刪除",
+    "amend": "修訂",
+    "amendHint": "修改上一次提交",
+    "conflicts": "衝突",
+    "conflictsDetected": "檢測到 {{count}} 個衝突檔案",
+    "abortMerge": "中止合併",
+    "mergeBtn": "合併分支",
+    "mergeInto": "合併到 {{branch}}",
+    "noOtherBranches": "無其他分支",
+    "ctxSwitchTo": "切換到 {{branch}}",
+    "ctxMerge": "合併 {{branch}} 到 {{currentBranch}}",
+    "ctxDeleteBranch": "刪除分支",
+    "ctxNewBranchPrompt": "從此提交建立新分支：",
+    "ctxCreateBranchHere": "從此提交建立分支",
+    "ctxCopyHash": "複製提交哈希",
+    "hostingSetup": "配置 GitHub / GitLab 賬號",
+    "hostingSetupTitle": "托管賬號配置",
+    "savedAccounts": "已儲存的賬號",
+    "addAccount": "新增賬號",
+    "username": "用戶名稱",
+    "tokenPlaceholder": "Personal Access Token",
+    "gitlabUrl": "https://gitlab.com (留空使用預設)",
+    "saveAccount": "儲存賬號",
+    "tokenHelp": "GitHub: Settings → Developer settings → Personal access tokens → Tokens (classic)，需要 repo 權限",
+    "createRemoteRepo": "自動建立遠端倉庫",
+    "createRemoteRepoTitle": "建立遠端倉庫",
+    "repoNamePlaceholder": "倉庫名稱",
+    "privateRepo": "私有倉庫",
+    "createAndAddRemote": "建立並新增為遠端倉庫",
+    "noAccountForProvider": "未配置 {{provider}} 賬號",
+    "repoCreated": "倉庫已建立"
   }
 }

@@ -1,50 +1,33 @@
-import { invoke } from "@tauri-apps/api/core";
-import {
-  useCallback,
-  useDeferredValue,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  Suspense,
-  lazy,
-} from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { MouseEvent } from "react";
-import type { TFunction } from "i18next";
 import { useTranslation } from "react-i18next";
+import { emit, listen } from "@tauri-apps/api/event";
+import { revealItemInDir } from "@tauri-apps/plugin-opener";
 import { exportMarkdownNote, importMarkdownNote } from "../features/importExport/api";
-import { MarkdownPreviewLazy as MarkdownPreview } from "../features/markdown/MarkdownPreviewLazy";
-import { showToast } from "./Toast";
+import { extractHeadings } from "../features/markdown/extractHeadings";
+import { OutlinePanel } from "./OutlinePanel";
 import {
-  blockIndexAtOffset,
-  measureBlockOffsets,
-  tagPreviewBlocks,
-} from "../features/markdown/scrollSync";
-import {
-  chooseDataDirectory,
+  chooseNotesDirectory,
   getConfig,
-  migrateDataDir,
   normalizeViewMode,
   saveConfig,
+  selectNotesDir,
+  addNotesDir,
+  deleteNotesDir,
+  classifyOpenedFile,
 } from "../features/settings/api";
-import type { AppConfig, ViewMode } from "../features/settings/types";
+import { getOneDriveSyncedPaths } from "../features/onedrive/api";
+import type { AppConfig } from "../features/settings/types";
+import { displayPathLabel, parentDirFromFilePath } from "../features/settings/notePaths";
 import { normalizeTileColor } from "../features/settings/tileColor";
-import { getUpdateStatus, reportInstallPreparation } from "../features/update/api";
-import {
-  ABOUT_UPDATE_LABEL_DURATION_MS,
-  applyAboutUpdateStatus,
-  createAboutUpdateReminderState,
-  dismissAboutUpdateReminderText,
-  type AboutUpdateReminderState,
-} from "../features/update/presentation";
-import type {
-  UpdateErrorPayload,
-  UpdateInstallPrepareRequest,
-  UpdateState,
-} from "../features/update/types";
 import { BackgroundLayer } from "./BackgroundLayer";
-import { POPUP_VIEWPORT_MARGIN, useViewportPopupPosition } from "./popupPosition";
-import { SlidingButtonGroup } from "./SlidingButtonGroup";
+import { LeftIconSidebar } from "./LeftIconSidebar";
+import { GitPanel } from "./GitPanel";
+import { SettingsTab } from "./SettingsTab";
+import { TabBar } from "./TabBar";
+import type { TabMenuAction } from "./TabBar";
+import { WysiwygEditor } from "./WysiwygEditor";
+import type { WysiwygEditorHandle } from "./WysiwygEditor";
 import {
   createNote,
   createCategory,
@@ -57,13 +40,13 @@ import {
   listNotes,
   moveNoteCategory,
   readExternalFile,
+  openFileWithSystemApp,
+  openNoteWithSystemApp,
   renameCategory,
+  renameNoteFileStem,
   saveExternalFile,
   updateNote,
 } from "../features/notes/api";
-import { cleanUnusedImages, saveImageFromPath } from "../features/images/api";
-import { useImagePaste, insertTextAtCursor } from "../features/images/useImagePaste";
-import { useImageBaseDir } from "../features/images/useImageBaseDir";
 import type { ExternalFile, Note, NoteMetadata } from "../features/notes/types";
 import {
   countNoteChars,
@@ -71,7 +54,10 @@ import {
   formatShortDate,
   formatTime,
   getDisplayTitle,
+  getFileTypeIconColor,
+  getFileTypeLabel,
   groupNotesByCategory,
+  isReadOnlyNote,
   metadataFromNote,
 } from "../features/notes/noteUtils";
 import type { CategoryGroup } from "../features/notes/noteUtils";
@@ -79,7 +65,7 @@ import {
   getNoteContextMenuItems,
   type NoteContextMenuAction,
 } from "../features/notes/noteContextMenu";
-import { openNotepadWindow, takeStartupFile, toggleTileWindow } from "../features/windows/api";
+import { openNotepadWindow, toggleTileWindow } from "../features/windows/api";
 import {
   closeCurrentWindow,
   minimizeCurrentWindow,
@@ -94,16 +80,6 @@ import {
 } from "../features/windows/tileWindowEvents";
 
 type SaveState = "idle" | "dirty" | "saving" | "saved" | "error";
-type SidePanelMode = "about" | "settings";
-
-// 侧面板只在用户主动打开时挂载，懒加载可把关于面板（贡献者数据、更新设置）
-// 和设置面板从首屏 bundle 中拆出
-const AboutPanel = lazy(() =>
-  import("./AboutPanel").then((module) => ({ default: module.AboutPanel })),
-);
-const SettingsPanel = lazy(() =>
-  import("./SettingsPanel").then((module) => ({ default: module.SettingsPanel })),
-);
 
 interface NoteMenuState {
   x: number;
@@ -117,256 +93,61 @@ interface CategoryMenuState {
   category: string;
 }
 
-type FormatAction =
-  | "bold"
-  | "italic"
-  | "heading"
-  | "hr"
-  | "ul"
-  | "ol"
-  | "code"
-  | "quote"
-  | "inlineMath"
-  | "blockMath";
-
-function applyFormat(
-  textarea: HTMLTextAreaElement,
-  action: FormatAction,
-  translate: TFunction,
-  setContent: (v: string) => void,
-  markDirty: () => void,
-) {
-  const { selectionStart: start, selectionEnd: end, value } = textarea;
-  const selected = value.slice(start, end);
-  const before = value.slice(0, start);
-  const after = value.slice(end);
-
-  const lineStart = before.lastIndexOf("\n") + 1;
-  const currentLine = before.slice(lineStart);
-
-  let result: string;
-  let cursorStart: number;
-  let cursorEnd: number;
-
-  switch (action) {
-    case "bold": {
-      const fallback = translate("main.formatSample.boldText", { defaultValue: "粗体文本" });
-      const wrapped = `**${selected || fallback}**`;
-      result = before + wrapped + after;
-      cursorStart = start + 2;
-      cursorEnd = cursorStart + (selected || fallback).length;
-      break;
-    }
-    case "italic": {
-      const fallback = translate("main.formatSample.italicText", { defaultValue: "斜体文本" });
-      const wrapped = `*${selected || fallback}*`;
-      result = before + wrapped + after;
-      cursorStart = start + 1;
-      cursorEnd = cursorStart + (selected || fallback).length;
-      break;
-    }
-    case "heading": {
-      const prefix = currentLine.match(/^(#{1,5})\s/);
-      if (prefix) {
-        const newLevel = prefix[1].length < 5 ? "#".repeat(prefix[1].length + 1) : "#";
-        const beforeLine = value.slice(0, lineStart);
-        const afterPrefix = value.slice(lineStart + prefix[0].length);
-        result = beforeLine + newLevel + " " + afterPrefix;
-        const offset = newLevel.length + 1 - prefix[0].length;
-        cursorStart = start + offset;
-        cursorEnd = end + offset;
-      } else if (currentLine.length > 0 && start === end) {
-        result = value.slice(0, lineStart) + "## " + value.slice(lineStart);
-        cursorStart = start + 3;
-        cursorEnd = cursorStart;
-      } else if (selected) {
-        result = before + `## ${selected}` + after;
-        cursorStart = start + 3;
-        cursorEnd = cursorStart + selected.length;
-      } else {
-        result =
-          before +
-          `## ${translate("main.formatSample.headingText", { defaultValue: "标题" })}` +
-          after;
-        cursorStart = start + 3;
-        cursorEnd = cursorStart + 2;
-      }
-      break;
-    }
-    case "hr": {
-      const newlineBefore = before.endsWith("\n") || before === "" ? "" : "\n";
-      const newlineAfter = after.startsWith("\n") || after === "" ? "" : "\n";
-      result = before + `${newlineBefore}---${newlineAfter}` + after;
-      cursorStart = cursorEnd = before.length + newlineBefore.length + 3;
-      break;
-    }
-    case "ul": {
-      if (selected.includes("\n")) {
-        const lines = selected
-          .split("\n")
-          .map((l) => `- ${l}`)
-          .join("\n");
-        result = before + lines + after;
-        cursorStart = start;
-        cursorEnd = start + lines.length;
-      } else {
-        const fallback = translate("main.formatSample.listItem", { defaultValue: "列表项" });
-        const item = `- ${selected || fallback}`;
-        result = before + item + after;
-        cursorStart = start + 2;
-        cursorEnd = cursorStart + (selected || fallback).length;
-      }
-      break;
-    }
-    case "ol": {
-      if (selected.includes("\n")) {
-        const lines = selected
-          .split("\n")
-          .map((l, i) => `${i + 1}. ${l}`)
-          .join("\n");
-        result = before + lines + after;
-        cursorStart = start;
-        cursorEnd = start + lines.length;
-      } else {
-        const fallback = translate("main.formatSample.listItem", { defaultValue: "列表项" });
-        const item = `1. ${selected || fallback}`;
-        result = before + item + after;
-        cursorStart = start + 3;
-        cursorEnd = cursorStart + (selected || fallback).length;
-      }
-      break;
-    }
-    case "code": {
-      if (selected.includes("\n")) {
-        const wrapped = "```\n" + selected + "\n```";
-        result = before + wrapped + after;
-        cursorStart = start + 4;
-        cursorEnd = cursorStart + selected.length;
-      } else {
-        const fallback = translate("main.formatSample.codeText", { defaultValue: "代码" });
-        const wrapped = `\`${selected || fallback}\``;
-        result = before + wrapped + after;
-        cursorStart = start + 1;
-        cursorEnd = cursorStart + (selected || fallback).length;
-      }
-      break;
-    }
-    case "quote": {
-      if (selected.includes("\n")) {
-        const lines = selected
-          .split("\n")
-          .map((l) => `> ${l}`)
-          .join("\n");
-        result = before + lines + after;
-        cursorStart = start;
-        cursorEnd = start + lines.length;
-      } else {
-        const fallback = translate("main.formatSample.quoteText", { defaultValue: "引用文本" });
-        const item = `> ${selected || fallback}`;
-        result = before + item + after;
-        cursorStart = start + 2;
-        cursorEnd = cursorStart + (selected || fallback).length;
-      }
-      break;
-    }
-    case "inlineMath": {
-      const wrapped = `$${selected || "E=mc^2"}$`;
-      result = before + wrapped + after;
-      cursorStart = start + 1;
-      cursorEnd = cursorStart + (selected || "E=mc^2").length;
-      break;
-    }
-    case "blockMath": {
-      const wrapped = `\n$$\n${selected || "x^2 + y^2 = r^2"}\n$$\n`;
-      result = before + wrapped + after;
-      cursorStart = start + 4;
-      cursorEnd = cursorStart + (selected || "x^2 + y^2 = r^2").length;
-      break;
-    }
-  }
-
-  textarea.focus();
-  textarea.setSelectionRange(0, value.length);
-  document.execCommand("insertText", false, result);
-  setContent(result);
-  markDirty();
-  requestAnimationFrame(() => {
-    textarea.setSelectionRange(cursorStart, cursorEnd);
-  });
-}
-
-function runEditorCommand(textarea: HTMLTextAreaElement | null, command: "undo" | "redo"): boolean {
-  if (!textarea || textarea.disabled) return false;
-  textarea.focus();
-  return document.execCommand(command);
+export function runEditorUndo(_editor: unknown): boolean {
+  return false;
 }
 
 export function pinTileButtonTitle(isPinned: boolean): string {
   return isPinned ? "取消钉屏" : "钉到屏幕";
 }
 
-interface LoadEpoch {
-  // 开始一次新的异步加载，返回本次 epoch token；之后用 isCurrent 校验是否仍然有效
-  bump: () => number;
-  // 只读取当前 epoch 而不自增：用于"记录事件到达瞬间的代次，期间若发生切换则过期"
-  peek: () => number;
-  // 异步完成后调用：仅当期间未发生新的 bump（用户未切换/重载）时为 true
-  isCurrent: (token: number) => boolean;
-}
-
-// 统一封装"加载竞态守卫"：每次切换/加载笔记自增 epoch，异步结果回来后用
-// isCurrent 判断是否过期。集中此处后，新增异步加载路径只需 bump/isCurrent 两步，
-// 避免裸 ref 在多处内联导致的"忘记连线 → stale 结果覆盖新选中"竞态回归
-function useLoadEpoch(): LoadEpoch {
-  const ref = useRef(0);
-  return useMemo<LoadEpoch>(
-    () => ({
-      bump: () => (ref.current += 1),
-      peek: () => ref.current,
-      isCurrent: (token: number) => ref.current === token,
-    }),
-    [],
-  );
-}
-
 interface MainWindowProps {
   initialSettingsOpen?: boolean;
   initialConfig?: AppConfig;
+  initialErrorMessage?: string | null;
 }
 
 export function MainWindow({
   initialSettingsOpen = false,
   initialConfig = undefined,
+  initialErrorMessage = null,
 }: MainWindowProps = {}) {
   const { t } = useTranslation();
   const [notes, setNotes] = useState<NoteMetadata[]>([]);
   const [externalFiles, setExternalFiles] = useState<ExternalFile[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // --- Tab state ---
+  interface TabState {
+    noteId: string;
+    title: string;
+    fileStem: string;
+    content: string;
+    contentFormat: string; // "markdown" | "html"
+    saveState: SaveState;
+  }
+
+  const [tabs, setTabs] = useState<TabState[]>([]);
+  const [activeTabId, setActiveTabId] = useState<string | null>(null);
+  const [previewTabId, setPreviewTabId] = useState<string | null>(null);
+
   const [searchQuery, setSearchQuery] = useState("");
-  const [viewMode, setViewMode] = useState<ViewMode>(
-    normalizeViewMode(initialConfig?.defaultViewMode ?? "split"),
-  );
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [sidebarTab, setSidebarTab] = useState<"directory" | "outline" | "git">("directory");
   const [content, setContent] = useState("");
+  const [contentFormat, setContentFormat] = useState<string>("markdown");
   const [title, setTitle] = useState("");
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [errorMessage, setErrorMessage] = useState<string | null>(initialErrorMessage);
   const [noteMenu, setNoteMenu] = useState<NoteMenuState | null>(null);
   const [noteMenuClosing, setNoteMenuClosing] = useState(false);
-  const [settingsOpen, setSettingsOpen] = useState(initialSettingsOpen);
-  const [aboutOpen, setAboutOpen] = useState(false);
-  const [mountedSidePanel, setMountedSidePanel] = useState<SidePanelMode | null>(
-    initialSettingsOpen && initialConfig ? "settings" : null,
-  );
-  const [sidePanelContentVisible, setSidePanelContentVisible] = useState(
-    Boolean(initialSettingsOpen && initialConfig),
-  );
-  const [aboutUpdateReminder, setAboutUpdateReminder] = useState<AboutUpdateReminderState>(() =>
-    createAboutUpdateReminderState(null),
-  );
+  const [settingsTabActive, setSettingsTabActive] = useState(initialSettingsOpen);
   const [settingsConfig, setSettingsConfig] = useState<AppConfig | null>(initialConfig ?? null);
-  const [savedDataDir, setSavedDataDir] = useState<string | null>(initialConfig?.dataDir ?? null);
+  const [savedNotesDir, setSavedNotesDir] = useState<string | null>(
+    initialConfig?.notesDir ?? null,
+  );
   const [noteTransitionKey, setNoteTransitionKey] = useState(0);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [deleteExiting, setDeleteExiting] = useState(false);
@@ -380,68 +161,38 @@ export function MainWindow({
   const [renamingCategory, setRenamingCategory] = useState<string | null>(null);
   const [renameCategoryValue, setRenameCategoryValue] = useState("");
   const [dragOverCategory, setDragOverCategory] = useState<string | null>(null);
-  const [settingsOverlay, setSettingsOverlay] = useState(() =>
-    typeof window !== "undefined" ? window.innerWidth < 1080 : true,
-  );
   const [sidebarWidth, setSidebarWidth] = useState(280);
-  const [aiPrompt, setAiPrompt] = useState("");
-  const [aiGenOpen, setAiGenOpen] = useState(false);
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiLoadingAction, setAiLoadingAction] = useState<"" | "gen" | "pref" | "fim" | "fmt">("");
-  const [aiError, setAiError] = useState<string | null>(null);
-  const [fimSuggestion, setFimSuggestion] = useState<string | null>(null);
-  const aiInputRef = useRef<HTMLTextAreaElement>(null);
-  const [aiTitlePending, setAiTitlePending] = useState(false);
   const [isResizingSidebar, setIsResizingSidebar] = useState(false);
-  const [splitRatio, setSplitRatio] = useState(0.5);
-  const [isResizingSplit, setIsResizingSplit] = useState(false);
   const splitContainerRef = useRef<HTMLDivElement>(null);
+  const wysiwygRef = useRef<WysiwygEditorHandle>(null);
   const [categoryMenu, setCategoryMenu] = useState<CategoryMenuState | null>(null);
   const [categoryMenuClosing, setCategoryMenuClosing] = useState(false);
   const [categoryMenuConfirmDelete, setCategoryMenuConfirmDelete] = useState(false);
-  const [categoryMenuHoverSuppressed, setCategoryMenuHoverSuppressed] = useState(false);
-  const { popupRef: noteMenuRef, popupPosition: noteMenuPosition } = useViewportPopupPosition(
-    noteMenu,
-    `${noteMenuMode}:${categories.length}`,
-  );
-  const { popupRef: categoryMenuRef, popupPosition: categoryMenuPosition } =
-    useViewportPopupPosition(categoryMenu, categoryMenuConfirmDelete);
-  const contentRef = useRef<HTMLTextAreaElement>(null);
-  const windowLabelRef = useRef("main");
-  const previewScrollRef = useRef<HTMLDivElement>(null);
-  const blockOffsets = useRef<number[]>([]);
-  const scrollSource = useRef<"editor" | "preview" | null>(null);
-  const scrollTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const measureDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const measureRafRef = useRef<number>(0);
-  const measureControllerRef = useRef<AbortController | null>(null);
-  const prevSelectedIdRef = useRef(selectedId);
+  const [pendingPathPrompt, setPendingPathPrompt] = useState<{
+    filePath: string;
+    inputValue: string;
+  } | null>(null);
+  const [notesDirDropdownOpen, setNotesDirDropdownOpen] = useState(false);
+  const [deleteConfirmDir, setDeleteConfirmDir] = useState<string | null>(null);
+  const [oneDriveSyncedPaths, setOneDriveSyncedPaths] = useState<string[]>([]);
+
+  const refreshOneDrivePaths = useCallback(async () => {
+    try {
+      const paths = await getOneDriveSyncedPaths();
+      setOneDriveSyncedPaths(paths);
+    } catch {
+      // Ignore — OneDrive service may not be available.
+    }
+  }, []);
+  const [renameFileFor, setRenameFileFor] = useState<string | null>(null);
+  const [renameFileValue, setRenameFileValue] = useState("");
   const externalFileMtimeRef = useRef<number>(0);
   const lastExternalSaveRef = useRef<number>(0);
-  const imageBaseDir = useImageBaseDir();
+  const savedHiddenCategoriesRef = useRef<string[] | undefined>(undefined);
   const saveStateRef = useRef(saveState);
-  const isMacOS = useMemo(() => {
-    return (
-      typeof navigator !== "undefined" &&
-      (/Mac|iPhone|iPad/.test(navigator.platform) || navigator.userAgent.includes("Mac"))
-    );
-  }, []);
   saveStateRef.current = saveState;
   const selectedIdRef = useRef(selectedId);
   selectedIdRef.current = selectedId;
-  const contentValueRef = useRef(content);
-  contentValueRef.current = content;
-  const titleValueRef = useRef(title);
-  titleValueRef.current = title;
-  const notesRef = useRef(notes);
-  notesRef.current = notes;
-  const externalFilesRef = useRef(externalFiles);
-  externalFilesRef.current = externalFiles;
-  // 每次"应用/切换当前笔记"都会自增；异步加载完成后若 epoch 已变化，说明用户
-  // 已切换到别处，该次结果直接丢弃，避免旧的加载结果覆盖新选中的笔记
-  const loadEpoch = useLoadEpoch();
-  // 串行化所有保存请求，避免自动保存与切换触发的保存并发写同一篇笔记
-  const saveQueueRef = useRef<Promise<unknown>>(Promise.resolve());
 
   const selectedNote = useMemo(
     () => notes.find((note) => note.id === selectedId) ?? null,
@@ -450,15 +201,54 @@ export function MainWindow({
   const selectedNoteRef = useRef(selectedNote);
   selectedNoteRef.current = selectedNote;
 
+  // Extract headings for outline panel and scroll tracking.
+  const headings = useMemo(() => {
+    if (!content) return [];
+    return extractHeadings(content);
+  }, [content]);
+
+  // Auto-open outline when user scrolls past a threshold.
+  // Only switch to directory when the user scrolls back to the very top (not on heading clicks).
+  const AUTO_OUTLINE_SCROLL_PX = 300;
+  const outlineTriggeredRef = useRef(false);
+  const headingJumpTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleEditorScroll = useCallback(
+    (scrollTop: number) => {
+      if (!settingsConfig?.autoOpenOutline) return;
+      if (settingsTabActive) return;
+      // Suppress revert while a heading-jump scroll animation is in flight
+      if (headingJumpTimerRef.current) return;
+      if (scrollTop > AUTO_OUTLINE_SCROLL_PX && !outlineTriggeredRef.current) {
+        setSidebarTab("outline");
+        outlineTriggeredRef.current = true;
+      } else if (scrollTop < 4 && outlineTriggeredRef.current) {
+        // Only switch back when the user manually scrolls to the absolute top
+        setSidebarTab("directory");
+        outlineTriggeredRef.current = false;
+      }
+    },
+    [settingsConfig?.autoOpenOutline, settingsTabActive],
+  );
+
+  // When clicking a heading, briefly suppress the scroll-to-top revert.
+  const handleJumpToHeading = useCallback((lineNumber: number) => {
+    wysiwygRef.current?.scrollToHeading(lineNumber);
+    if (outlineTriggeredRef.current) {
+      if (headingJumpTimerRef.current) clearTimeout(headingJumpTimerRef.current);
+      headingJumpTimerRef.current = setTimeout(() => {
+        headingJumpTimerRef.current = null;
+      }, 800);
+    }
+  }, []);
+
   const selectedExternalFile = useMemo(
     () => externalFiles.find((f) => f.id === selectedId) ?? null,
     [externalFiles, selectedId],
   );
-  const updateStatusHydratedRef = useRef(false);
 
   const isExternal = selectedExternalFile !== null;
-  const isExternalRef = useRef(isExternal);
-  isExternalRef.current = isExternal;
+  const isReadOnlyExternal = selectedExternalFile?.readOnly === true;
+  const isReadOnlyInternal = selectedNote ? isReadOnlyNote(selectedNote) : false;
 
   const noteMenuTarget = useMemo(
     () => notes.find((note) => note.id === noteMenu?.noteId) ?? null,
@@ -475,113 +265,25 @@ export function MainWindow({
     }),
     [t],
   );
-  const toolbarButtons = useMemo<
-    { label: string; title: string; style: string; action: FormatAction }[]
-  >(
-    () => [
-      {
-        label: "B",
-        title: t("main.toolbar.bold", { defaultValue: "粗体" }),
-        style: "font-bold",
-        action: "bold",
-      },
-      {
-        label: "I",
-        title: t("main.toolbar.italic", { defaultValue: "斜体" }),
-        style: "italic",
-        action: "italic",
-      },
-      {
-        label: "H",
-        title: t("main.toolbar.heading", { defaultValue: "标题" }),
-        style: "font-bold",
-        action: "heading",
-      },
-      {
-        label: "—",
-        title: t("main.toolbar.hr", { defaultValue: "分割线" }),
-        style: "",
-        action: "hr",
-      },
-      {
-        label: "•",
-        title: t("main.toolbar.ul", { defaultValue: "无序列表" }),
-        style: "",
-        action: "ul",
-      },
-      {
-        label: "1.",
-        title: t("main.toolbar.ol", { defaultValue: "有序列表" }),
-        style: "font-mono text-[9px]",
-        action: "ol",
-      },
-      {
-        label: "<>",
-        title: t("main.toolbar.code", { defaultValue: "代码" }),
-        style: "font-mono text-[9px]",
-        action: "code",
-      },
-      {
-        label: "❝",
-        title: t("main.toolbar.quote", { defaultValue: "引用" }),
-        style: "",
-        action: "quote",
-      },
-      {
-        label: "∑",
-        title: t("main.toolbar.inlineMath", { defaultValue: "行内公式" }),
-        style: "font-mono text-[11px]",
-        action: "inlineMath",
-      },
-      {
-        label: "∫",
-        title: t("main.toolbar.blockMath", { defaultValue: "块级公式" }),
-        style: "font-mono text-[11px]",
-        action: "blockMath",
-      },
-    ],
-    [t],
-  );
-  const viewModeOptions = useMemo(
-    () => [
-      {
-        value: "edit" as ViewMode,
-        label: t("settings.defaultView.edit", { defaultValue: "编辑" }),
-      },
-      {
-        value: "split" as ViewMode,
-        label: t("settings.defaultView.split", { defaultValue: "分栏" }),
-      },
-      {
-        value: "preview" as ViewMode,
-        label: t("settings.defaultView.preview", { defaultValue: "预览" }),
-      },
-    ],
-    [t],
-  );
-  const syncUpdateStatus = useCallback((nextStatus: UpdateState) => {
-    const shouldHydrate = !updateStatusHydratedRef.current;
-    if (shouldHydrate) {
-      updateStatusHydratedRef.current = true;
-    }
 
-    setAboutUpdateReminder((current) =>
-      shouldHydrate
-        ? createAboutUpdateReminderState(nextStatus)
-        : applyAboutUpdateStatus(current, nextStatus),
-    );
-  }, []);
-  const visibleSidePanel: SidePanelMode | null = aboutOpen
-    ? "about"
-    : settingsOpen && settingsConfig
-      ? "settings"
-      : null;
-  const sidePanelExpanded = visibleSidePanel !== null;
-  const openAboutPanel = useCallback(() => {
-    setSettingsOpen(false);
-    setAboutOpen(true);
-    setAboutUpdateReminder((current) => dismissAboutUpdateReminderText(current));
-  }, []);
+  // Derived tab list: inject settings as a virtual tab when active
+  const displayTabs = useMemo(() => {
+    const noteTabs = tabs.map((t) => ({
+      noteId: t.noteId,
+      title: t.fileStem || t.title,
+      saveState: t.saveState as "idle" | "dirty" | "saving" | "saved" | "error",
+      isPreview: t.noteId === previewTabId,
+    }));
+    if (settingsTabActive) {
+      noteTabs.push({
+        noteId: "__settings__",
+        title: t("settings.title", { defaultValue: "应用设置" }),
+        saveState: "idle" as const,
+        isPreview: false,
+      });
+    }
+    return noteTabs;
+  }, [tabs, settingsTabActive, previewTabId, t]);
 
   const filteredNotes = useMemo(() => filterNotes(notes, searchQuery), [notes, searchQuery]);
 
@@ -590,33 +292,12 @@ export function MainWindow({
     [filteredNotes, categories],
   );
 
-  // 打字时输入框优先响应：预览渲染与字数/字节统计使用延迟值，
-  // 连续输入期间 React 会自动合并这些重计算，停顿时再追上
-  const deferredContent = useDeferredValue(content);
-
-  const lineCount = useMemo(() => deferredContent.split("\n").length, [deferredContent]);
+  const lineCount = useMemo(() => content.split("\n").length, [content]);
   const byteSize = useMemo(
-    () => (new TextEncoder().encode(deferredContent).length / 1024).toFixed(1),
-    [deferredContent],
+    () => (new TextEncoder().encode(content).length / 1024).toFixed(1),
+    [content],
   );
-  const charCount = useMemo(() => countNoteChars(deferredContent), [deferredContent]);
-
-  const applyNote = useCallback(
-    (note: Note) => {
-      // 立刻同步各 ref，保证保存快照与守卫在下一次渲染前就能读到最新值
-      loadEpoch.bump();
-      selectedIdRef.current = note.id;
-      titleValueRef.current = note.title;
-      contentValueRef.current = note.content;
-      saveStateRef.current = "saved";
-      setSelectedId(note.id);
-      setTitle(note.title);
-      setContent(note.content);
-      setSaveState("saved");
-      setNoteTransitionKey((k) => k + 1);
-    },
-    [loadEpoch],
-  );
+  const charCount = useMemo(() => countNoteChars(content), [content]);
 
   const replaceNoteMetadata = useCallback((note: Note) => {
     const metadata = metadataFromNote(note);
@@ -629,16 +310,237 @@ export function MainWindow({
     });
   }, []);
 
+  // === Tab helpers ===
+
+  /** Find a tab by noteId */
+  const findTab = useCallback(
+    (noteId: string): TabState | undefined => tabs.find((t) => t.noteId === noteId),
+    [tabs],
+  );
+
+  /** Persist current editor state into the active tab */
+  const flushActiveTab = useCallback(() => {
+    if (!activeTabId) return;
+    setTabs((prev) =>
+      prev.map((t) =>
+        t.noteId === activeTabId ? { ...t, content, contentFormat, title, saveState } : t,
+      ),
+    );
+  }, [activeTabId, content, contentFormat, title, saveState]);
+
+  /** Open a note as a tab (or activate if already open) */
+  const openTab = useCallback(
+    async (noteId: string) => {
+      // If tab already exists, just activate (fast path — instant switch)
+      const existing = findTab(noteId);
+      if (existing) {
+        flushActiveTab();
+        setActiveTabId(noteId);
+        setContent(existing.content);
+        setContentFormat(existing.contentFormat);
+        setTitle(existing.title);
+        setSaveState(existing.saveState);
+        setSelectedId(noteId);
+        setNoteTransitionKey((k) => k + 1);
+        return;
+      }
+
+      // New tab: immediately show loading state so UI responds instantly
+      flushActiveTab();
+      setSelectedId(noteId);
+      setActiveTabId(noteId);
+      setContent("");
+      setTitle("");
+      setSaveState("idle");
+      setIsLoading(true);
+      setErrorMessage(null);
+
+      try {
+        const note = await getNote(noteId);
+        const newTab: TabState = {
+          noteId: note.id,
+          title: note.title,
+          fileStem: note.fileStem,
+          content: note.content,
+          contentFormat: note.fileFormat && note.fileFormat !== "md" ? "html" : "markdown",
+          saveState: "saved" as SaveState,
+        };
+        setTabs((prev) => [...prev, newTab]);
+        setContent(note.content);
+        setContentFormat(newTab.contentFormat);
+        setTitle(note.title);
+        setSaveState("saved");
+        setNoteTransitionKey((k) => k + 1);
+        replaceNoteMetadata(note);
+      } catch (error) {
+        setErrorMessage(getErrorMessage(error));
+        // Clean up on error: remove from tabs and reset selection
+        setTabs((prev) => prev.filter((t) => t.noteId !== noteId));
+        setActiveTabId(null);
+        setSelectedId(null);
+        setContent("");
+        setTitle("");
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [findTab, flushActiveTab, replaceNoteMetadata],
+  );
+
+  /** Close a tab by noteId */
+  const closeTab = useCallback(
+    async (noteId: string) => {
+      const tab = findTab(noteId);
+      if (!tab) return;
+
+      if (tab.saveState === "dirty") {
+        const confirmed = window.confirm(
+          t("tabs.unsavedConfirm", {
+            defaultValue: `"${tab.title || "无标题"}" 有未保存的更改，是否关闭？`,
+          }),
+        );
+        if (!confirmed) return;
+      }
+
+      setTabs((prev) => prev.filter((t) => t.noteId !== noteId));
+
+      // If closing the preview tab, clear the preview marker
+      if (previewTabId === noteId) {
+        setPreviewTabId(null);
+      }
+
+      if (noteId === activeTabId) {
+        // Need to compute from the updated tabs — use a local snapshot
+        const remaining = tabs.filter((t) => t.noteId !== noteId);
+        if (remaining.length > 0) {
+          const idx = tabs.findIndex((t) => t.noteId === noteId);
+          const next = remaining[Math.min(idx, remaining.length - 1)];
+          setActiveTabId(next.noteId);
+          setSelectedId(next.noteId);
+          setContent(next.content);
+          setContentFormat(next.contentFormat);
+          setTitle(next.title);
+          setSaveState(next.saveState);
+          setNoteTransitionKey((k) => k + 1);
+        } else {
+          setActiveTabId(null);
+          setSelectedId(null);
+          setContent("");
+          setContentFormat("markdown");
+          setTitle("");
+          setSaveState("idle");
+        }
+      }
+    },
+    [activeTabId, findTab, t, tabs],
+  );
+
+  /** Handle tab menu actions (batch close) */
+  const handleTabMenuAction = useCallback(
+    async (action: TabMenuAction, noteId: string) => {
+      let toClose: string[] = [];
+
+      switch (action) {
+        case "close":
+          toClose = [noteId];
+          break;
+        case "closeOthers":
+          toClose = tabs.filter((t) => t.noteId !== noteId).map((t) => t.noteId);
+          break;
+        case "closeRight": {
+          const idx = tabs.findIndex((t) => t.noteId === noteId);
+          toClose = tabs.slice(idx + 1).map((t) => t.noteId);
+          break;
+        }
+        case "closeAll":
+          toClose = tabs.map((t) => t.noteId);
+          break;
+        case "closeSaved":
+          toClose = tabs.filter((t) => t.saveState !== "dirty").map((t) => t.noteId);
+          break;
+      }
+
+      // Check if any dirty tabs are being closed
+      const dirtyClosing = toClose.filter(
+        (id) => tabs.find((t) => t.noteId === id)?.saveState === "dirty",
+      );
+      if (dirtyClosing.length > 0) {
+        const confirmed = window.confirm(
+          t("tabs.unsavedMultipleConfirm", {
+            defaultValue: `有 ${dirtyClosing.length} 个标签页有未保存的更改，是否全部保存并关闭？`,
+          }),
+        );
+        if (!confirmed) {
+          toClose = toClose.filter((id) => !dirtyClosing.includes(id));
+        }
+      }
+
+      // Close tabs
+      for (const id of toClose) {
+        setTabs((prev) => prev.filter((t) => t.noteId !== id));
+      }
+
+      // If active tab was among closed, switch to a remaining one
+      if (activeTabId && toClose.includes(activeTabId)) {
+        const remaining = tabs.filter((t) => !toClose.includes(t.noteId));
+        if (remaining.length > 0) {
+          const next = remaining[0];
+          setActiveTabId(next.noteId);
+          setSelectedId(next.noteId);
+          setContent(next.content);
+          setContentFormat(next.contentFormat);
+          setTitle(next.title);
+          setSaveState(next.saveState);
+          setNoteTransitionKey((k) => k + 1);
+        } else {
+          setActiveTabId(null);
+          setSelectedId(null);
+          setContent("");
+          setContentFormat("markdown");
+          setTitle("");
+          setSaveState("idle");
+        }
+      }
+    },
+    [activeTabId, t, tabs],
+  );
+
+  // Sync saveState changes back to active tab
+  useEffect(() => {
+    if (!activeTabId) return;
+    setTabs((prev) => prev.map((t) => (t.noteId === activeTabId ? { ...t, saveState } : t)));
+  }, [activeTabId, saveState]);
+
+  // Persist tabs to config (debounced)
+  useEffect(() => {
+    if (!settingsConfig) return;
+    const timer = window.setTimeout(() => {
+      const updated = { ...settingsConfig };
+      updated.openTabs = tabs.map((t) => t.noteId);
+      updated.activeTabId = activeTabId ?? undefined;
+      void saveConfig(updated);
+    }, 500);
+    return () => window.clearTimeout(timer);
+  }, [tabs, activeTabId, settingsConfig]);
+
+  const applyNote = useCallback((note: Note) => {
+    setSelectedId(note.id);
+    setTitle(note.title);
+    setContent(note.content);
+    setContentFormat(note.fileFormat && note.fileFormat !== "md" ? "html" : "markdown");
+    setSaveState("saved");
+    setErrorMessage(null);
+    setNoteTransitionKey((k) => k + 1);
+  }, []);
+
   const loadNote = useCallback(
     async (id: string) => {
-      const epoch = loadEpoch.bump();
+      setErrorMessage(null);
       const note = await getNote(id);
-      // 加载期间用户又切换/加载了别的笔记，丢弃本次结果
-      if (!loadEpoch.isCurrent(epoch)) return;
       applyNote(note);
       replaceNoteMetadata(note);
     },
-    [applyNote, replaceNoteMetadata, loadEpoch],
+    [applyNote, replaceNoteMetadata],
   );
 
   const refreshNotes = useCallback(async () => {
@@ -649,65 +551,71 @@ export function MainWindow({
   }, []);
 
   const clearCurrentNote = useCallback(() => {
-    loadEpoch.bump();
-    selectedIdRef.current = null;
-    titleValueRef.current = "";
-    contentValueRef.current = "";
-    saveStateRef.current = "idle";
     setSelectedId(null);
     setTitle("");
     setContent("");
+    setContentFormat("markdown");
     setSaveState("idle");
-  }, [loadEpoch]);
+  }, []);
 
-  const loadExternalFile = useCallback(
-    async (filePath: string) => {
-      const epoch = loadEpoch.bump();
-      try {
+  const loadExternalFile = useCallback(async (filePath: string) => {
+    setErrorMessage(null);
+    const fileName = filePath.split(/[\\/]/).pop() ?? filePath;
+    const displayTitle = fileName.replace(/\.(md|txt|docx?|pdf|xlsx)$/i, "");
+    const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
+    const isReadOnlyFormat = /^(docx?|pdf|xlsx)$/i.test(ext);
+
+    // Add the file to the external files list immediately so it's visible
+    // even if reading fails (user can retry by clicking).
+    setExternalFiles((current) => {
+      if (current.some((f) => f.id === filePath)) {
+        return current;
+      }
+      const entry: ExternalFile = {
+        id: filePath,
+        title: displayTitle,
+        filePath,
+        readOnly: isReadOnlyFormat,
+      };
+      if (isReadOnlyFormat) {
+        entry.contentFormat = "html";
+        entry.mimeType =
+          ext === "docx" || ext === "doc"
+            ? "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            : ext === "pdf"
+              ? "application/pdf"
+              : ext === "xlsx"
+                ? "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                : "application/octet-stream";
+      }
+      return [...current, entry];
+    });
+    setSelectedId(filePath);
+    setTitle(displayTitle);
+
+    try {
+      if (isReadOnlyFormat) {
+        // Open with system default app (WPS/Word/Excel/PDF reader)
+        setContent("");
+        setSaveState("saved");
+        try {
+          await openFileWithSystemApp(filePath);
+        } catch (error) {
+          setErrorMessage(getErrorMessage(error));
+        }
+      } else {
         const [fileContent, mtime] = await Promise.all([
           readExternalFile(filePath),
           getFileModifiedTime(filePath),
         ]);
-        const fileName = filePath.split(/[\\/]/).pop() ?? filePath;
-        const displayTitle = fileName.replace(/\.(md|txt)$/i, "");
-
-        setExternalFiles((current) => {
-          if (current.some((f) => f.id === filePath)) {
-            return current;
-          }
-          return [
-            ...current,
-            {
-              id: filePath,
-              title: displayTitle,
-              filePath,
-            },
-          ];
-        });
-
-        if (!loadEpoch.isCurrent(epoch)) return;
-        selectedIdRef.current = filePath;
-        titleValueRef.current = displayTitle;
-        contentValueRef.current = fileContent;
-        saveStateRef.current = "saved";
-        setSelectedId(filePath);
-        setTitle(displayTitle);
         setContent(fileContent);
-        setSaveState("saved");
-        setNoteTransitionKey((k) => k + 1);
         externalFileMtimeRef.current = mtime;
-      } catch (error) {
-        showToast(getErrorMessage(error));
       }
-    },
-    [loadEpoch],
-  );
-
-  useEffect(() => {
-    try {
-      windowLabelRef.current = getCurrentWindow().label;
-    } catch {
-      windowLabelRef.current = "main";
+      setSaveState("saved");
+      setNoteTransitionKey((k) => k + 1);
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
+      setSaveState("error");
     }
   }, []);
 
@@ -723,27 +631,66 @@ export function MainWindow({
           listCategories(),
         ]);
         if (cancelled) return;
-        setSettingsConfig(loadedConfig);
-        setSavedDataDir(loadedConfig.dataDir);
-        setViewMode(normalizeViewMode(loadedConfig.defaultViewMode));
+        // Normalize defaultViewMode through the same function used by persistSettings
+        const patchedConfig: AppConfig = {
+          ...loadedConfig,
+          defaultViewMode: normalizeViewMode(loadedConfig.defaultViewMode),
+          tabLayout: (loadedConfig.tabLayout ??
+            localStorage.getItem("fn:tabLayout") ??
+            "compact") as "compact" | "default",
+          autoOpenOutline:
+            loadedConfig.autoOpenOutline ?? localStorage.getItem("fn:autoOpenOutline") === "1",
+        };
+        setSettingsConfig(patchedConfig);
+        setSavedNotesDir(patchedConfig.notesDir ?? null);
         setNotes(loadedNotes);
         setCategories(loadedCategories);
         setCollapsedCategories(new Set(loadedCategories));
-        if (loadedNotes[0]) {
+
+        // Restore persisted tabs, or fall back to loading the first note
+        const persistedTabs = loadedConfig.openTabs;
+        if (persistedTabs && persistedTabs.length > 0) {
+          const restoredTabs: TabState[] = [];
+          for (const tabId of persistedTabs) {
+            const meta = loadedNotes.find((n) => n.id === tabId);
+            if (!meta) continue;
+            try {
+              const note = await getNote(tabId);
+              restoredTabs.push({
+                noteId: note.id,
+                title: note.title,
+                fileStem: note.fileStem,
+                content: note.content,
+                contentFormat: note.fileFormat && note.fileFormat !== "md" ? "html" : "markdown",
+                saveState: "saved" as SaveState,
+              });
+            } catch {
+              // Note may have been deleted — skip
+            }
+          }
+          if (restoredTabs.length > 0 && !cancelled) {
+            setTabs(restoredTabs);
+            const restoreActiveId =
+              loadedConfig.activeTabId &&
+              restoredTabs.some((t) => t.noteId === loadedConfig.activeTabId)
+                ? loadedConfig.activeTabId
+                : restoredTabs[0].noteId;
+            const activeTab = restoredTabs.find((t) => t.noteId === restoreActiveId)!;
+            setActiveTabId(activeTab.noteId);
+            setSelectedId(activeTab.noteId);
+            setContent(activeTab.content);
+            setContentFormat(activeTab.contentFormat);
+            setTitle(activeTab.title);
+            setSaveState("saved");
+          }
+        } else if (loadedNotes[0]) {
           const note = await getNote(loadedNotes[0].id);
           if (!cancelled) applyNote(note);
         } else {
           clearCurrentNote();
         }
-
-        if (!cancelled) {
-          const startupFile = await takeStartupFile();
-          if (!cancelled && startupFile) {
-            await loadExternalFile(startupFile);
-          }
-        }
       } catch (error) {
-        if (!cancelled) showToast(getErrorMessage(error));
+        if (!cancelled) setErrorMessage(getErrorMessage(error));
       } finally {
         if (!cancelled) setIsLoading(false);
       }
@@ -756,176 +703,35 @@ export function MainWindow({
   }, [applyNote, clearCurrentNote]);
 
   useEffect(() => {
-    let active = true;
-
-    void getUpdateStatus()
-      .then((status) => {
-        if (!active) return;
-        syncUpdateStatus(status);
-      })
-      .catch((error) => {
-        console.error("failed to load update status", error);
-      });
-
-    const bindEvents = async () => {
-      const unlistenFns: UnlistenFn[] = [];
-      const disposeAll = () => {
-        for (const unlisten of unlistenFns.splice(0)) {
-          unlisten();
-        }
-      };
-
-      try {
-        unlistenFns.push(
-          await listen<UpdateState>("update://checking", (event) => {
-            if (!active) return;
-            syncUpdateStatus(event.payload);
-          }),
-        );
-
-        unlistenFns.push(
-          await listen<UpdateState>("update://checked", (event) => {
-            if (!active) return;
-            syncUpdateStatus(event.payload);
-          }),
-        );
-
-        unlistenFns.push(
-          await listen<UpdateState>("update://download-finished", (event) => {
-            if (!active) return;
-            syncUpdateStatus(event.payload);
-          }),
-        );
-
-        unlistenFns.push(
-          await listen<UpdateState>("update://install-finished", (event) => {
-            if (!active) return;
-            syncUpdateStatus(event.payload);
-          }),
-        );
-
-        unlistenFns.push(
-          await listen("update://error", () => {
-            if (!active) return;
-            void getUpdateStatus()
-              .then((status) => {
-                if (!active) return;
-                syncUpdateStatus(status);
-              })
-              .catch((error) => {
-                console.error("failed to refresh update status after error event", error);
-              });
-          }),
-        );
-
-        unlistenFns.push(
-          await listen<UpdateErrorPayload>("update://auto-check-error", (event) => {
-            if (!active) return;
-            console.error("automatic update check failed", event.payload);
-            void getUpdateStatus()
-              .then((status) => {
-                if (!active) return;
-                syncUpdateStatus(status);
-              })
-              .catch((error) => {
-                console.error("failed to refresh update status after automatic check error", error);
-              });
-          }),
-        );
-
-        return disposeAll;
-      } catch (error) {
-        disposeAll();
-        console.error("failed to bind update event listeners", error);
-        return () => undefined;
-      }
-    };
-
-    const promise = bindEvents();
-
-    return () => {
-      active = false;
-      void promise
-        .then((dispose) => dispose())
-        .catch((error) => {
-          console.error("failed to dispose update event listeners", error);
-        });
-    };
-  }, [syncUpdateStatus]);
-
-  useEffect(() => {
-    if (!aboutUpdateReminder.showText) return;
-    const timer = window.setTimeout(() => {
-      setAboutUpdateReminder((current) => dismissAboutUpdateReminderText(current));
-    }, ABOUT_UPDATE_LABEL_DURATION_MS);
-    return () => window.clearTimeout(timer);
-  }, [aboutUpdateReminder.showText]);
-  useEffect(() => {
-    if (visibleSidePanel) {
-      setMountedSidePanel(visibleSidePanel);
-      setSidePanelContentVisible(false);
-
-      const frame = window.requestAnimationFrame(() => {
-        setSidePanelContentVisible(true);
-      });
-
-      return () => window.cancelAnimationFrame(frame);
-    }
-
-    setSidePanelContentVisible(false);
-    if (!mountedSidePanel) return;
-
-    const timer = window.setTimeout(() => {
-      setMountedSidePanel((current) => (current === mountedSidePanel ? null : current));
-    }, 320);
-
-    return () => window.clearTimeout(timer);
-  }, [mountedSidePanel, visibleSidePanel]);
-
-  useEffect(() => {
     const unlisten = listen("notes-changed", () => {
-      // 记录事件到达时的 epoch；其间用户一旦切换/加载了笔记，本次同步即过期，
-      // 不再用过期的列表快照去改选中或回填内容，避免把选中"拉回"刚保存的旧笔记
-      const epochAtEvent = loadEpoch.peek();
-      const isStale = () => !loadEpoch.isCurrent(epochAtEvent);
-      void refreshNotes()
-        .then((loaded) => {
-          if (isStale()) return;
-          const currentId = selectedIdRef.current;
-          if (!currentId) return;
-          const stillExists = loaded.some((n) => n.id === currentId);
-          if (stillExists) {
-            if (saveStateRef.current !== "dirty" && saveStateRef.current !== "saving") {
-              void getNote(currentId)
-                .then((note) => {
-                  if (isStale()) return;
-                  if (selectedIdRef.current !== currentId) return;
-                  if (saveStateRef.current === "dirty" || saveStateRef.current === "saving") {
-                    return;
-                  }
-                  titleValueRef.current = note.title;
-                  contentValueRef.current = note.content;
-                  saveStateRef.current = "saved";
-                  setTitle(note.title);
-                  setContent(note.content);
-                  setSaveState("saved");
-                })
-                .catch(() => undefined);
-            }
-          } else if (selectedNoteRef.current) {
-            if (loaded[0]) {
-              void loadNote(loaded[0].id);
-            } else {
-              clearCurrentNote();
-            }
+      void refreshNotes().then((loaded) => {
+        const currentId = selectedIdRef.current;
+        if (!currentId) return;
+        const stillExists = loaded.some((n) => n.id === currentId);
+        if (stillExists) {
+          if (saveStateRef.current !== "dirty") {
+            void getNote(currentId)
+              .then((note) => {
+                if (selectedIdRef.current !== currentId) return;
+                setTitle(note.title);
+                setContent(note.content);
+                setSaveState("saved");
+              })
+              .catch(() => undefined);
           }
-        })
-        .catch(() => undefined);
+        } else if (selectedNoteRef.current) {
+          if (loaded[0]) {
+            void loadNote(loaded[0].id);
+          } else {
+            clearCurrentNote();
+          }
+        }
+      });
     });
     return () => {
       void unlisten.then((fn) => fn());
     };
-  }, [refreshNotes, loadNote, clearCurrentNote, loadEpoch]);
+  }, [refreshNotes, loadNote, clearCurrentNote]);
 
   useEffect(() => {
     function handleFocus() {
@@ -936,60 +742,26 @@ export function MainWindow({
   }, [refreshNotes]);
 
   useEffect(() => {
-    const onResize = () => setSettingsOverlay(window.innerWidth < 1080);
-    window.addEventListener("resize", onResize);
-    return () => window.removeEventListener("resize", onResize);
-  }, []);
-
-  useEffect(() => {
     const unlisten = listen<string>("open-external-file", (event) => {
+      // Always open as external file first
       void loadExternalFile(event.payload);
+      // Then check if we should prompt to record the directory
+      void classifyOpenedFile(event.payload)
+        .then((result) => {
+          if (!result.known) {
+            const suggestedDir = parentDirFromFilePath(event.payload);
+            setPendingPathPrompt({
+              filePath: event.payload,
+              inputValue: suggestedDir || event.payload,
+            });
+          }
+        })
+        .catch(() => {});
     });
     return () => {
       void unlisten.then((fn) => fn());
     };
   }, [loadExternalFile]);
-
-  useEffect(() => {
-    const TEXT_RE = /\.(md|markdown|txt)$/i;
-    const IMAGE_RE = /\.(png|jpe?g|gif|webp|bmp|svg)$/i;
-
-    const unlisten = getCurrentWindow().onDragDropEvent((event) => {
-      if (event.payload.type !== "drop") return;
-      const textPaths: string[] = [];
-      const imagePaths: string[] = [];
-
-      for (const p of event.payload.paths) {
-        if (TEXT_RE.test(p)) textPaths.push(p);
-        else if (IMAGE_RE.test(p)) imagePaths.push(p);
-      }
-
-      for (const p of textPaths) {
-        void loadExternalFile(p);
-      }
-
-      if (imagePaths.length > 0 && selectedIdRef.current && !isExternalRef.current) {
-        const noteId = selectedIdRef.current;
-        void (async () => {
-          const textarea = contentRef.current;
-          if (!textarea) return;
-          try {
-            const rels = await Promise.all(imagePaths.map((p) => saveImageFromPath(noteId, p)));
-            const markdown = rels.map((rel) => `![](${rel})`).join("\n");
-            insertTextAtCursor(textarea, setContent, markdown);
-            saveStateRef.current = "dirty";
-            setSaveState("dirty");
-          } catch (error) {
-            showToast(getErrorMessage(error));
-          }
-        })();
-      }
-    });
-
-    return () => {
-      void unlisten.then((fn) => fn());
-    };
-  }, [loadExternalFile, setContent]);
 
   useEffect(() => {
     const unlisten = listen<string>("open-note", (event) => {
@@ -1001,17 +773,8 @@ export function MainWindow({
   }, [loadNote]);
 
   useEffect(() => {
-    const unlisten = listen("open-about-panel", () => {
-      openAboutPanel();
-    });
-    return () => {
-      void unlisten.then((fn) => fn());
-    };
-  }, [openAboutPanel]);
-
-  useEffect(() => {
     const unlisten = listen<string>("shortcut-register-failed", (event) => {
-      showToast(event.payload, "warning");
+      setErrorMessage(event.payload);
     });
     return () => {
       void unlisten.then((fn) => fn());
@@ -1040,18 +803,14 @@ export function MainWindow({
     if (!selectedExternalFile) return;
 
     const interval = window.setInterval(async () => {
-      // 窗口隐藏（托盘/最小化）时跳过探测，恢复可见后 1s 内自动追上
-      if (document.visibilityState === "hidden") return;
       if (Date.now() - lastExternalSaveRef.current < 2000) return;
+      // Read-only files are opened with system app — skip polling content
+      if (selectedExternalFile.readOnly) return;
       try {
         const mtime = await getFileModifiedTime(selectedExternalFile.filePath);
-        if (selectedIdRef.current !== selectedExternalFile.id) return;
         if (mtime !== externalFileMtimeRef.current) {
           externalFileMtimeRef.current = mtime;
           const fileContent = await readExternalFile(selectedExternalFile.filePath);
-          if (selectedIdRef.current !== selectedExternalFile.id) return;
-          contentValueRef.current = fileContent;
-          saveStateRef.current = "saved";
           setContent(fileContent);
           setSaveState("saved");
         }
@@ -1064,9 +823,26 @@ export function MainWindow({
   }, [selectedExternalFile]);
 
   useEffect(() => {
+    // Reset sidebar tab when switching notes.
+    setSidebarTab("directory");
+  }, [selectedId]);
+
+  // Trigger tab-switch animation on the editor container without re-mounting
+  useEffect(() => {
+    const el = splitContainerRef.current;
+    if (!el || !selectedId) return;
+    el.classList.remove("animate-tab-switch");
+    // Force reflow to restart the animation
+    void (el as HTMLElement).offsetWidth;
+    el.classList.add("animate-tab-switch");
+  }, [noteTransitionKey]);
+
+  useEffect(() => {
     function closeMenus() {
       setNoteMenuClosing(true);
       setCategoryMenuClosing(true);
+      setNotesDirDropdownOpen(false);
+      setDeleteConfirmDir(null);
     }
 
     function handleKeyDown(event: KeyboardEvent) {
@@ -1097,135 +873,77 @@ export function MainWindow({
       setCategoryMenu(null);
       setCategoryMenuClosing(false);
       setCategoryMenuConfirmDelete(false);
-      setCategoryMenuHoverSuppressed(false);
     }, 150);
     return () => window.clearTimeout(timer);
   }, [categoryMenuClosing, categoryMenu]);
 
-  useEffect(() => {
-    if (!categoryMenuHoverSuppressed || !categoryMenu) return;
-    const releaseHover = () => setCategoryMenuHoverSuppressed(false);
-    window.addEventListener("mousemove", releaseHover, { once: true });
-    window.addEventListener("mousedown", releaseHover, { once: true });
-    return () => {
-      window.removeEventListener("mousemove", releaseHover);
-      window.removeEventListener("mousedown", releaseHover);
-    };
-  }, [categoryMenuHoverSuppressed, categoryMenu]);
+  const saveCurrentNote = useCallback(async () => {
+    if (!selectedId) return null;
 
-  const switchCategoryMenuPanel = useCallback((confirmDelete: boolean) => {
-    setCategoryMenuHoverSuppressed(true);
-    setCategoryMenuConfirmDelete(confirmDelete);
-    (document.activeElement as HTMLElement | null)?.blur();
-  }, []);
+    // Read-only files cannot be saved
+    if (selectedExternalFile?.readOnly || isReadOnlyInternal) {
+      return null;
+    }
 
-  const performSave = useCallback(
-    async (force: boolean): Promise<boolean> => {
-      // 非强制保存（自动保存、切换前保存）在没有未保存修改时直接视为成功
-      if (!force && saveStateRef.current !== "dirty") return true;
-      const id = selectedIdRef.current;
-      if (!id) return false;
-
-      // 在保存瞬间对当前笔记做快照；之后用户切换笔记不影响本次写入的内容，
-      // 保存完成后也只在"仍停留在这篇笔记"时才更新保存状态
-      const titleSnapshot = titleValueRef.current;
-      const contentSnapshot = contentValueRef.current;
-      const stillCurrent = () => selectedIdRef.current === id;
-      const settleSaveState = (state: SaveState) => {
-        if (!stillCurrent()) return;
-        saveStateRef.current = state;
-        setSaveState(state);
-      };
-
-      const externalFile = externalFilesRef.current.find((file) => file.id === id) ?? null;
-
-      settleSaveState("saving");
+    if (isExternal && selectedExternalFile) {
+      setSaveState("saving");
       try {
-        if (externalFile) {
-          await saveExternalFile(externalFile.filePath, contentSnapshot);
-          lastExternalSaveRef.current = Date.now();
-          const mtime = await getFileModifiedTime(externalFile.filePath);
-          if (stillCurrent()) {
-            externalFileMtimeRef.current = mtime;
-          }
-          settleSaveState(contentValueRef.current === contentSnapshot ? "saved" : "dirty");
-        } else {
-          const category = notesRef.current.find((note) => note.id === id)?.category ?? "";
-          const note = await updateNote(id, {
-            title: titleSnapshot,
-            content: contentSnapshot,
-            category,
-          });
-          replaceNoteMetadata(note);
-          const contentChanged =
-            contentValueRef.current !== contentSnapshot || titleValueRef.current !== titleSnapshot;
-          settleSaveState(contentChanged ? "dirty" : "saved");
-        }
-        return true;
-      } catch (error) {
-        settleSaveState("error");
-        showToast(getErrorMessage(error));
-        return false;
-      }
-    },
-    [replaceNoteMetadata],
-  );
-
-  const saveCurrentNote = useCallback(
-    (force = false): Promise<boolean> => {
-      const run = saveQueueRef.current.then(() => performSave(force));
-      saveQueueRef.current = run.catch(() => undefined);
-      return run;
-    },
-    [performSave],
-  );
-
-  useEffect(() => {
-    const unlisten = listen<UpdateInstallPrepareRequest>("update://prepare-install", (event) => {
-      const respond = async () => {
-        const windowLabel = windowLabelRef.current;
-        // 无未保存修改时直接上报就绪：避免排进 saveQueueRef，被正在执行的
-        // 防抖自动保存拖住、不必要地延迟安装准备响应
-        if (saveStateRef.current !== "dirty") {
-          await reportInstallPreparation(event.payload.requestId, windowLabel, "ready");
-          return;
-        }
-        const saved = await saveCurrentNote();
-        await reportInstallPreparation(
-          event.payload.requestId,
-          windowLabel,
-          saved ? "ready" : "failed",
-          saved
-            ? undefined
-            : t("settings.update.error.installSaveFailed", {
-                defaultValue: "安装前自动保存失败，请先处理当前笔记后重试",
-              }),
+        await saveExternalFile(selectedExternalFile.filePath, content);
+        lastExternalSaveRef.current = Date.now();
+        const mtime = await getFileModifiedTime(selectedExternalFile.filePath);
+        externalFileMtimeRef.current = mtime;
+        setSaveState("saved");
+        setTabs((prev) =>
+          prev.map((t) =>
+            t.noteId === selectedId ? { ...t, title, saveState: "saved" as SaveState } : t,
+          ),
         );
-      };
+        setErrorMessage(null);
+        return { id: selectedId, title, content } as Note;
+      } catch (error) {
+        setSaveState("error");
+        setErrorMessage(getErrorMessage(error));
+        return null;
+      }
+    }
 
-      void respond().catch(async (error) => {
-        await reportInstallPreparation(
-          event.payload.requestId,
-          windowLabelRef.current,
-          "failed",
-          error instanceof Error
-            ? error.message
-            : t("settings.update.error.installSaveFailed", {
-                defaultValue: "安装前自动保存失败，请先处理当前笔记后重试",
-              }),
-        ).catch(() => undefined);
-      });
-    });
-    return () => {
-      void unlisten.then((fn) => fn());
-    };
-  }, [saveCurrentNote, t]);
+    setSaveState("saving");
+    try {
+      const category = selectedNote?.category ?? "";
+      const note = await updateNote(selectedId, { title, content, category });
+      replaceNoteMetadata(note);
+      setSaveState("saved");
+      setTabs((prev) =>
+        prev.map((t) =>
+          t.noteId === note.id ? { ...t, title: note.title, saveState: "saved" as SaveState } : t,
+        ),
+      );
+      // Saving promotes preview tab to permanent
+      if (previewTabId === note.id) {
+        setPreviewTabId(null);
+      }
+      setErrorMessage(null);
+      return note;
+    } catch (error) {
+      setSaveState("error");
+      setErrorMessage(getErrorMessage(error));
+      return null;
+    }
+  }, [
+    content,
+    isExternal,
+    replaceNoteMetadata,
+    selectedExternalFile,
+    selectedId,
+    selectedNote,
+    title,
+  ]);
 
   useEffect(() => {
     function handleKeyDown(event: KeyboardEvent) {
       if ((event.ctrlKey || event.metaKey) && event.key === "s") {
         event.preventDefault();
-        void saveCurrentNote(true);
+        void saveCurrentNote();
       }
     }
 
@@ -1247,9 +965,6 @@ export function MainWindow({
 
     return () => window.clearTimeout(timer);
   }, [
-    // content 与 title 用于在持续输入时不断重置防抖计时器
-    content,
-    title,
     isExternal,
     saveCurrentNote,
     saveState,
@@ -1259,59 +974,61 @@ export function MainWindow({
   ]);
 
   const handleNewNote = async () => {
-    await saveCurrentNote();
+    setErrorMessage(null);
+    if (saveState === "dirty") {
+      await saveCurrentNote();
+    }
     try {
       const note = await createNote({ title: "", content: "", category: activeCategory });
       replaceNoteMetadata(note);
-      applyNote(note);
+      // Open as new tab (permanent, not preview)
+      flushActiveTab();
+      setPreviewTabId(null);
+      const newTab: TabState = {
+        noteId: note.id,
+        title: note.title,
+        fileStem: note.fileStem,
+        content: note.content,
+        contentFormat: "markdown",
+        saveState: "saved",
+      };
+      setTabs((prev) => [...prev, newTab]);
+      setActiveTabId(note.id);
+      setSelectedId(note.id);
+      setContent(note.content);
+      setContentFormat("markdown");
+      setTitle(note.title);
+      setSaveState("saved");
+      setNoteTransitionKey((k) => k + 1);
     } catch (error) {
-      showToast(getErrorMessage(error));
+      setErrorMessage(getErrorMessage(error));
     }
   };
 
-  const handleOpenSettings = async () => {
-    if (settingsOpen) {
-      setSettingsOpen(false);
-      return;
-    }
-    setSettingsOpen(true);
-    setAboutOpen(false);
+  const toggleSettingsTab = useCallback(async () => {
+    // Always open settings; never toggle-close. Close via tab or note selection.
+    if (settingsTabActive) return;
+    setSettingsTabActive(true);
     if (settingsConfig) return;
+
+    setErrorMessage(null);
     try {
       const config = await getConfig();
       setSettingsConfig(config);
-      setSavedDataDir(config.dataDir);
-      setViewMode(normalizeViewMode(config.defaultViewMode));
+      setSavedNotesDir(config.notesDir ?? null);
     } catch (error) {
-      showToast(getErrorMessage(error));
+      setErrorMessage(getErrorMessage(error));
     }
-  };
+  }, [settingsTabActive, settingsConfig]);
 
-  const handleMigrateDataDir = async () => {
-    if (!settingsConfig) return;
+  const handleChooseNotesDir = async () => {
+    setErrorMessage(null);
     try {
-      const dir = await chooseDataDirectory();
-      if (!dir) return;
-      // 后端会在所选目录下创建 floral 子目录存放数据；先告知用户，
-      // 避免其在文件管理器打开所选目录看到"空文件夹"而误判数据丢失
-      const confirmed = window.confirm(
-        t("settings.dataDir.confirmSubdir", {
-          dir,
-          defaultValue: "数据将存放在「{{dir}}」下的 floral 子文件夹中，是否继续？",
-        }),
-      );
-      if (!confirmed) return;
-      const savedConfig = await migrateDataDir(dir);
-      setSettingsConfig(savedConfig);
-      setSavedDataDir(savedConfig.dataDir);
-      const loadedNotes = await refreshNotes();
-      if (loadedNotes[0]) {
-        await loadNote(loadedNotes[0].id);
-      } else {
-        clearCurrentNote();
-      }
+      const notesDir = await chooseNotesDirectory();
+      if (!notesDir) return;
+      await switchNotesDir(notesDir, true);
     } catch (error) {
-      showToast(getErrorMessage(error));
+      setErrorMessage(getErrorMessage(error));
     }
   };
 
@@ -1323,7 +1040,7 @@ export function MainWindow({
         clearTimeout(settingsSaveTimer.current);
       }
       settingsSaveTimer.current = setTimeout(async () => {
-        const previousDataDir = savedDataDir ?? nextConfig.dataDir;
+        const previousNotesDir = savedNotesDir ?? nextConfig.notesDir;
         const normalizedConfig = {
           ...nextConfig,
           defaultViewMode: normalizeViewMode(nextConfig.defaultViewMode),
@@ -1332,10 +1049,15 @@ export function MainWindow({
         try {
           const savedConfig = await saveConfig(normalizedConfig);
           setSettingsConfig(savedConfig);
-          setSavedDataDir(savedConfig.dataDir);
-          setViewMode(normalizeViewMode(savedConfig.defaultViewMode));
+          setSavedNotesDir(savedConfig.notesDir ?? null);
 
-          if (savedConfig.dataDir !== previousDataDir) {
+          const notesDirChanged = savedConfig.notesDir !== previousNotesDir;
+          const hiddenChanged =
+            (savedConfig.hiddenCategories ?? []).join(",") !==
+            (savedHiddenCategoriesRef.current ?? []).join(",");
+          savedHiddenCategoriesRef.current = savedConfig.hiddenCategories;
+
+          if (notesDirChanged || hiddenChanged) {
             const loadedNotes = await refreshNotes();
             if (loadedNotes[0]) {
               await loadNote(loadedNotes[0].id);
@@ -1344,11 +1066,11 @@ export function MainWindow({
             }
           }
         } catch (error) {
-          showToast(getErrorMessage(error));
+          setErrorMessage(getErrorMessage(error));
         }
       }, 300);
     },
-    [savedDataDir, refreshNotes, loadNote, clearCurrentNote],
+    [savedNotesDir, refreshNotes, loadNote, clearCurrentNote],
   );
 
   const handleSettingsChange = useCallback(
@@ -1360,29 +1082,13 @@ export function MainWindow({
     [persistSettings],
   );
 
-  const handleCloseSettings = useCallback(() => {
-    setSettingsOpen(false);
-  }, []);
-
-  const handleOpenAbout = useCallback(() => {
-    setAboutOpen((open) => {
-      const nextOpen = !open;
-      if (nextOpen) {
-        setSettingsOpen(false);
-        setAboutUpdateReminder((current) => dismissAboutUpdateReminderText(current));
-      }
-      return nextOpen;
-    });
-  }, []);
-
-  const handleCloseAbout = useCallback(() => {
-    setAboutOpen(false);
-  }, []);
-
   const handleImportNote = async () => {
+    setErrorMessage(null);
     try {
-      const saved = await saveCurrentNote();
-      if (!saved) return;
+      if (selectedId && saveState === "dirty") {
+        const saved = await saveCurrentNote();
+        if (!saved) return;
+      }
 
       const note = await importMarkdownNote(activeCategory);
       if (!note) return;
@@ -1390,54 +1096,178 @@ export function MainWindow({
       replaceNoteMetadata(note);
       applyNote(note);
     } catch (error) {
-      showToast(getErrorMessage(error));
+      setErrorMessage(getErrorMessage(error));
     }
   };
 
   const handleSelectNote = async (id: string) => {
-    if (id === selectedId) return;
+    if (id === activeTabId) return;
+    setSettingsTabActive(false);
     setDeleteConfirm(false);
-    // 排队保存：等待可能在途的自动保存，并把尚未落盘的修改一并存掉
-    await saveCurrentNote();
-
-    setIsLoading(true);
-    try {
-      await loadNote(id);
-    } catch (error) {
-      showToast(getErrorMessage(error));
-    } finally {
-      setIsLoading(false);
+    if (saveState === "dirty") {
+      await saveCurrentNote();
     }
+
+    // Non-md files: open with system default app instead of loading in-app
+    const note = notes.find((n) => n.id === id);
+    if (note && isReadOnlyNote(note)) {
+      setErrorMessage(null);
+      setSelectedId(id);
+      setTitle(note.fileStem || note.title);
+      setContent("");
+      setSaveState("saved");
+      setNoteTransitionKey((k) => k + 1);
+      try {
+        await openNoteWithSystemApp(id);
+      } catch (error) {
+        setErrorMessage(getErrorMessage(error));
+      }
+      return;
+    }
+
+    // Single click → preview tab (italic, reused).
+    // If the target note already has a permanent tab, just switch to it —
+    // keep the preview tab around for future single-click overwrites.
+    const existingTab = findTab(id);
+    if (existingTab && previewTabId !== id) {
+      flushActiveTab();
+      setActiveTabId(id);
+      setContent(existingTab.content);
+      setContentFormat(existingTab.contentFormat);
+      setTitle(existingTab.title);
+      setSaveState(existingTab.saveState);
+      setSelectedId(id);
+      setNoteTransitionKey((k) => k + 1);
+      return;
+    }
+
+    if (previewTabId) {
+      // Reuse the existing preview tab: replace its content with the new note
+      await replacePreviewTab(id);
+      return;
+    }
+
+    // No preview tab yet: open as preview
+    flushActiveTab();
+    await openTab(id);
+    setPreviewTabId(id);
+  };
+
+  /** Replace the current preview tab with a different note */
+  const replacePreviewTab = useCallback(
+    async (noteId: string) => {
+      flushActiveTab();
+      setIsLoading(true);
+      setErrorMessage(null);
+      try {
+        const note = await getNote(noteId);
+        setTabs((prev) =>
+          prev.map((t) =>
+            t.noteId === previewTabId
+              ? {
+                  noteId: note.id,
+                  title: note.title,
+                  fileStem: note.fileStem,
+                  content: note.content,
+                  contentFormat: note.fileFormat && note.fileFormat !== "md" ? "html" : "markdown",
+                  saveState: "saved" as SaveState,
+                }
+              : t,
+          ),
+        );
+        setPreviewTabId(note.id);
+        setActiveTabId(note.id);
+        setSelectedId(note.id);
+        setContent(note.content);
+        setContentFormat(note.fileFormat && note.fileFormat !== "md" ? "html" : "markdown");
+        setTitle(note.title);
+        setSaveState("saved");
+        setNoteTransitionKey((k) => k + 1);
+        replaceNoteMetadata(note);
+      } catch (error) {
+        setErrorMessage(getErrorMessage(error));
+      } finally {
+        setIsLoading(false);
+      }
+    },
+    [flushActiveTab, previewTabId, replaceNoteMetadata],
+  );
+
+  /** Double-click → permanent tab (or promote preview) */
+  const handleDoubleClickNote = async (id: string) => {
+    // If already the active permanent tab, nothing to do
+    if (id === activeTabId && previewTabId !== id) return;
+    setSettingsTabActive(false);
+    setDeleteConfirm(false);
+    if (saveState === "dirty") {
+      await saveCurrentNote();
+    }
+
+    // Non-md files: same as single click
+    const note = notes.find((n) => n.id === id);
+    if (note && isReadOnlyNote(note)) {
+      setErrorMessage(null);
+      setSelectedId(id);
+      setTitle(note.fileStem || note.title);
+      setContent("");
+      setSaveState("saved");
+      setNoteTransitionKey((k) => k + 1);
+      try {
+        await openNoteWithSystemApp(id);
+      } catch (error) {
+        setErrorMessage(getErrorMessage(error));
+      }
+      return;
+    }
+
+    // Double-click promotes preview → permanent (or opens as permanent)
+    setPreviewTabId(null);
+    flushActiveTab();
+    await openTab(id);
   };
 
   const handleSelectExternalFile = async (id: string) => {
     if (id === selectedId) return;
+    setSettingsTabActive(false);
     setDeleteConfirm(false);
-    await saveCurrentNote();
+    if (saveState === "dirty") {
+      await saveCurrentNote();
+    }
 
     const file = externalFiles.find((f) => f.id === id);
     if (!file) return;
 
     setIsLoading(true);
-    const epoch = loadEpoch.bump();
     try {
+      if (file.readOnly) {
+        // Open with system default app
+        setSelectedId(id);
+        setTitle(file.title);
+        setContent("");
+        setSaveState("saved");
+        setErrorMessage(null);
+        try {
+          await openFileWithSystemApp(file.filePath);
+        } catch (error) {
+          setErrorMessage(getErrorMessage(error));
+        }
+        return;
+      }
+
       const [fileContent, mtime] = await Promise.all([
         readExternalFile(file.filePath),
         getFileModifiedTime(file.filePath),
       ]);
-      if (!loadEpoch.isCurrent(epoch)) return;
-      selectedIdRef.current = id;
-      titleValueRef.current = file.title;
-      contentValueRef.current = fileContent;
-      saveStateRef.current = "saved";
+
       setSelectedId(id);
       setTitle(file.title);
       setContent(fileContent);
       setSaveState("saved");
+      setErrorMessage(null);
       setNoteTransitionKey((k) => k + 1);
       externalFileMtimeRef.current = mtime;
     } catch (error) {
-      showToast(getErrorMessage(error));
+      setErrorMessage(getErrorMessage(error));
     } finally {
       setIsLoading(false);
     }
@@ -1466,16 +1296,26 @@ export function MainWindow({
     if (!noteId) return;
 
     setDeleteConfirm(false);
+    setErrorMessage(null);
     try {
       await deleteNote(noteId);
+      // Close tab for deleted note
+      setTabs((prev) => prev.filter((t) => t.noteId !== noteId));
       const remaining = await refreshNotes();
-      if (noteId === selectedId && remaining[0]) {
-        await loadNote(remaining[0].id);
-      } else if (noteId === selectedId) {
-        clearCurrentNote();
+      if (noteId === activeTabId) {
+        if (remaining[0]) {
+          await openTab(remaining[0].id);
+        } else {
+          setActiveTabId(null);
+          setSelectedId(null);
+          setContent("");
+          setContentFormat("markdown");
+          setTitle("");
+          setSaveState("idle");
+        }
       }
     } catch (error) {
-      showToast(getErrorMessage(error));
+      setErrorMessage(getErrorMessage(error));
     }
   };
 
@@ -1483,18 +1323,24 @@ export function MainWindow({
     event.preventDefault();
     event.stopPropagation();
 
+    const menuWidth = 168;
+    const menuHeight = 76;
+    const x = Math.min(event.clientX, window.innerWidth - menuWidth - 4);
+    const y = Math.min(event.clientY, window.innerHeight - menuHeight - 4);
+
     setNoteMenuClosing(false);
     setHoveredId(noteId);
     setNoteMenu({
-      x: event.clientX,
-      y: event.clientY,
+      x: Math.max(4, x),
+      y: Math.max(4, y),
       noteId,
     });
   };
 
   const handleExportNote = async (note: NoteMetadata) => {
+    setErrorMessage(null);
     try {
-      if (note.id === selectedId) {
+      if (note.id === selectedId && saveState === "dirty") {
         const saved = await saveCurrentNote();
         if (!saved) return;
       }
@@ -1504,7 +1350,7 @@ export function MainWindow({
         title: note.id === selectedId ? title : note.title,
       });
     } catch (error) {
-      showToast(getErrorMessage(error));
+      setErrorMessage(getErrorMessage(error));
     }
   };
 
@@ -1523,17 +1369,70 @@ export function MainWindow({
       return;
     }
 
+    if (action === "openFileLocation") {
+      setNoteMenuClosing(true);
+      const notesDir = savedNotesDir || settingsConfig?.notesDir;
+      if (!notesDir) return;
+      const filePath = note.category
+        ? `${notesDir}/${note.category}/${note.fileName}`
+        : `${notesDir}/${note.fileName}`;
+      revealItemInDir(filePath).catch((err) => {
+        setErrorMessage(getErrorMessage(err));
+      });
+      return;
+    }
+
     setNoteMenuClosing(true);
     void handleDeleteNote(note.id);
   };
 
   const handleMoveNote = async (noteId: string, targetCategory: string) => {
     setNoteMenuClosing(true);
+    setErrorMessage(null);
     try {
       await moveNoteCategory(noteId, targetCategory);
       await refreshNotes();
     } catch (error) {
-      showToast(getErrorMessage(error));
+      setErrorMessage(getErrorMessage(error));
+    }
+  };
+
+  const switchNotesDir = async (path: string, addToCache = true) => {
+    if (saveState === "dirty" && selectedId) {
+      await saveCurrentNote();
+    }
+    setErrorMessage(null);
+    try {
+      const savedConfig = await selectNotesDir(path, addToCache);
+      setSettingsConfig(savedConfig);
+      setSavedNotesDir(savedConfig.notesDir ?? null);
+      const loaded = await refreshNotes();
+      if (loaded[0]) {
+        await loadNote(loaded[0].id);
+      } else {
+        clearCurrentNote();
+      }
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
+    }
+  };
+
+  const handleDeleteNotesDir = async (path: string) => {
+    setDeleteConfirmDir(null);
+    setNotesDirDropdownOpen(false);
+    setErrorMessage(null);
+    try {
+      const savedConfig = await deleteNotesDir(path);
+      setSettingsConfig(savedConfig);
+      setSavedNotesDir(savedConfig.notesDir ?? null);
+      const loaded = await refreshNotes();
+      if (loaded[0]) {
+        await loadNote(loaded[0].id);
+      } else {
+        clearCurrentNote();
+      }
+    } catch (error) {
+      setErrorMessage(getErrorMessage(error));
     }
   };
 
@@ -1543,13 +1442,14 @@ export function MainWindow({
       setShowCategoryInput(false);
       return;
     }
+    setErrorMessage(null);
     try {
       await createCategory(name);
       setCategories((prev) => [...prev, name].sort());
       setShowCategoryInput(false);
       setCategoryInputValue("");
     } catch (error) {
-      showToast(getErrorMessage(error));
+      setErrorMessage(getErrorMessage(error));
     }
   };
 
@@ -1559,18 +1459,19 @@ export function MainWindow({
       setRenamingCategory(null);
       return;
     }
-
+    setErrorMessage(null);
     try {
       await renameCategory(oldName, newName);
       await refreshNotes();
       setRenamingCategory(null);
       setRenameCategoryValue("");
     } catch (error) {
-      showToast(getErrorMessage(error));
+      setErrorMessage(getErrorMessage(error));
     }
   };
 
   const handleDeleteCategory = async (name: string) => {
+    setErrorMessage(null);
     try {
       await deleteCategory(name);
       await refreshNotes();
@@ -1578,7 +1479,7 @@ export function MainWindow({
         setActiveCategory("");
       }
     } catch (error) {
-      showToast(getErrorMessage(error));
+      setErrorMessage(getErrorMessage(error));
     }
   };
 
@@ -1595,233 +1496,21 @@ export function MainWindow({
   };
 
   const markDirty = () => {
-    if (!selectedId) return;
-    saveStateRef.current = "dirty";
-    setSaveState("dirty");
-  };
-
-  const ensureNoteSaved = useCallback(async (): Promise<string | null> => {
-    if (selectedId) return selectedId;
-    try {
-      const note = await createNote({ title, content, category: activeCategory });
-      replaceNoteMetadata(note);
-      applyNote(note);
-      return note.id;
-    } catch {
-      return null;
-    }
-  }, [selectedId, title, content, activeCategory, replaceNoteMetadata, applyNote]);
-
-  const {
-    handlePaste: imagePasteHandler,
-    handleDrop: imageDropHandler,
-    handleDragOver: imageDragOverHandler,
-  } = useImagePaste({
-    noteId: selectedId,
-    textareaRef: contentRef,
-    setContent,
-    markDirty,
-    onEnsureNoteSaved: ensureNoteSaved,
-    disabled: isExternal,
-    onError: showToast,
-    t,
-  });
-
-  const handleCleanUnusedImages = async () => {
-    if (!selectedId || isExternal) return;
-    try {
-      const removed = await cleanUnusedImages(selectedId, content);
-      if (removed.length > 0) {
-        showToast(
-          t("main.images.cleaned", {
-            count: removed.length,
-            defaultValue: "已清理 {{count}} 张图片",
-          }),
-          "info",
-        );
-      } else {
-        showToast(t("main.images.cleanedNone", { defaultValue: "没有需要清理的图片" }), "info");
-      }
-    } catch (error) {
-      showToast(getErrorMessage(error));
-    }
+    if (selectedId) setSaveState("dirty");
   };
 
   const handleUndo = () => {
     if (!selectedId) return;
-    const textarea = contentRef.current;
-    if (runEditorCommand(textarea, "undo")) {
-      setContent(textarea?.value ?? content);
-      markDirty();
-    }
-  };
-
-  const handleRedo = () => {
-    if (!selectedId) return;
-    const textarea = contentRef.current;
-    if (runEditorCommand(textarea, "redo")) {
-      setContent(textarea?.value ?? content);
-      markDirty();
-    }
-  };
-
-  const insertAtCursor = useCallback((text: string) => {
-    const textarea = contentRef.current;
-    if (!textarea) return;
-    const before = textarea.value.slice(0, textarea.selectionStart);
-    const after = textarea.value.slice(textarea.selectionEnd);
-    const newContent = before + text + after;
-    setContent(newContent);
+    // Undo is handled natively by CodeMirror in source mode
     markDirty();
-    requestAnimationFrame(() => {
-      textarea.focus();
-      const cursor = before.length + text.length;
-      textarea.setSelectionRange(cursor, cursor);
-    });
-  }, [setContent, markDirty]);
-
-  const appendAfterSelection = useCallback((text: string) => {
-    const textarea = contentRef.current;
-    if (!textarea) return;
-    const before = textarea.value.slice(0, textarea.selectionEnd);
-    const after = textarea.value.slice(textarea.selectionEnd);
-    const separator = after.trim() ? "\n" : "";
-    const newContent = before + separator + text + after;
-    setContent(newContent);
-    markDirty();
-    requestAnimationFrame(() => {
-      textarea.focus();
-      const cursor = before.length + separator.length + text.length;
-      textarea.setSelectionRange(cursor, cursor);
-    });
-  }, [setContent, markDirty]);
-
-  const handleAiGenerate = useCallback(async () => {
-    if (!aiPrompt.trim()) return;
-    setAiError(null);
-    setAiLoading(true);
-    setAiLoadingAction("gen");
-    try {
-      const textarea = contentRef.current;
-      const selectedText = textarea?.value.slice(textarea.selectionStart, textarea.selectionEnd) || null;
-      const response = await invoke<string>("ai_chat", { prompt: aiPrompt, context: selectedText });
-      insertAtCursor(response);
-      setAiGenOpen(false);
-      setAiPrompt("");
-    } catch (e) {
-      setAiError(typeof e === "string" ? e : (e as Error).message || String(e));
-    } finally {
-      setAiLoading(false);
-      setAiLoadingAction("");
-    }
-  }, [aiPrompt, insertAtCursor]);
-
-  const handleAiContinue = useCallback(async () => {
-    const textarea = contentRef.current;
-    if (!textarea) return;
-    const selected = textarea.value.slice(textarea.selectionStart, textarea.selectionEnd);
-    if (!selected.trim()) return;
-    setAiError(null);
-    setAiLoading(true);
-    setAiLoadingAction("pref");
-    try {
-      const response = await invoke<string>("ai_prefix_completion", { prefix: selected, prompt: null });
-      appendAfterSelection(response);
-    } catch (e) {
-      setAiError(typeof e === "string" ? e : (e as Error).message || String(e));
-    } finally {
-      setAiLoading(false);
-      setAiLoadingAction("");
-    }
-  }, [appendAfterSelection]);
-
-  const handleAiFormat = useCallback(async () => {
-    const textarea = contentRef.current;
-    if (!textarea) return;
-    const fullContent = textarea.value;
-    if (!fullContent.trim()) return;
-    if (!window.confirm("AI 将自动为当前内容添加 Markdown 章节标记并调整段落排版，是否继续？")) return;
-    setAiError(null);
-    setAiLoading(true);
-    setAiLoadingAction("fmt");
-    try {
-      const response = await invoke<string>("ai_format_note", { content: fullContent });
-      setContent(response);
-      markDirty();
-    } catch (e) {
-      setAiError(typeof e === "string" ? e : (e as Error).message || String(e));
-    } finally {
-      setAiLoading(false);
-      setAiLoadingAction("");
-    }
-  }, [setContent, markDirty]);
-
-  const handleAiFim = useCallback(async () => {
-    const textarea = contentRef.current;
-    if (!textarea) return;
-    const before = textarea.value.slice(0, textarea.selectionStart);
-    const after = textarea.value.slice(textarea.selectionEnd);
-    setAiError(null);
-    setAiLoading(true);
-    setAiLoadingAction("fim");
-    setFimSuggestion(null);
-    try {
-      const response = await invoke<string>("ai_fim_completion", { prefix: before, suffix: after || "" });
-      setFimSuggestion(response);
-    } catch (e) {
-      setAiError(typeof e === "string" ? e : (e as Error).message || String(e));
-    } finally {
-      setAiLoading(false);
-      setAiLoadingAction("");
-    }
-  }, []);
-
-  const acceptFimSuggestion = useCallback(() => {
-    if (!fimSuggestion) return;
-    insertAtCursor(fimSuggestion);
-    setFimSuggestion(null);
-  }, [fimSuggestion, insertAtCursor]);
-
-  const hasSelection = useCallback(() => {
-    const textarea = contentRef.current;
-    if (!textarea) return false;
-    return textarea.selectionStart !== textarea.selectionEnd;
-  }, []);
-
-  // Generate title via AI — used when saving with no title, or on sparkle button click
-  const handleGenerateTitle = useCallback(async (useContent?: string) => {
-    const sourceContent = useContent ?? content;
-    if (sourceContent.trim().length < 20) return null;
-    if (!settingsConfig?.aiEnabled) return null;
-    setAiTitlePending(true);
-    try {
-      const generated = await invoke<string>("ai_generate_title", { content: sourceContent });
-      return generated || null;
-    } catch {
-      return null;
-    } finally {
-      setAiTitlePending(false);
-    }
-  }, [content, settingsConfig?.aiEnabled]);
-
-  // Auto-title on save: if title is empty and content > 20 chars, generate one
-  useEffect(() => {
-    if (!title.trim() && content.trim().length > 20 && !aiTitlePending && !isLoading && settingsConfig?.aiEnabled) {
-      const timer = setTimeout(async () => {
-        const generated = await handleGenerateTitle();
-        if (generated && !title.trim()) {
-          setTitle(generated);
-        }
-      }, 2000);
-      return () => clearTimeout(timer);
-    }
-  }, [content, handleGenerateTitle, isLoading, settingsConfig?.aiEnabled]);
+  };
 
   const handleOpenNotepad = async () => {
+    setErrorMessage(null);
     try {
       await openNotepadWindow();
     } catch (error) {
-      showToast(getErrorMessage(error));
+      setErrorMessage(getErrorMessage(error));
     }
   };
 
@@ -1829,12 +1518,6 @@ export function MainWindow({
 
   useEffect(() => {
     void isCurrentWindowMaximized().then(setIsMaximized);
-    const unlisten = getCurrentWindow().onResized(() => {
-      void isCurrentWindowMaximized().then(setIsMaximized);
-    });
-    return () => {
-      void unlisten.then((fn) => fn());
-    };
   }, []);
 
   useEffect(() => {
@@ -1859,221 +1542,38 @@ export function MainWindow({
     };
   }, [isResizingSidebar]);
 
-  useEffect(() => {
-    if (!isResizingSplit) return;
-
-    document.body.style.userSelect = "none";
-    document.body.style.cursor = "col-resize";
-
-    const onMouseMove = (e: globalThis.MouseEvent) => {
-      const container = splitContainerRef.current;
-      if (!container) return;
-      const rect = container.getBoundingClientRect();
-      const ratio = (e.clientX - rect.left) / rect.width;
-      setSplitRatio(Math.min(Math.max(ratio, 0.2), 0.8));
-    };
-    const onMouseUp = () => setIsResizingSplit(false);
-
-    document.addEventListener("mousemove", onMouseMove);
-    document.addEventListener("mouseup", onMouseUp);
-    return () => {
-      document.removeEventListener("mousemove", onMouseMove);
-      document.removeEventListener("mouseup", onMouseUp);
-      document.body.style.userSelect = "";
-      document.body.style.cursor = "";
-    };
-  }, [isResizingSplit]);
-
-  const cancelScrollMeasurement = useCallback(() => {
-    if (measureDebounceRef.current) clearTimeout(measureDebounceRef.current);
-    cancelAnimationFrame(measureRafRef.current);
-    measureControllerRef.current?.abort();
-  }, []);
-
-  const scrollSyncEnabled = settingsConfig?.splitScrollSync ?? true;
-
-  const scheduleScrollMeasurement = useCallback(
-    (delayMs: number) => {
-      if (viewMode !== "split" || !scrollSyncEnabled) return;
-      if (!contentRef.current || !previewScrollRef.current) return;
-
-      // 布局和测量稳定前先清空旧偏移量
-      blockOffsets.current = [];
-      cancelScrollMeasurement();
-
-      const controller = new AbortController();
-      measureControllerRef.current = controller;
-
-      const measure = async () => {
-        if (!contentRef.current || !previewScrollRef.current) return;
-        const offsets = await measureBlockOffsets(content, contentRef.current, controller.signal);
-        if (controller.signal.aborted) return;
-        blockOffsets.current = offsets;
-        if (!controller.signal.aborted && previewScrollRef.current) {
-          tagPreviewBlocks(previewScrollRef.current);
-        }
-      };
-
-      const runAfterLayout = () => {
-        measureRafRef.current = requestAnimationFrame(() => {
-          void measure();
-        });
-      };
-
-      if (delayMs > 0) {
-        measureDebounceRef.current = setTimeout(runAfterLayout, delayMs);
-      } else {
-        runAfterLayout();
-      }
-    },
-    [cancelScrollMeasurement, content, scrollSyncEnabled, viewMode],
-  );
-
-  // 切换笔记时通过 rAF 测量（不阻塞首帧渲染），编辑时 debounce 避免频繁重排
-  useEffect(() => {
-    if (viewMode !== "split" || !scrollSyncEnabled) {
-      blockOffsets.current = [];
-      cancelScrollMeasurement();
-      return;
-    }
-
-    const isNoteSwitch = prevSelectedIdRef.current !== selectedId;
-    prevSelectedIdRef.current = selectedId;
-    scheduleScrollMeasurement(isNoteSwitch ? 0 : 250);
-
-    return () => {
-      cancelScrollMeasurement();
-    };
-  }, [
-    cancelScrollMeasurement,
-    content,
-    scrollSyncEnabled,
-    scheduleScrollMeasurement,
-    selectedId,
-    settingsConfig?.fontSize,
-    settingsConfig?.renderHtmlMarkdown,
-    splitRatio,
-    viewMode,
-  ]);
-
-  useEffect(() => {
-    if (viewMode !== "split") return;
-
-    const observedElements: Element[] = [];
-    if (splitContainerRef.current) observedElements.push(splitContainerRef.current);
-    if (contentRef.current) observedElements.push(contentRef.current);
-    if (previewScrollRef.current) observedElements.push(previewScrollRef.current);
-
-    if (typeof ResizeObserver === "undefined") {
-      const handleResize = () => scheduleScrollMeasurement(120);
-      window.addEventListener("resize", handleResize);
-      return () => window.removeEventListener("resize", handleResize);
-    }
-
-    if (observedElements.length === 0) return;
-
-    const observer = new ResizeObserver(() => {
-      scheduleScrollMeasurement(120);
-    });
-    observedElements.forEach((element) => observer.observe(element));
-
-    return () => observer.disconnect();
-  }, [scheduleScrollMeasurement, viewMode]);
-
-  // Reset preview scroll on note switch
-  useEffect(() => {
-    if (previewScrollRef.current) {
-      previewScrollRef.current.scrollTop = 0;
-    }
-  }, [selectedId]);
-
-  const handleEditorScroll = useCallback(() => {
-    if (viewMode !== "split") return;
-    if (scrollSource.current === "preview") return;
-
-    const textarea = contentRef.current;
-    const preview = previewScrollRef.current;
-    if (!textarea || !preview) return;
-
-    scrollSource.current = "editor";
-    if (scrollTimer.current) clearTimeout(scrollTimer.current);
-    scrollTimer.current = setTimeout(() => {
-      scrollSource.current = null;
-    }, 150);
-
-    const offsets = blockOffsets.current;
-    if (offsets.length === 0) return;
-
-    const blockIdx = blockIndexAtOffset(offsets, textarea.scrollTop);
-    const el = preview.querySelector<HTMLElement>(`[data-block-index="${blockIdx}"]`);
-    if (!el) return;
-
-    el.scrollIntoView({ block: "start", behavior: "instant" });
-  }, [viewMode]);
-
-  const handlePreviewScroll = useCallback(() => {
-    if (viewMode !== "split") return;
-    if (scrollSource.current === "editor") return;
-
-    const textarea = contentRef.current;
-    const preview = previewScrollRef.current;
-    if (!textarea || !preview) return;
-
-    scrollSource.current = "preview";
-    if (scrollTimer.current) clearTimeout(scrollTimer.current);
-    scrollTimer.current = setTimeout(() => {
-      scrollSource.current = null;
-    }, 150);
-
-    const elements = preview.querySelectorAll<HTMLElement>("[data-block-index]");
-    if (elements.length === 0) return;
-
-    const containerRect = preview.getBoundingClientRect();
-    let topDomIndex = 0;
-    for (const el of elements) {
-      const rect = el.getBoundingClientRect();
-      if (rect.bottom > containerRect.top + 1) {
-        topDomIndex = parseInt(el.getAttribute("data-block-index")!, 10);
-        break;
-      }
-    }
-
-    const offsets = blockOffsets.current;
-    if (topDomIndex >= offsets.length) return;
-
-    textarea.scrollTop = offsets[topDomIndex];
-  }, [viewMode]);
-
   const handlePinEntry = async () => {
     if (!selectedId) return;
     const isPinned = pinnedTileIds.has(selectedId);
-    if (!isPinned) {
+    if (!isPinned && saveState === "dirty") {
       await saveCurrentNote();
     }
+
+    setErrorMessage(null);
     try {
       const pinned = await toggleTileWindow(selectedId);
       setPinnedTileIds((previous) => {
         return syncPinnedTileIds(previous, selectedId, pinned);
       });
     } catch (error) {
-      showToast(getErrorMessage(error));
+      setErrorMessage(getErrorMessage(error));
     }
   };
 
   const selectedTilePinned = selectedId ? pinnedTileIds.has(selectedId) : false;
 
+  const handleTitleBarDrag = (event: MouseEvent<HTMLDivElement>) => {
+    if ((event.target as HTMLElement).closest("button")) return;
+    void startCurrentWindowDrag().catch(() => undefined);
+  };
+
   const toggleMaximize = () => {
     void toggleMaximizeCurrentWindow().then(() => isCurrentWindowMaximized().then(setIsMaximized));
   };
 
-  const handleTitleBarMouseDown = (event: MouseEvent<HTMLDivElement>) => {
+  const handleTitleBarDoubleClick = (event: MouseEvent<HTMLDivElement>) => {
     if ((event.target as HTMLElement).closest("button")) return;
-    if (event.button !== 0) return;
-    if (event.detail === 2) {
-      toggleMaximize();
-      return;
-    }
-    void startCurrentWindowDrag().catch(() => undefined);
+    toggleMaximize();
   };
 
   const handleMinimize = () => {
@@ -2087,206 +1587,458 @@ export function MainWindow({
   const handleClose = () => {
     void closeCurrentWindow();
   };
-  const aboutButtonLabel = t("settings.update.title", { defaultValue: "更新" });
-  const aboutButtonExpanded = aboutUpdateReminder.showText;
-  const aboutButtonTitle = aboutUpdateReminder.hasPendingUpdate
-    ? aboutButtonLabel
-    : t("main.window.about", { defaultValue: "关于" });
-
-  const isMac = /Mac/i.test(navigator.platform);
 
   return (
     <div className="w-full h-screen flex flex-col">
-      <div className="relative noise-bg bg-cloud overflow-hidden flex flex-col flex-1">
+      <div className="relative noise-bg bg-cloud flex flex-col flex-1 min-h-0">
         <BackgroundLayer config={settingsConfig} />
         <div
-          className={`relative z-10 flex items-center justify-between h-11 bg-paper/55 backdrop-blur-[1px] border-b border-paper-deep/30 shrink-0 select-none cursor-default ${
-            isMacOS ? "pl-20 pr-5" : "pl-5 pr-0"
-          }`}
-          onMouseDown={handleTitleBarMouseDown}
+          className="relative z-20 flex items-center pr-0 h-11 bg-paper/55 backdrop-blur-[1px] border-b border-paper-deep/30 shrink-0 select-none cursor-default"
+          onMouseDown={handleTitleBarDrag}
+          onDoubleClick={handleTitleBarDoubleClick}
         >
-          <div className="flex items-center gap-3 min-w-0">
-            <span className="text-[15px] font-serif font-medium text-ink-soft tracking-wide leading-none">
-              花笺
-            </span>
-            <span className="text-[11px] text-ink-ghost font-body leading-none translate-y-px">
-              —
-            </span>
-            <span className="text-[11px] text-ink-faint font-body truncate max-w-[240px] leading-none translate-y-px">
-              {title ||
-                selectedNote?.preview ||
-                t("common.untitledNote", { defaultValue: "无标题笔记" })}
-            </span>
-          </div>
-          <div className="flex items-center">
-            <button
-              onClick={() => void handleOpenNotepad()}
-              className="w-10 h-11 flex items-center justify-center text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 transition-all cursor-pointer"
-              title={t("main.window.quickNotepad", { defaultValue: "快捷便签" })}
-            >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <path d="M4 4h16v14H7l-3 3V4z" />
-                <path d="M8 9h8M8 13h5" />
-              </svg>
-            </button>
-            <button
-              onClick={() => void handleOpenSettings()}
-              className="w-10 h-11 flex items-center justify-center text-ink-ghost hover:text-ink-faint hover:bg-paper-warm transition-all cursor-pointer"
-              title={t("main.window.settings", { defaultValue: "设置" })}
-            >
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-              >
-                <circle cx="12" cy="12" r="3" />
-                <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-              </svg>
-            </button>
-            <button
-              onClick={handleOpenAbout}
-              className={`h-11 flex items-center justify-center overflow-hidden text-ink-ghost hover:text-ink-faint hover:bg-paper-warm transition-[width,padding,gap,background-color,color] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] cursor-pointer ${
-                aboutButtonExpanded ? "w-[72px] gap-1.5 px-3" : "w-10 gap-0 px-0"
-              }`}
-              title={aboutButtonTitle}
-              aria-label={aboutButtonTitle}
-            >
-              {aboutUpdateReminder.hasPendingUpdate ? (
-                <svg
-                  data-testid="main-about-update-icon"
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <circle cx="12" cy="12" r="9" />
-                  <path d="M12 16V8" />
-                  <path d="m8.5 11.5 3.5-3.5 3.5 3.5" />
-                </svg>
-              ) : (
-                <svg
-                  data-testid="main-about-info-icon"
-                  width="14"
-                  height="14"
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                >
-                  <circle cx="12" cy="12" r="10" />
-                  <path d="M12 16v-4" />
-                  <path d="M12 8h.01" />
-                </svg>
-              )}
-              {aboutUpdateReminder.hasPendingUpdate ? (
-                <span
-                  data-testid="main-about-update-label"
-                  className={`overflow-hidden whitespace-nowrap text-[11px] font-body leading-none transition-[max-width,opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
-                    aboutButtonExpanded
-                      ? "max-w-[24px] translate-x-0 opacity-100"
-                      : "max-w-0 translate-x-1 opacity-0"
+          {(() => {
+            const isCompact = (settingsConfig?.tabLayout as string) !== "default";
+            return (
+              <>
+                {/* LEFT: compact window controls — slide in/out */}
+                <div
+                  className={`shrink-0 min-w-0 overflow-hidden transition-[max-width,opacity] duration-300 ease-in-out ${
+                    isCompact ? "max-w-[132px] opacity-100" : "max-w-0 opacity-0"
                   }`}
                 >
-                  {aboutButtonLabel}
-                </span>
-              ) : null}
-            </button>
-
-            {!isMacOS && (
-              <>
-                <div className="w-px h-4 bg-paper-deep/30 mx-0.5" />
-
-                <button
-                  onClick={handleMinimize}
-                  className="w-11 h-11 flex items-center justify-center text-ink-ghost hover:text-ink-soft hover:bg-paper-warm transition-all cursor-pointer"
-                  title={t("main.window.minimize", { defaultValue: "最小化" })}
-                >
-                  <svg width="12" height="12" viewBox="0 0 12 12">
-                    <rect x="1" y="5.5" width="10" height="1" fill="currentColor" rx="0.5" />
-                  </svg>
-                </button>
-                <button
-                  onClick={handleMaximize}
-                  className="w-11 h-11 flex items-center justify-center text-ink-ghost hover:text-ink-soft hover:bg-paper-warm transition-all cursor-pointer"
-                  title={
-                    isMaximized
-                      ? t("main.window.restore", { defaultValue: "还原" })
-                      : t("main.window.maximize", { defaultValue: "最大化" })
-                  }
-                >
-                  {isMaximized ? (
-                    <svg
-                      width="12"
-                      height="12"
-                      viewBox="0 0 12 12"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.2"
+                  <div className="flex items-center pl-1">
+                    <button
+                      onClick={handleClose}
+                      className="w-9 h-9 flex items-center justify-center rounded-full text-ink-ghost hover:text-red-500 hover:bg-danger-bg transition-all cursor-pointer"
+                      title={t("main.window.close", { defaultValue: "关闭" })}
                     >
-                      <rect x="3" y="3" width="7" height="7" rx="1" />
-                      <path d="M3 5H2V2a1 1 0 0 1 1-1h5v1" />
-                    </svg>
-                  ) : (
-                    <svg
-                      width="12"
-                      height="12"
-                      viewBox="0 0 12 12"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="1.2"
+                      <svg
+                        width="11"
+                        height="11"
+                        viewBox="0 0 12 12"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                      >
+                        <path d="M2 2l8 8M10 2l-8 8" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={handleMinimize}
+                      className="w-9 h-9 flex items-center justify-center rounded-full text-ink-ghost hover:text-ink-soft hover:bg-paper-warm transition-all cursor-pointer"
+                      title={t("main.window.minimize", { defaultValue: "最小化" })}
                     >
-                      <rect x="1.5" y="1.5" width="9" height="9" rx="1.5" />
-                    </svg>
-                  )}
-                </button>
-                <button
-                  onClick={handleClose}
-                  className="w-11 h-11 flex items-center justify-center text-ink-ghost hover:text-red-500 hover:bg-danger-bg transition-all cursor-pointer"
-                  title={t("main.window.close", { defaultValue: "关闭" })}
-                >
-                  <svg
-                    width="12"
-                    height="12"
-                    viewBox="0 0 12 12"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="1.5"
-                    strokeLinecap="round"
+                      <svg width="10" height="10" viewBox="0 0 12 12">
+                        <rect x="1" y="5.5" width="10" height="1" fill="currentColor" rx="0.5" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={handleMaximize}
+                      className="w-9 h-9 flex items-center justify-center rounded-full text-ink-ghost hover:text-ink-soft hover:bg-paper-warm transition-all cursor-pointer"
+                      title={
+                        isMaximized
+                          ? t("main.window.restore", { defaultValue: "还原" })
+                          : t("main.window.maximize", { defaultValue: "最大化" })
+                      }
+                    >
+                      {isMaximized ? (
+                        <svg
+                          width="10"
+                          height="10"
+                          viewBox="0 0 12 12"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.2"
+                        >
+                          <rect x="3" y="3" width="7" height="7" rx="1" />
+                          <path d="M3 5H2V2a1 1 0 0 1 1-1h5v1" />
+                        </svg>
+                      ) : (
+                        <svg
+                          width="10"
+                          height="10"
+                          viewBox="0 0 12 12"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.2"
+                        >
+                          <rect x="1.5" y="1.5" width="9" height="9" rx="1.5" />
+                        </svg>
+                      )}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Folder selector (compact only) */}
+                {isCompact && (
+                  <div
+                    className="shrink-0 flex items-center"
+                    style={{ width: `${Math.max(sidebarWidth - 76, 130)}px`, paddingLeft: 8 }}
                   >
-                    <path d="M2 2l8 8M10 2l-8 8" />
-                  </svg>
-                </button>
+                    {settingsConfig && (
+                      <div className="flex items-center gap-1.5 w-full">
+                        <div className="relative flex-1 min-w-0">
+                          <button
+                            onMouseDown={(e) => e.stopPropagation()}
+                            onClick={() => {
+                              setDeleteConfirmDir(null);
+                              setNotesDirDropdownOpen((prev) => !prev);
+                              void refreshOneDrivePaths();
+                            }}
+                            className="w-full flex items-center gap-1 h-7 rounded-lg text-[11px] font-body bg-paper-warm/80 border border-paper-deep/40 pl-2.5 pr-1.5 hover:border-bamboo/30 hover:bg-cloud transition-colors cursor-pointer"
+                            title={t("main.notesDir.select", { defaultValue: "切换笔记目录" })}
+                          >
+                            <span className="flex-1 truncate text-left text-ink-faint">
+                              {displayPathLabel(settingsConfig.notesDir ?? "")}
+                            </span>
+                            <svg
+                              width="10"
+                              height="10"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2.5"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              className={`text-ink-ghost shrink-0 transition-transform duration-200 ${notesDirDropdownOpen ? "rotate-180" : ""}`}
+                            >
+                              <polyline points="6 9 12 15 18 9" />
+                            </svg>
+                          </button>
+                          <div
+                            onMouseDown={(e) => e.stopPropagation()}
+                            className={`absolute top-full left-0 right-0 mt-1 z-[9999] bg-cloud border border-paper-deep/40 rounded-xl shadow-lg overflow-hidden py-1 transition-all duration-200 origin-top ${notesDirDropdownOpen ? "opacity-100 scale-y-100" : "opacity-0 scale-y-95 pointer-events-none"}`}
+                          >
+                            {(settingsConfig.notesDirs ?? [settingsConfig.notesDir]).map((dir) => {
+                              const isCurrent = dir === settingsConfig.notesDir;
+                              return (
+                                <div key={dir} className="flex items-center">
+                                  {deleteConfirmDir === dir ? (
+                                    <div className="flex-1">
+                                      <div className="px-3 py-1.5 text-[10px] font-body text-ink-faint border-b border-paper-deep/20">
+                                        {t("main.notesDir.confirmDelete", {
+                                          path: displayPathLabel(dir),
+                                          defaultValue: "确认删除「{{path}}」？",
+                                        })}
+                                      </div>
+                                      <div className="flex">
+                                        <button
+                                          onClick={() => void handleDeleteNotesDir(dir)}
+                                          className="flex-1 text-center px-2 py-1.5 text-[11px] font-body text-red-400 hover:bg-danger-bg hover:text-red-500 transition-colors cursor-pointer"
+                                        >
+                                          {t("main.notesDir.confirmDeleteAction", {
+                                            defaultValue: "确认删除",
+                                          })}
+                                        </button>
+                                        <button
+                                          onClick={() => setDeleteConfirmDir(null)}
+                                          className="flex-1 text-center px-2 py-1.5 text-[11px] font-body text-ink-soft hover:bg-paper-warm transition-colors cursor-pointer"
+                                        >
+                                          {t("common.cancel", { defaultValue: "取消" })}
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <button
+                                      onClick={() => {
+                                        setNotesDirDropdownOpen(false);
+                                        void switchNotesDir(dir);
+                                      }}
+                                      className={`flex-1 text-left truncate px-3 py-1.5 text-[11px] font-mono transition-colors cursor-pointer ${isCurrent ? "text-bamboo font-medium bg-bamboo-mist/30" : "text-ink-faint hover:text-ink-soft hover:bg-paper-warm/60"}`}
+                                    >
+                                      <span className="flex items-center gap-1.5">
+                                        {oneDriveSyncedPaths.includes(dir) && (
+                                          <svg
+                                            width="11"
+                                            height="11"
+                                            viewBox="0 0 24 24"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            strokeWidth="1.7"
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                            className="shrink-0 opacity-60"
+                                          >
+                                            <path d="M6.5 17.5c-2.3-.5-4-2.5-4-4.9 0-3 2.3-5 5-4.8.8-2.7 3.3-4.5 6.1-4.1a5.2 5.2 0 0 1 3.6 2.1c2.7.2 4.8 2.6 4.8 5.3 0 2.3-1.3 4.2-3.2 5.1" />
+                                            <path d="M9 19a3 3 0 0 0 6 0" />
+                                            <path d="M12 16v3" />
+                                          </svg>
+                                        )}
+                                        {displayPathLabel(dir)}
+                                      </span>
+                                    </button>
+                                  )}
+                                  {!isCurrent && deleteConfirmDir !== dir && (
+                                    <button
+                                      onClick={() => setDeleteConfirmDir(dir)}
+                                      className="shrink-0 w-6 h-6 flex items-center justify-center opacity-30 hover:opacity-100 text-ink-ghost hover:text-red-400 hover:bg-danger-bg rounded transition-all cursor-pointer mr-0.5"
+                                      title={t("common.delete", { defaultValue: "删除" })}
+                                    >
+                                      <svg
+                                        width="10"
+                                        height="10"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeWidth="2.5"
+                                        strokeLinecap="round"
+                                      >
+                                        <path d="M18 6L6 18M6 6l12 12" />
+                                      </svg>
+                                    </button>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => {
+                            void handleChooseNotesDir();
+                          }}
+                          className="h-7 w-7 flex items-center justify-center rounded-lg text-[10px] text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 transition-colors cursor-pointer shrink-0"
+                          title={t("main.notesDir.add", { defaultValue: "添加目录" })}
+                        >
+                          <svg
+                            width="12"
+                            height="12"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2.5"
+                            strokeLinecap="round"
+                          >
+                            <path d="M12 5v14M5 12h14" />
+                          </svg>
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Compact TabBar (in titlebar) */}
+                <div className={`flex-1 min-w-0 overflow-hidden ${isCompact ? "" : "hidden"}`}>
+                  <TabBar
+                    tabs={displayTabs}
+                    activeTabId={settingsTabActive ? "__settings__" : activeTabId}
+                    onSelectTab={(noteId) => {
+                      if (noteId === "__settings__") return;
+                      setSettingsTabActive(false);
+                      flushActiveTab();
+                      void openTab(noteId);
+                    }}
+                    onCloseTab={(noteId) => {
+                      if (noteId === "__settings__") {
+                        setSettingsTabActive(false);
+                        return;
+                      }
+                      void closeTab(noteId);
+                    }}
+                    onNewTab={() => void handleNewNote()}
+                    onTabMenuAction={(action, noteId) => void handleTabMenuAction(action, noteId)}
+                    inTitlebar
+                    hideNewTab
+                  />
+                </div>
+
+                {/* Default title text — slide animation */}
+                <div
+                  className={`flex items-center gap-3 min-w-0 overflow-hidden transition-[max-width,opacity] duration-300 ease-in-out ${
+                    isCompact ? "max-w-0 opacity-0" : "max-w-[480px] opacity-100 flex-1"
+                  }`}
+                >
+                  <span className="text-[13px] font-display font-medium text-ink-soft tracking-wide shrink-0 pl-5">
+                    花笺
+                  </span>
+                  <span className="text-[11px] text-ink-ghost font-body shrink-0">—</span>
+                  <span className="text-[11px] text-ink-faint font-body truncate">
+                    {title ||
+                      selectedNote?.preview ||
+                      t("common.untitledNote", { defaultValue: "无标题笔记" })}
+                  </span>
+                </div>
+
+                {/* Compact toolbar buttons (right) */}
+                {isCompact && (
+                  <div className="flex items-center shrink-0 pr-2">
+                    {errorMessage && (
+                      <span className="max-w-[160px] truncate text-[11px] text-red-400 mr-2">
+                        {errorMessage}
+                      </span>
+                    )}
+                    <button
+                      onClick={() => void handleImportNote()}
+                      className="w-9 h-9 flex items-center justify-center text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 rounded-lg transition-all cursor-pointer"
+                      title={t("main.sidebar.importMarkdown", { defaultValue: "导入 Markdown" })}
+                    >
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2.2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M12 3v12" />
+                        <path d="m7 10 5 5 5-5" />
+                        <path d="M5 21h14" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={handleNewNote}
+                      className="w-9 h-9 flex items-center justify-center text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 rounded-lg transition-all cursor-pointer"
+                      title={t("main.sidebar.newNote", { defaultValue: "新建笔记" })}
+                    >
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2.5"
+                        strokeLinecap="round"
+                      >
+                        <path d="M12 5v14M5 12h14" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={() => void handleOpenNotepad()}
+                      className="w-9 h-9 flex items-center justify-center text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 rounded-lg transition-all cursor-pointer"
+                      title={t("main.window.quickNotepad", { defaultValue: "快捷便签" })}
+                    >
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M4 4h16v14H7l-3 3V4z" />
+                        <path d="M8 9h8M8 13h5" />
+                      </svg>
+                    </button>
+                  </div>
+                )}
+
+                {/* RIGHT: default window controls — slide animation */}
+                <div
+                  className={`shrink-0 ml-auto overflow-hidden transition-[max-width,opacity] duration-300 ease-in-out ${
+                    isCompact ? "max-w-0 opacity-0" : "max-w-[172px] opacity-100"
+                  }`}
+                >
+                  <div className="flex items-center">
+                    {errorMessage && !isCompact && (
+                      <span className="max-w-[200px] truncate text-[11px] text-red-400 mr-2">
+                        {errorMessage}
+                      </span>
+                    )}
+                    <button
+                      onClick={() => void handleOpenNotepad()}
+                      className="w-10 h-11 flex items-center justify-center text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 transition-all cursor-pointer"
+                      title={t("main.window.quickNotepad", { defaultValue: "快捷便签" })}
+                    >
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M4 4h16v14H7l-3 3V4z" />
+                        <path d="M8 9h8M8 13h5" />
+                      </svg>
+                    </button>
+                    <div className="w-px h-4 bg-paper-deep/30 mx-0.5" />
+                    <button
+                      onClick={handleMinimize}
+                      className="w-11 h-11 flex items-center justify-center text-ink-ghost hover:text-ink-soft hover:bg-paper-warm transition-all cursor-pointer"
+                      title={t("main.window.minimize", { defaultValue: "最小化" })}
+                    >
+                      <svg width="12" height="12" viewBox="0 0 12 12">
+                        <rect x="1" y="5.5" width="10" height="1" fill="currentColor" rx="0.5" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={handleMaximize}
+                      className="w-11 h-11 flex items-center justify-center text-ink-ghost hover:text-ink-soft hover:bg-paper-warm transition-all cursor-pointer"
+                      title={
+                        isMaximized
+                          ? t("main.window.restore", { defaultValue: "还原" })
+                          : t("main.window.maximize", { defaultValue: "最大化" })
+                      }
+                    >
+                      {isMaximized ? (
+                        <svg
+                          width="12"
+                          height="12"
+                          viewBox="0 0 12 12"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.2"
+                        >
+                          <rect x="3" y="3" width="7" height="7" rx="1" />
+                          <path d="M3 5H2V2a1 1 0 0 1 1-1h5v1" />
+                        </svg>
+                      ) : (
+                        <svg
+                          width="12"
+                          height="12"
+                          viewBox="0 0 12 12"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.2"
+                        >
+                          <rect x="1.5" y="1.5" width="9" height="9" rx="1.5" />
+                        </svg>
+                      )}
+                    </button>
+                    <button
+                      onClick={handleClose}
+                      className="w-11 h-11 flex items-center justify-center text-ink-ghost hover:text-red-500 hover:bg-danger-bg transition-all cursor-pointer"
+                      title={t("main.window.close", { defaultValue: "关闭" })}
+                    >
+                      <svg
+                        width="12"
+                        height="12"
+                        viewBox="0 0 12 12"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                      >
+                        <path d="M2 2l8 8M10 2l-8 8" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
               </>
-            )}
-          </div>
+            );
+          })()}
         </div>
 
         <div className="relative z-10 flex flex-1 min-h-0">
+          <LeftIconSidebar
+            activePanel={sidebarTab}
+            onSelectPanel={setSidebarTab}
+            onSettings={() => void toggleSettingsTab()}
+          />
           <div
-            className="border-r border-paper-deep/30 bg-paper/40 shrink-0 overflow-hidden transition-[width] duration-[600ms]"
-            style={{ width: sidebarCollapsed ? 0 : sidebarWidth }}
+            className={`border-r border-paper-deep/30 bg-paper/40 flex flex-col shrink-0 ${
+              sidebarCollapsed ? "w-0 overflow-hidden transition-all duration-[600ms]" : ""
+            }`}
+            style={sidebarCollapsed ? undefined : { width: `${sidebarWidth}px` }}
           >
-            <div className="flex flex-col h-full" style={{ width: `${sidebarWidth}px` }}>
+            {sidebarTab !== "git" && (
               <div className="px-3 pt-3 pb-2 shrink-0">
                 <div className="flex items-center gap-2 px-2.5 h-8 rounded-lg bg-paper-warm/80 border border-paper-deep/40 focus-within:border-bamboo/30 focus-within:bg-cloud transition-all">
                   <svg
@@ -2330,234 +2082,273 @@ export function MainWindow({
                   )}
                 </div>
               </div>
+            )}
 
-              <div className="px-3 pb-2 shrink-0 space-y-1">
-                <button
-                  onClick={handleNewNote}
-                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[12px] font-body text-bamboo hover:bg-bamboo-mist/60 transition-all cursor-pointer group"
-                >
-                  <svg
-                    width="13"
-                    height="13"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2.5"
-                    strokeLinecap="round"
-                    className="group-hover:rotate-90 transition-transform duration-200"
-                  >
-                    <path d="M12 5v14M5 12h14" />
-                  </svg>
-                  <span>{t("main.sidebar.newNote", { defaultValue: "新建笔记" })}</span>
-                </button>
-                <button
-                  onClick={() => void handleImportNote()}
-                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[12px] font-body text-ink-faint hover:text-bamboo hover:bg-bamboo-mist/50 transition-all cursor-pointer group"
-                >
-                  <svg
-                    width="13"
-                    height="13"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2.2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <path d="M12 3v12" />
-                    <path d="m7 10 5 5 5-5" />
-                    <path d="M5 21h14" />
-                  </svg>
-                  <span>{t("main.sidebar.importMarkdown", { defaultValue: "导入 Markdown" })}</span>
-                </button>
-              </div>
-
-              <div className="flex items-center justify-between px-5 pb-1.5 shrink-0">
-                <span className="text-[10px] text-ink-ghost font-mono tracking-wider uppercase">
-                  {t("common.noteCount", {
-                    count: filteredNotes.length,
-                    defaultValue: "{{count}} 篇笔记",
-                  })}
-                  {externalFiles.length > 0
-                    ? ` · ${t("common.externalFileCount", {
-                        count: externalFiles.length,
-                        defaultValue: "{{count}} 个外部文件",
-                      })}`
-                    : ""}
-                </span>
-                <button
-                  onMouseDown={(e) => e.preventDefault()}
-                  onClick={() => {
-                    if (showCategoryInput && categoryInputValue.trim()) {
-                      void handleCreateCategory();
-                      return;
-                    }
-                    setShowCategoryInput(true);
-                  }}
-                  className="text-[10px] text-ink-ghost hover:text-bamboo transition-colors cursor-pointer"
-                  title={t("main.category.new", { defaultValue: "新建分类" })}
-                >
-                  <svg
-                    width="12"
-                    height="12"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2.5"
-                    strokeLinecap="round"
-                  >
-                    <path d="M12 5v14M5 12h14" />
-                  </svg>
-                </button>
-              </div>
-
-              {showCategoryInput && (
-                <div className="px-3 pb-2 shrink-0">
-                  <input
-                    type="text"
-                    autoFocus
-                    value={categoryInputValue}
-                    onChange={(e) => setCategoryInputValue(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") void handleCreateCategory();
-                      if (e.key === "Escape") {
-                        setShowCategoryInput(false);
-                        setCategoryInputValue("");
-                      }
-                    }}
-                    onBlur={() => void handleCreateCategory()}
-                    placeholder={t("main.category.placeholder", { defaultValue: "输入分类名…" })}
-                    className="w-full px-2.5 h-7 rounded-lg text-[12px] font-body text-ink bg-paper-warm/80 border border-paper-deep/40 focus:border-bamboo/30 placeholder:text-ink-ghost/60"
-                  />
-                </div>
-              )}
-
-              <div className="flex-1 overflow-y-auto px-2 pb-2">
-                <div className="space-y-0.5">
-                  {externalFiles.length > 0 && (
-                    <>
-                      <div className="px-3 py-1.5 text-[10px] text-ink-ghost/50 font-mono tracking-wider uppercase">
-                        {t("main.externalFiles.title", { defaultValue: "外部文件" })}
-                      </div>
-                      {externalFiles.map((file) => {
-                        const isSelected = file.id === selectedId;
-                        const isHovered = file.id === hoveredId;
-
-                        return (
+            {sidebarTab === "directory" && (
+              <div key="dir" className="flex flex-col flex-1 min-h-0 animate-view-fade">
+                <>
+                  {/* Notes directory selector — hidden in compact mode (moved to titlebar) */}
+                  {settingsConfig && settingsConfig?.tabLayout === "default" && (
+                    <div className="px-3 pb-1.5 shrink-0">
+                      <div className="flex items-center gap-1.5">
+                        <div className="relative flex-1 min-w-0">
                           <button
-                            key={file.id}
-                            onClick={() => void handleSelectExternalFile(file.id)}
-                            onMouseEnter={() => setHoveredId(file.id)}
-                            onMouseLeave={() => setHoveredId(null)}
-                            className={`w-full text-left rounded-xl px-3 py-2.5 transition-all duration-[600ms] cursor-pointer group relative ${
-                              isSelected
-                                ? "bg-bamboo-mist/70"
-                                : isHovered
-                                  ? "bg-paper-warm/70"
-                                  : "bg-transparent"
-                            }`}
+                            onMouseDown={(e) => e.stopPropagation()}
+                            onClick={() => {
+                              setDeleteConfirmDir(null);
+                              setNotesDirDropdownOpen((prev) => !prev);
+                              void refreshOneDrivePaths();
+                            }}
+                            className="w-full flex items-center gap-1 h-7 rounded-lg text-[11px] font-body bg-paper-warm/80 border border-paper-deep/40 pl-2.5 pr-1.5 hover:border-bamboo/30 hover:bg-cloud transition-colors cursor-pointer"
+                            title={t("main.notesDir.select", { defaultValue: "切换笔记目录" })}
                           >
-                            <div
-                              className={`absolute left-0 top-1/2 -translate-y-1/2 w-[3px] rounded-r-full bg-bamboo/60 transition-all duration-[600ms] ${
-                                isSelected ? "h-5 opacity-100" : "h-0 opacity-0"
-                              }`}
-                            />
-
-                            <div className="flex items-baseline justify-between mb-0.5">
-                              <span
-                                className={`text-[13px] font-display font-medium truncate pr-2 transition-colors flex items-center gap-1.5 ${
-                                  isSelected ? "text-bamboo" : "text-ink-soft"
-                                }`}
-                              >
-                                <svg
-                                  width="12"
-                                  height="12"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  strokeWidth="2"
-                                  strokeLinecap="round"
-                                  strokeLinejoin="round"
-                                  className="shrink-0 opacity-60"
-                                >
-                                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                                  <polyline points="14 2 14 8 20 8" />
-                                </svg>
-                                {file.title}
-                              </span>
-                              <button
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  handleRemoveExternalFile(file.id);
-                                }}
-                                className="opacity-0 group-hover:opacity-100 text-ink-ghost hover:text-red-400 transition-all p-0.5"
-                                title={t("main.externalFiles.remove", {
-                                  defaultValue: "从列表移除",
-                                })}
-                              >
-                                <svg
-                                  width="12"
-                                  height="12"
-                                  viewBox="0 0 24 24"
-                                  fill="none"
-                                  stroke="currentColor"
-                                  strokeWidth="2"
-                                  strokeLinecap="round"
-                                >
-                                  <line x1="18" y1="6" x2="6" y2="18" />
-                                  <line x1="6" y1="6" x2="18" y2="18" />
-                                </svg>
-                              </button>
-                            </div>
-
-                            <p className="text-[11px] text-ink-ghost leading-relaxed line-clamp-2 group-hover:text-ink-faint transition-colors pl-[18px]">
-                              {file.filePath}
-                            </p>
+                            <span className="flex-1 truncate text-left text-ink-faint">
+                              {displayPathLabel(settingsConfig.notesDir ?? "")}
+                            </span>
+                            <svg
+                              width="10"
+                              height="10"
+                              viewBox="0 0 24 24"
+                              fill="none"
+                              stroke="currentColor"
+                              strokeWidth="2.5"
+                              strokeLinecap="round"
+                              strokeLinejoin="round"
+                              className={`text-ink-ghost shrink-0 transition-transform duration-200 ${notesDirDropdownOpen ? "rotate-180" : ""}`}
+                            >
+                              <polyline points="6 9 12 15 18 9" />
+                            </svg>
                           </button>
-                        );
-                      })}
-                    </>
+                          <div
+                            onMouseDown={(e) => e.stopPropagation()}
+                            className={`absolute top-full left-0 right-0 mt-1 z-[9999] bg-cloud border border-paper-deep/40 rounded-xl shadow-lg overflow-hidden py-1 transition-all duration-200 origin-top ${notesDirDropdownOpen ? "opacity-100 scale-y-100" : "opacity-0 scale-y-95 pointer-events-none"}`}
+                          >
+                            {(settingsConfig.notesDirs ?? [settingsConfig.notesDir]).map((dir) => {
+                              const isCurrent = dir === settingsConfig.notesDir;
+                              return (
+                                <div key={dir} className="flex items-center">
+                                  {deleteConfirmDir === dir ? (
+                                    <div className="flex-1">
+                                      <div className="px-3 py-1.5 text-[10px] font-body text-ink-faint border-b border-paper-deep/20">
+                                        {t("main.notesDir.confirmDelete", {
+                                          path: displayPathLabel(dir),
+                                          defaultValue: "确认删除「{{path}}」？",
+                                        })}
+                                      </div>
+                                      <div className="flex">
+                                        <button
+                                          onClick={() => void handleDeleteNotesDir(dir)}
+                                          className="flex-1 text-center px-2 py-1.5 text-[11px] font-body text-red-400 hover:bg-danger-bg hover:text-red-500 transition-colors cursor-pointer"
+                                        >
+                                          {t("main.notesDir.confirmDeleteAction", {
+                                            defaultValue: "确认删除",
+                                          })}
+                                        </button>
+                                        <button
+                                          onClick={() => setDeleteConfirmDir(null)}
+                                          className="flex-1 text-center px-2 py-1.5 text-[11px] font-body text-ink-soft hover:bg-paper-warm transition-colors cursor-pointer"
+                                        >
+                                          {t("common.cancel", { defaultValue: "取消" })}
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <button
+                                      onClick={() => {
+                                        setNotesDirDropdownOpen(false);
+                                        void switchNotesDir(dir);
+                                      }}
+                                      className={`flex-1 text-left truncate px-3 py-1.5 text-[11px] font-mono transition-colors cursor-pointer ${
+                                        isCurrent
+                                          ? "text-bamboo font-medium bg-bamboo-mist/30"
+                                          : "text-ink-faint hover:text-ink-soft hover:bg-paper-warm/60"
+                                      }`}
+                                    >
+                                      <span className="flex items-center gap-1.5">
+                                        {oneDriveSyncedPaths.includes(dir) && (
+                                          <svg
+                                            width="11"
+                                            height="11"
+                                            viewBox="0 0 24 24"
+                                            fill="none"
+                                            stroke="currentColor"
+                                            strokeWidth="1.7"
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                            className="shrink-0 opacity-60"
+                                          >
+                                            <path d="M6.5 17.5c-2.3-.5-4-2.5-4-4.9 0-3 2.3-5 5-4.8.8-2.7 3.3-4.5 6.1-4.1a5.2 5.2 0 0 1 3.6 2.1c2.7.2 4.8 2.6 4.8 5.3 0 2.3-1.3 4.2-3.2 5.1" />
+                                            <path d="M9 19a3 3 0 0 0 6 0" />
+                                            <path d="M12 16v3" />
+                                          </svg>
+                                        )}
+                                        {displayPathLabel(dir)}
+                                      </span>
+                                    </button>
+                                  )}
+                                  {!isCurrent && deleteConfirmDir !== dir && (
+                                    <button
+                                      onClick={() => setDeleteConfirmDir(dir)}
+                                      className="shrink-0 w-6 h-6 flex items-center justify-center opacity-30 hover:opacity-100 text-ink-ghost hover:text-red-400 hover:bg-danger-bg rounded transition-all cursor-pointer mr-0.5"
+                                      title={t("common.delete", { defaultValue: "删除" })}
+                                    >
+                                      <svg
+                                        width="10"
+                                        height="10"
+                                        viewBox="0 0 24 24"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        strokeWidth="2.5"
+                                        strokeLinecap="round"
+                                      >
+                                        <path d="M18 6L6 18M6 6l12 12" />
+                                      </svg>
+                                    </button>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => {
+                            void handleChooseNotesDir();
+                          }}
+                          className="h-7 w-7 flex items-center justify-center rounded-lg text-[10px] text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 transition-colors cursor-pointer shrink-0"
+                          title={t("main.notesDir.add", { defaultValue: "添加目录" })}
+                        >
+                          <svg
+                            width="12"
+                            height="12"
+                            viewBox="0 0 24 24"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="2.5"
+                            strokeLinecap="round"
+                          >
+                            <path d="M12 5v14M5 12h14" />
+                          </svg>
+                        </button>
+                      </div>
+                    </div>
                   )}
 
-                  {categoryGroups.map((group: CategoryGroup) => {
-                    if (!group.category) {
-                      return (
-                        <div
-                          key="__uncategorized__"
-                          className={`rounded-lg transition-all duration-200 ${
-                            dragOverCategory === "" ? "bg-bamboo/10 ring-1 ring-bamboo/20" : ""
-                          }`}
-                          onDragOver={(e) => {
-                            e.preventDefault();
-                            e.dataTransfer.dropEffect = "move";
-                            setDragOverCategory("");
-                          }}
-                          onDragLeave={(e) => {
-                            if (!e.currentTarget.contains(e.relatedTarget as Node)) {
-                              setDragOverCategory(null);
-                            }
-                          }}
-                          onDrop={(e) => {
-                            e.preventDefault();
-                            setDragOverCategory(null);
-                            const noteId = e.dataTransfer.getData("text/plain");
-                            if (noteId) void handleMoveNote(noteId, "");
-                          }}
+                  {settingsConfig?.tabLayout === "default" && (
+                    <div className="px-3 pb-2 shrink-0 space-y-1">
+                      <button
+                        onClick={handleNewNote}
+                        className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[12px] font-body text-bamboo hover:bg-bamboo-mist/60 transition-all cursor-pointer group"
+                      >
+                        <svg
+                          width="13"
+                          height="13"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2.5"
+                          strokeLinecap="round"
+                          className="group-hover:rotate-90 transition-transform duration-200"
                         >
-                          {group.notes.map((note) => {
-                            const isSelected = note.id === selectedId;
-                            const isHovered = note.id === hoveredId;
+                          <path d="M12 5v14M5 12h14" />
+                        </svg>
+                        <span>{t("main.sidebar.newNote", { defaultValue: "新建笔记" })}</span>
+                      </button>
+                      <button
+                        onClick={() => void handleImportNote()}
+                        className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-[12px] font-body text-ink-faint hover:text-bamboo hover:bg-bamboo-mist/50 transition-all cursor-pointer group"
+                      >
+                        <svg
+                          width="13"
+                          height="13"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2.2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d="M12 3v12" />
+                          <path d="m7 10 5 5 5-5" />
+                          <path d="M5 21h14" />
+                        </svg>
+                        <span>
+                          {t("main.sidebar.importMarkdown", { defaultValue: "导入 Markdown" })}
+                        </span>
+                      </button>
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between px-5 pb-1.5 shrink-0">
+                    <span className="text-[10px] text-ink-ghost font-mono tracking-wider uppercase">
+                      {t("common.noteCount", {
+                        count: filteredNotes.length,
+                        defaultValue: "{{count}} 篇笔记",
+                      })}
+                      {externalFiles.length > 0
+                        ? ` · ${t("common.externalFileCount", {
+                            count: externalFiles.length,
+                            defaultValue: "{{count}} 个外部文件",
+                          })}`
+                        : ""}
+                    </span>
+                    <button
+                      onClick={() => setShowCategoryInput(true)}
+                      className="text-[10px] text-ink-ghost hover:text-bamboo transition-colors cursor-pointer"
+                      title={t("main.category.new", { defaultValue: "新建分类" })}
+                    >
+                      <svg
+                        width="12"
+                        height="12"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2.5"
+                        strokeLinecap="round"
+                      >
+                        <path d="M12 5v14M5 12h14" />
+                      </svg>
+                    </button>
+                  </div>
+
+                  {showCategoryInput && (
+                    <div className="px-3 pb-2 shrink-0">
+                      <input
+                        type="text"
+                        autoFocus
+                        value={categoryInputValue}
+                        onChange={(e) => setCategoryInputValue(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") void handleCreateCategory();
+                          if (e.key === "Escape") {
+                            setShowCategoryInput(false);
+                            setCategoryInputValue("");
+                          }
+                        }}
+                        onBlur={() => void handleCreateCategory()}
+                        placeholder={t("main.category.placeholder", {
+                          defaultValue: "输入分类名…",
+                        })}
+                        className="w-full px-2.5 h-7 rounded-lg text-[12px] font-body text-ink bg-paper-warm/80 border border-paper-deep/40 focus:border-bamboo/30 placeholder:text-ink-ghost/60"
+                      />
+                    </div>
+                  )}
+
+                  <div className="flex-1 overflow-y-scroll px-2 pb-2">
+                    <div className="space-y-0.5">
+                      {externalFiles.length > 0 && (
+                        <>
+                          <div className="px-3 py-1.5 text-[10px] text-ink-ghost/50 font-mono tracking-wider uppercase">
+                            {t("main.externalFiles.title", { defaultValue: "外部文件" })}
+                          </div>
+                          {externalFiles.map((file) => {
+                            const isSelected = file.id === selectedId;
+                            const isHovered = file.id === hoveredId;
+
                             return (
-                              <div
-                                key={note.id}
-                                draggable
-                                onDragStart={(e) => {
-                                  e.dataTransfer.setData("text/plain", note.id);
-                                  e.dataTransfer.effectAllowed = "move";
-                                }}
-                                onClick={() => void handleSelectNote(note.id)}
-                                onContextMenu={(event) => handleOpenNoteMenu(event, note.id)}
-                                onMouseEnter={() => setHoveredId(note.id)}
+                              <button
+                                key={file.id}
+                                onClick={() => void handleSelectExternalFile(file.id)}
+                                onMouseEnter={() => setHoveredId(file.id)}
                                 onMouseLeave={() => setHoveredId(null)}
                                 className={`w-full text-left rounded-xl px-3 py-2.5 transition-all duration-[600ms] cursor-pointer group relative ${
                                   isSelected
@@ -2572,158 +2363,98 @@ export function MainWindow({
                                     isSelected ? "h-5 opacity-100" : "h-0 opacity-0"
                                   }`}
                                 />
+
                                 <div className="flex items-baseline justify-between mb-0.5">
                                   <span
-                                    className={`text-[13px] font-display font-medium truncate pr-2 transition-colors ${
+                                    className={`text-[13px] font-display font-medium truncate pr-2 transition-colors flex items-center gap-1.5 ${
                                       isSelected ? "text-bamboo" : "text-ink-soft"
                                     }`}
                                   >
-                                    {getDisplayTitle(note, t)}
+                                    <svg
+                                      width="12"
+                                      height="12"
+                                      viewBox="0 0 24 24"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      strokeWidth="2"
+                                      strokeLinecap="round"
+                                      strokeLinejoin="round"
+                                      className="shrink-0 opacity-60"
+                                    >
+                                      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                                      <polyline points="14 2 14 8 20 8" />
+                                    </svg>
+                                    {file.title}
+                                    {file.readOnly && (
+                                      <span className="text-[9px] text-ink-ghost/50 font-mono bg-paper-deep/30 px-1 rounded">
+                                        {file.mimeType
+                                          ? file.mimeType.split("/").pop()?.toUpperCase()
+                                          : "📎"}
+                                      </span>
+                                    )}
                                   </span>
-                                  <span className="text-[10px] text-ink-ghost font-mono tabular-nums shrink-0">
-                                    {formatShortDate(note.updatedAt)}
-                                  </span>
-                                </div>
-                                <p className="text-[11px] text-ink-ghost leading-relaxed line-clamp-2 group-hover:text-ink-faint transition-colors">
-                                  {note.preview ||
-                                    t("common.blankNote", { defaultValue: "空白笔记" })}
-                                </p>
-                                <div className="flex items-center gap-2 mt-1">
-                                  <span className="text-[10px] text-ink-ghost/60 font-mono tabular-nums">
-                                    {formatTime(note.updatedAt)}
-                                  </span>
-                                  <span className="text-[10px] text-ink-ghost/40">·</span>
-                                  <span className="text-[10px] text-ink-ghost/60 font-mono tabular-nums">
-                                    {t("common.wordCount", {
-                                      count: note.wordCount,
-                                      defaultValue: "{{count}} 字",
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleRemoveExternalFile(file.id);
+                                    }}
+                                    className="opacity-0 group-hover:opacity-100 text-ink-ghost hover:text-red-400 transition-all p-0.5"
+                                    title={t("main.externalFiles.remove", {
+                                      defaultValue: "从列表移除",
                                     })}
-                                  </span>
+                                  >
+                                    <svg
+                                      width="12"
+                                      height="12"
+                                      viewBox="0 0 24 24"
+                                      fill="none"
+                                      stroke="currentColor"
+                                      strokeWidth="2"
+                                      strokeLinecap="round"
+                                    >
+                                      <line x1="18" y1="6" x2="6" y2="18" />
+                                      <line x1="6" y1="6" x2="18" y2="18" />
+                                    </svg>
+                                  </button>
                                 </div>
-                              </div>
+
+                                <p className="text-[11px] text-ink-ghost leading-relaxed line-clamp-2 group-hover:text-ink-faint transition-colors pl-[18px]">
+                                  {file.filePath}
+                                </p>
+                              </button>
                             );
                           })}
-                        </div>
-                      );
-                    }
+                        </>
+                      )}
 
-                    const isCollapsed = collapsedCategories.has(group.category);
-
-                    return (
-                      <div key={group.category} className="px-2 mb-0.5">
-                        <div
-                          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg group/cat cursor-pointer select-none transition-all duration-200 ${
-                            dragOverCategory === group.category
-                              ? "bg-bamboo/15 border border-bamboo/40 ring-1 ring-bamboo/20"
-                              : isCollapsed
-                                ? "bg-transparent border border-bamboo/15"
-                                : "bg-bamboo/8 border border-bamboo/15 rounded-b-none"
-                          }`}
-                          onClick={() => toggleCategoryCollapse(group.category)}
-                          onContextMenu={(e) => {
-                            e.preventDefault();
-                            e.stopPropagation();
-                            setCategoryMenu({
-                              x: e.clientX,
-                              y: e.clientY,
-                              category: group.category,
-                            });
-                            setCategoryMenuClosing(false);
-                            setCategoryMenuConfirmDelete(false);
-                          }}
-                          onDragOver={(e) => {
-                            e.preventDefault();
-                            e.dataTransfer.dropEffect = "move";
-                            setDragOverCategory(group.category);
-                          }}
-                          onDragLeave={() => setDragOverCategory(null)}
-                          onDrop={(e) => {
-                            e.preventDefault();
-                            setDragOverCategory(null);
-                            const noteId = e.dataTransfer.getData("text/plain");
-                            if (noteId) void handleMoveNote(noteId, group.category);
-                          }}
-                        >
-                          <svg
-                            width="10"
-                            height="10"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2.5"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            className={`text-bamboo/50 shrink-0 transition-transform duration-200 ${isCollapsed ? "" : "rotate-90"}`}
-                          >
-                            <polyline points="9 18 15 12 9 6" />
-                          </svg>
-                          <svg
-                            width="12"
-                            height="12"
-                            viewBox="0 0 24 24"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                            className="text-bamboo/50 shrink-0"
-                          >
-                            <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-                          </svg>
-                          {renamingCategory === group.category ? (
-                            <input
-                              type="text"
-                              autoFocus
-                              value={renameCategoryValue}
-                              onChange={(e) => setRenameCategoryValue(e.target.value)}
-                              onKeyDown={(e) => {
-                                e.stopPropagation();
-                                if (e.key === "Enter") void handleRenameCategory(group.category);
-                                if (e.key === "Escape") setRenamingCategory(null);
+                      {categoryGroups.map((group: CategoryGroup) => {
+                        if (!group.category) {
+                          return (
+                            <div
+                              key="__uncategorized__"
+                              className={`rounded-lg transition-all duration-200 ${
+                                dragOverCategory === "" ? "bg-bamboo/10 ring-1 ring-bamboo/20" : ""
+                              }`}
+                              onDragOver={(e) => {
+                                e.preventDefault();
+                                e.dataTransfer.dropEffect = "move";
+                                setDragOverCategory("");
                               }}
-                              onBlur={() => void handleRenameCategory(group.category)}
-                              onClick={(e) => e.stopPropagation()}
-                              className="flex-1 min-w-0 px-1 text-[10px] font-mono text-ink bg-paper-warm/80 border border-bamboo/30 rounded"
-                            />
-                          ) : (
-                            <span className="text-[11px] text-bamboo/70 font-medium truncate">
-                              {group.category}
-                            </span>
-                          )}
-                          <span className="text-[9px] text-bamboo/40 font-mono ml-auto shrink-0">
-                            {group.notes.length}
-                          </span>
-                        </div>
-
-                        <div className={`category-body ${isCollapsed ? "" : "expanded"}`}>
-                          <div
-                            className="category-body-inner bg-bamboo/[0.03] border border-t-0 border-bamboo/10 rounded-b-lg pb-1 pt-1"
-                            onDragOver={(e) => {
-                              e.preventDefault();
-                              e.dataTransfer.dropEffect = "move";
-                              setDragOverCategory(group.category);
-                            }}
-                            onDragLeave={(e) => {
-                              if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                              onDragLeave={(e) => {
+                                if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                                  setDragOverCategory(null);
+                                }
+                              }}
+                              onDrop={(e) => {
+                                e.preventDefault();
                                 setDragOverCategory(null);
-                              }
-                            }}
-                            onDrop={(e) => {
-                              e.preventDefault();
-                              setDragOverCategory(null);
-                              const noteId = e.dataTransfer.getData("text/plain");
-                              if (noteId) void handleMoveNote(noteId, group.category);
-                            }}
-                          >
-                            {group.notes.length === 0 ? (
-                              <div className="px-3 py-3 text-center text-[11px] text-ink-ghost/50">
-                                {t("main.category.emptyFolder", { defaultValue: "空文件夹" })}
-                              </div>
-                            ) : (
-                              group.notes.map((note) => {
+                                const noteId = e.dataTransfer.getData("text/plain");
+                                if (noteId) void handleMoveNote(noteId, "");
+                              }}
+                            >
+                              {group.notes.map((note) => {
                                 const isSelected = note.id === selectedId;
                                 const isHovered = note.id === hoveredId;
-
                                 return (
                                   <div
                                     key={note.id}
@@ -2733,44 +2464,55 @@ export function MainWindow({
                                       e.dataTransfer.effectAllowed = "move";
                                     }}
                                     onClick={() => void handleSelectNote(note.id)}
+                                    onDoubleClick={() => void handleDoubleClickNote(note.id)}
                                     onContextMenu={(event) => handleOpenNoteMenu(event, note.id)}
                                     onMouseEnter={() => setHoveredId(note.id)}
                                     onMouseLeave={() => setHoveredId(null)}
-                                    className={`w-full text-left rounded-lg mx-1 px-2.5 py-2 transition-all duration-[600ms] cursor-pointer group relative ${
+                                    className={`w-full text-left rounded-xl px-3 py-2.5 transition-all duration-[600ms] cursor-pointer group relative ${
                                       isSelected
                                         ? "bg-bamboo-mist/70"
                                         : isHovered
                                           ? "bg-paper-warm/70"
                                           : "bg-transparent"
                                     }`}
-                                    style={{ width: "calc(100% - 8px)" }}
                                   >
                                     <div
                                       className={`absolute left-0 top-1/2 -translate-y-1/2 w-[3px] rounded-r-full bg-bamboo/60 transition-all duration-[600ms] ${
                                         isSelected ? "h-5 opacity-100" : "h-0 opacity-0"
                                       }`}
                                     />
-
-                                    <div className="flex items-baseline justify-between mb-0.5">
-                                      <span
-                                        className={`text-[13px] font-display font-medium truncate pr-2 transition-colors ${
-                                          isSelected ? "text-bamboo" : "text-ink-soft"
-                                        }`}
-                                      >
-                                        {getDisplayTitle(note, t)}
-                                      </span>
-                                      <span className="text-[10px] text-ink-ghost font-mono tabular-nums shrink-0">
-                                        {formatShortDate(note.updatedAt)}
-                                      </span>
+                                    <div className="flex items-baseline mb-0.5">
+                                      <div className="min-w-0 flex-1">
+                                        <span
+                                          className={`text-[13px] font-display font-medium block truncate transition-colors flex items-center gap-1.5 ${
+                                            isSelected ? "text-bamboo" : "text-ink-soft"
+                                          }`}
+                                        >
+                                          {isReadOnlyNote(note) && (
+                                            <span
+                                              className={`text-[9px] font-mono shrink-0 px-1 rounded ${getFileTypeIconColor(note)} bg-current/10`}
+                                            >
+                                              {getFileTypeLabel(note)}
+                                            </span>
+                                          )}
+                                          {getDisplayTitle(note, t)}
+                                        </span>
+                                        {note.fileStem &&
+                                          note.title &&
+                                          note.title !== note.fileStem && (
+                                            <span className="text-[10px] text-ink-ghost/50 font-mono block truncate mt-0.5">
+                                              {note.fileStem}
+                                            </span>
+                                          )}
+                                      </div>
                                     </div>
-
                                     <p className="text-[11px] text-ink-ghost leading-relaxed line-clamp-2 group-hover:text-ink-faint transition-colors">
                                       {note.preview ||
                                         t("common.blankNote", { defaultValue: "空白笔记" })}
                                     </p>
-
                                     <div className="flex items-center gap-2 mt-1">
                                       <span className="text-[10px] text-ink-ghost/60 font-mono tabular-nums">
+                                        {formatShortDate(note.updatedAt)}{" "}
                                         {formatTime(note.updatedAt)}
                                       </span>
                                       <span className="text-[10px] text-ink-ghost/40">·</span>
@@ -2783,24 +2525,245 @@ export function MainWindow({
                                     </div>
                                   </div>
                                 );
-                              })
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
+                              })}
+                            </div>
+                          );
+                        }
 
-                  {!isLoading && filteredNotes.length === 0 && externalFiles.length === 0 && (
-                    <div className="px-3 py-8 text-center text-[12px] text-ink-ghost leading-relaxed">
-                      {searchQuery
-                        ? t("main.search.noResults", { defaultValue: "没有匹配的笔记" })
-                        : t("main.search.empty", { defaultValue: "还没有笔记" })}
+                        const isCollapsed = collapsedCategories.has(group.category);
+
+                        return (
+                          <div key={group.category} className="mb-0.5">
+                            <div
+                              className={`flex items-center gap-1.5 pl-2 pr-3 py-2 rounded-xl group/cat cursor-pointer select-none transition-all duration-[600ms] ${
+                                dragOverCategory === group.category
+                                  ? "bg-bamboo/10 ring-1 ring-bamboo/20"
+                                  : isCollapsed
+                                    ? "hover:bg-paper-warm/70"
+                                    : "bg-bamboo-mist/30"
+                              }`}
+                              onClick={() => toggleCategoryCollapse(group.category)}
+                              onContextMenu={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setCategoryMenu({
+                                  x: e.clientX,
+                                  y: e.clientY,
+                                  category: group.category,
+                                });
+                                setCategoryMenuClosing(false);
+                                setCategoryMenuConfirmDelete(false);
+                              }}
+                              onDragOver={(e) => {
+                                e.preventDefault();
+                                e.dataTransfer.dropEffect = "move";
+                                setDragOverCategory(group.category);
+                              }}
+                              onDragLeave={() => setDragOverCategory(null)}
+                              onDrop={(e) => {
+                                e.preventDefault();
+                                setDragOverCategory(null);
+                                const noteId = e.dataTransfer.getData("text/plain");
+                                if (noteId) void handleMoveNote(noteId, group.category);
+                              }}
+                            >
+                              <svg
+                                width="10"
+                                height="10"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2.5"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                className={`text-bamboo/50 shrink-0 transition-transform duration-200 ${isCollapsed ? "" : "rotate-90"}`}
+                              >
+                                <polyline points="9 18 15 12 9 6" />
+                              </svg>
+                              <svg
+                                width="12"
+                                height="12"
+                                viewBox="0 0 24 24"
+                                fill="none"
+                                stroke="currentColor"
+                                strokeWidth="2"
+                                strokeLinecap="round"
+                                strokeLinejoin="round"
+                                className="text-bamboo/50 shrink-0"
+                              >
+                                <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
+                              </svg>
+                              {renamingCategory === group.category ? (
+                                <input
+                                  type="text"
+                                  autoFocus
+                                  value={renameCategoryValue}
+                                  onChange={(e) => setRenameCategoryValue(e.target.value)}
+                                  onKeyDown={(e) => {
+                                    e.stopPropagation();
+                                    if (e.key === "Enter")
+                                      void handleRenameCategory(group.category);
+                                    if (e.key === "Escape") setRenamingCategory(null);
+                                  }}
+                                  onBlur={() => void handleRenameCategory(group.category)}
+                                  onClick={(e) => e.stopPropagation()}
+                                  className="flex-1 min-w-0 px-1 text-[10px] font-mono text-ink bg-paper-warm/80 border border-bamboo/30 rounded"
+                                />
+                              ) : (
+                                <span className="text-[11px] text-bamboo/70 font-medium truncate">
+                                  {group.category}
+                                </span>
+                              )}
+                              <span className="text-[9px] text-bamboo/40 font-mono ml-auto shrink-0">
+                                {group.notes.length}
+                              </span>
+                            </div>
+
+                            <div className={`category-body ${isCollapsed ? "" : "expanded"}`}>
+                              <div
+                                className="category-body-inner relative ml-[14px] pl-3 border-l-[1.5px] border-bamboo/15 pt-0.5 pb-0.5"
+                                onDragOver={(e) => {
+                                  e.preventDefault();
+                                  e.dataTransfer.dropEffect = "move";
+                                  setDragOverCategory(group.category);
+                                }}
+                                onDragLeave={(e) => {
+                                  if (!e.currentTarget.contains(e.relatedTarget as Node)) {
+                                    setDragOverCategory(null);
+                                  }
+                                }}
+                                onDrop={(e) => {
+                                  e.preventDefault();
+                                  setDragOverCategory(null);
+                                  const noteId = e.dataTransfer.getData("text/plain");
+                                  if (noteId) void handleMoveNote(noteId, group.category);
+                                }}
+                              >
+                                {group.notes.length === 0 ? (
+                                  <div className="px-2 py-3 text-center text-[11px] text-ink-ghost/50">
+                                    {t("main.category.emptyFolder", { defaultValue: "空文件夹" })}
+                                  </div>
+                                ) : (
+                                  group.notes.map((note) => {
+                                    const isSelected = note.id === selectedId;
+                                    const isHovered = note.id === hoveredId;
+
+                                    return (
+                                      <div
+                                        key={note.id}
+                                        draggable
+                                        onDragStart={(e) => {
+                                          e.dataTransfer.setData("text/plain", note.id);
+                                          e.dataTransfer.effectAllowed = "move";
+                                        }}
+                                        onClick={() => void handleSelectNote(note.id)}
+                                        onDoubleClick={() => void handleDoubleClickNote(note.id)}
+                                        onContextMenu={(event) =>
+                                          handleOpenNoteMenu(event, note.id)
+                                        }
+                                        onMouseEnter={() => setHoveredId(note.id)}
+                                        onMouseLeave={() => setHoveredId(null)}
+                                        className={`w-full text-left rounded-xl px-3 py-2.5 transition-all duration-[600ms] cursor-pointer group relative ${
+                                          isSelected
+                                            ? "bg-bamboo-mist/70"
+                                            : isHovered
+                                              ? "bg-paper-warm/70"
+                                              : "bg-transparent"
+                                        }`}
+                                      >
+                                        <div
+                                          className={`absolute left-0 top-1/2 -translate-y-1/2 w-[3px] rounded-r-full bg-bamboo/60 transition-all duration-[600ms] ${
+                                            isSelected ? "h-5 opacity-100" : "h-0 opacity-0"
+                                          }`}
+                                        />
+
+                                        <div className="flex items-baseline mb-0.5">
+                                          <div className="min-w-0 flex-1">
+                                            <span
+                                              className={`text-[13px] font-display font-medium block truncate transition-colors flex items-center gap-1.5 ${
+                                                isSelected ? "text-bamboo" : "text-ink-soft"
+                                              }`}
+                                            >
+                                              {isReadOnlyNote(note) && (
+                                                <span
+                                                  className={`text-[9px] font-mono shrink-0 px-1 rounded ${getFileTypeIconColor(note)} bg-current/10`}
+                                                >
+                                                  {getFileTypeLabel(note)}
+                                                </span>
+                                              )}
+                                              {getDisplayTitle(note, t)}
+                                            </span>
+                                            {note.fileStem &&
+                                              note.title &&
+                                              note.title !== note.fileStem && (
+                                                <span className="text-[10px] text-ink-ghost/50 font-mono block truncate mt-0.5">
+                                                  {note.fileStem}
+                                                </span>
+                                              )}
+                                          </div>
+                                        </div>
+
+                                        <p className="text-[11px] text-ink-ghost leading-relaxed line-clamp-2 group-hover:text-ink-faint transition-colors">
+                                          {note.preview ||
+                                            t("common.blankNote", { defaultValue: "空白笔记" })}
+                                        </p>
+
+                                        <div className="flex items-center gap-2 mt-1">
+                                          <span className="text-[10px] text-ink-ghost/60 font-mono tabular-nums">
+                                            {formatShortDate(note.updatedAt)}{" "}
+                                            {formatTime(note.updatedAt)}
+                                          </span>
+                                          <span className="text-[10px] text-ink-ghost/40">·</span>
+                                          <span className="text-[10px] text-ink-ghost/60 font-mono tabular-nums">
+                                            {t("common.wordCount", {
+                                              count: note.wordCount,
+                                              defaultValue: "{{count}} 字",
+                                            })}
+                                          </span>
+                                        </div>
+                                      </div>
+                                    );
+                                  })
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+
+                      {!isLoading && filteredNotes.length === 0 && externalFiles.length === 0 && (
+                        <div className="px-3 py-8 text-center text-[12px] text-ink-ghost leading-relaxed">
+                          {searchQuery
+                            ? t("main.search.noResults", { defaultValue: "没有匹配的笔记" })
+                            : t("main.search.empty", { defaultValue: "还没有笔记" })}
+                        </div>
+                      )}
                     </div>
-                  )}
-                </div>
+                  </div>
+                </>
               </div>
-            </div>
+            )}
+
+            {sidebarTab === "outline" && selectedId && (
+              <div key="outline" className="flex flex-col flex-1 min-h-0 animate-view-fade">
+                <OutlinePanel
+                  headings={headings}
+                  onJumpTo={handleJumpToHeading}
+                  emptyText={t("main.outline.empty", { defaultValue: "当前文档暂无标题" })}
+                />
+              </div>
+            )}
+
+            {sidebarTab === "git" && savedNotesDir && (
+              <div key="git" className="flex flex-col flex-1 min-h-0 animate-view-fade">
+                <GitPanel
+                  repoPath={savedNotesDir}
+                  onRefresh={() => {
+                    void refreshNotes();
+                  }}
+                />
+              </div>
+            )}
           </div>
 
           {!sidebarCollapsed && (
@@ -2818,616 +2781,418 @@ export function MainWindow({
           )}
 
           <div className="flex-1 flex flex-col min-w-0">
-            <div className="flex items-center justify-between px-4 h-10 border-b border-paper-deep/20 shrink-0 bg-paper/20">
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-                  className="w-7 h-7 flex items-center justify-center rounded-lg text-ink-ghost hover:text-ink-faint hover:bg-paper-warm transition-all cursor-pointer"
-                  title={
-                    sidebarCollapsed
-                      ? t("main.window.expandSidebar", { defaultValue: "展开侧栏" })
-                      : t("main.window.collapseSidebar", { defaultValue: "收起侧栏" })
-                  }
-                >
-                  <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
-                    <line x1="9" y1="3" x2="9" y2="21" />
-                  </svg>
-                </button>
-
-                <div className="h-4 w-px bg-paper-deep/30 mx-1" />
-
-                <button
-                  onClick={() => void handlePinEntry()}
-                  disabled={!selectedId}
-                  aria-label={pinTileButtonTitle(selectedTilePinned)}
-                  className={`w-7 h-7 flex items-center justify-center rounded-lg transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed ${
-                    selectedTilePinned
-                      ? "text-bamboo bg-bamboo-mist/40 hover:text-red-400 hover:bg-danger-bg"
-                      : "text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50"
-                  }`}
-                  title={pinTileButtonTitle(selectedTilePinned)}
-                >
-                  <svg
-                    width="13"
-                    height="13"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <path d="M12 17v5" />
-                    <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 1 1 0 0 0 1-1V4a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v1a1 1 0 0 0 1 1 1 1 0 0 1 1 1z" />
-                  </svg>
-                </button>
-
-                <button
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={handleUndo}
-                  disabled={!selectedId}
-                  className="w-7 h-7 flex items-center justify-center rounded-lg text-ink-ghost hover:text-ink-faint hover:bg-paper-warm transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-                  title={t("main.editor.undo", { defaultValue: "撤销（Ctrl+Z）" })}
-                  aria-label={t("main.editor.undoLabel", { defaultValue: "撤销" })}
-                >
-                  <svg
-                    data-testid="main-editor-undo-icon"
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    aria-hidden="true"
-                  >
-                    <path d="M9 14 4 9l5-5" />
-                    <path d="M4 9h10a6 6 0 0 1 0 12h-1" />
-                  </svg>
-                </button>
-
-                <button
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={handleRedo}
-                  disabled={!selectedId}
-                  className="w-7 h-7 flex items-center justify-center rounded-lg text-ink-ghost hover:text-ink-faint hover:bg-paper-warm transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-                  title={t("main.editor.redo", { defaultValue: "重做（Ctrl+Y）" })}
-                  aria-label={t("main.editor.redoLabel", { defaultValue: "重做" })}
-                >
-                  <svg
-                    data-testid="main-editor-redo-icon"
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    aria-hidden="true"
-                    style={{ transform: "scaleX(-1)" }}
-                  >
-                    <path d="M9 14 4 9l5-5" />
-                    <path d="M4 9h10a6 6 0 0 1 0 12h-1" />
-                  </svg>
-                </button>
-
-                <button
-                  onClick={() => void saveCurrentNote(true)}
-                  disabled={!selectedId || saveState === "saving"}
-                  className="px-2.5 h-7 flex items-center justify-center rounded-lg text-[11px] text-ink-ghost hover:text-ink-faint hover:bg-paper-warm transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-                  title={t("common.save", { defaultValue: "保存" })}
-                >
-                  {t("common.save", { defaultValue: "保存" })}
-                </button>
-
-                {deleteConfirm ? (
-                  <div
-                    className={`flex items-center gap-1 ml-1 ${deleteExiting ? "animate-delete-confirm-exit" : "animate-delete-confirm"}`}
-                  >
-                    <span className="text-[11px] text-red-400 whitespace-nowrap">
-                      {t("main.editor.confirmDelete", { defaultValue: "确认删除？" })}
-                    </span>
+            <div
+              className="grid transition-[grid-template-rows] duration-300 ease-in-out"
+              style={{
+                gridTemplateRows: settingsConfig?.tabLayout === "default" ? "1fr" : "0fr",
+              }}
+            >
+              <div className="overflow-hidden">
+                <TabBar
+                  tabs={displayTabs}
+                  activeTabId={settingsTabActive ? "__settings__" : activeTabId}
+                  onSelectTab={(noteId) => {
+                    if (noteId === "__settings__") return;
+                    setSettingsTabActive(false);
+                    flushActiveTab();
+                    void openTab(noteId);
+                  }}
+                  onCloseTab={(noteId) => {
+                    if (noteId === "__settings__") {
+                      setSettingsTabActive(false);
+                      return;
+                    }
+                    void closeTab(noteId);
+                  }}
+                  onNewTab={() => void handleNewNote()}
+                  onTabMenuAction={(action, noteId) => void handleTabMenuAction(action, noteId)}
+                />
+              </div>
+            </div>
+            {settingsTabActive && settingsConfig ? (
+              <SettingsTab
+                config={settingsConfig}
+                onChange={handleSettingsChange}
+                onChooseNotesDir={() => void handleChooseNotesDir()}
+              />
+            ) : (
+              <>
+                <div className="flex items-center justify-between px-4 h-10 border-b border-paper-deep/20 shrink-0 bg-paper/20">
+                  <div className="flex items-center gap-1">
                     <button
-                      onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => {
-                        setDeleteExiting(true);
-                        setTimeout(() => {
-                          setDeleteExiting(false);
-                          setDeleteConfirm(false);
-                          void handleDeleteNote();
-                        }, 150);
-                      }}
-                      className="px-2 h-6 rounded-md text-[11px] text-cloud bg-red-400 hover:bg-red-500 transition-colors cursor-pointer whitespace-nowrap outline-none"
+                      onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
+                      className="w-7 h-7 flex items-center justify-center rounded-lg text-ink-ghost hover:text-ink-faint hover:bg-paper-warm transition-all cursor-pointer"
+                      title={
+                        sidebarCollapsed
+                          ? t("main.window.expandSidebar", { defaultValue: "展开侧栏" })
+                          : t("main.window.collapseSidebar", { defaultValue: "收起侧栏" })
+                      }
                     >
-                      {t("common.delete", { defaultValue: "删除" })}
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />
+                        <line x1="9" y1="3" x2="9" y2="21" />
+                      </svg>
                     </button>
+
+                    <div className="h-4 w-px bg-paper-deep/30 mx-1" />
+
+                    <button
+                      onClick={() => void handlePinEntry()}
+                      disabled={!selectedId}
+                      aria-label={pinTileButtonTitle(selectedTilePinned)}
+                      className={`w-7 h-7 flex items-center justify-center rounded-lg transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed ${
+                        selectedTilePinned
+                          ? "text-bamboo bg-bamboo-mist/40 hover:text-red-400 hover:bg-danger-bg"
+                          : "text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50"
+                      }`}
+                      title={pinTileButtonTitle(selectedTilePinned)}
+                    >
+                      <svg
+                        width="13"
+                        height="13"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M12 17v5" />
+                        <path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 1 1 0 0 0 1-1V4a1 1 0 0 0-1-1H8a1 1 0 0 0-1 1v1a1 1 0 0 0 1 1 1 1 0 0 1 1 1z" />
+                      </svg>
+                    </button>
+
                     <button
                       onMouseDown={(event) => event.preventDefault()}
-                      onClick={() => {
-                        setDeleteExiting(true);
-                        setTimeout(() => {
-                          setDeleteExiting(false);
-                          setDeleteConfirm(false);
-                        }, 150);
-                      }}
-                      className="px-2 h-6 rounded-md text-[11px] text-ink-faint hover:text-ink-soft hover:bg-paper-warm transition-colors cursor-pointer outline-none"
+                      onClick={handleUndo}
+                      disabled={!selectedId}
+                      className="w-7 h-7 flex items-center justify-center rounded-lg text-ink-ghost hover:text-ink-faint hover:bg-paper-warm transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                      title={t("main.editor.undo", { defaultValue: "撤销（Ctrl+Z）" })}
+                      aria-label={t("main.editor.undoLabel", { defaultValue: "撤销" })}
                     >
-                      {t("common.cancel", { defaultValue: "取消" })}
+                      <svg
+                        data-testid="main-editor-undo-icon"
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        aria-hidden="true"
+                      >
+                        <path d="M9 14 4 9l5-5" />
+                        <path d="M4 9h10a6 6 0 0 1 0 12h-1" />
+                      </svg>
+                    </button>
+
+                    <button
+                      onClick={() => void saveCurrentNote()}
+                      disabled={!selectedId || saveState === "saving"}
+                      className="px-2.5 h-7 flex items-center justify-center rounded-lg text-[11px] text-ink-ghost hover:text-ink-faint hover:bg-paper-warm transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                      title={t("common.save", { defaultValue: "保存" })}
+                    >
+                      {t("common.save", { defaultValue: "保存" })}
+                    </button>
+
+                    {deleteConfirm ? (
+                      <div
+                        className={`flex items-center gap-1 ml-1 ${deleteExiting ? "animate-delete-confirm-exit" : "animate-delete-confirm"}`}
+                      >
+                        <span className="text-[11px] text-red-400 whitespace-nowrap">
+                          {t("main.editor.confirmDelete", { defaultValue: "确认删除？" })}
+                        </span>
+                        <button
+                          onClick={() => {
+                            setDeleteExiting(true);
+                            setTimeout(() => {
+                              setDeleteExiting(false);
+                              setDeleteConfirm(false);
+                              void handleDeleteNote();
+                            }, 150);
+                          }}
+                          className="px-2 h-6 rounded-md text-[11px] text-cloud bg-red-400 hover:bg-red-500 transition-colors cursor-pointer whitespace-nowrap"
+                        >
+                          {t("common.delete", { defaultValue: "删除" })}
+                        </button>
+                        <button
+                          onClick={() => {
+                            setDeleteExiting(true);
+                            setTimeout(() => {
+                              setDeleteExiting(false);
+                              setDeleteConfirm(false);
+                            }, 150);
+                          }}
+                          className="px-2 h-6 rounded-md text-[11px] text-ink-faint hover:text-ink-soft hover:bg-paper-warm transition-colors cursor-pointer"
+                        >
+                          {t("common.cancel", { defaultValue: "取消" })}
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        onClick={() => setDeleteConfirm(true)}
+                        disabled={!selectedId}
+                        className="w-7 h-7 flex items-center justify-center rounded-lg text-ink-ghost hover:text-red-400 hover:bg-danger-bg transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                        title={t("noteMenu.delete", { defaultValue: "删除笔记" })}
+                      >
+                        <svg
+                          width="13"
+                          height="13"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <polyline points="3,6 5,6 21,6" />
+                          <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+                        </svg>
+                      </button>
+                    )}
+                    {/* Rename file button */}
+                    {renameFileFor === selectedNote?.id ? (
+                      <input
+                        type="text"
+                        value={renameFileValue}
+                        onChange={(e) => setRenameFileValue(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") {
+                            const v = renameFileValue.trim();
+                            if (v && selectedNote) {
+                              void renameNoteFileStem(selectedNote.id, v)
+                                .then(() => refreshNotes())
+                                .catch((err) => setErrorMessage(getErrorMessage(err)));
+                            }
+                            setRenameFileFor(null);
+                          }
+                          if (e.key === "Escape") setRenameFileFor(null);
+                        }}
+                        onBlur={() => setRenameFileFor(null)}
+                        autoFocus
+                        className="w-28 px-1.5 h-6 rounded text-[11px] font-mono text-ink bg-paper-warm border border-bamboo/40"
+                        onClick={(e) => e.stopPropagation()}
+                      />
+                    ) : (
+                      <button
+                        onClick={() => {
+                          if (selectedNote) {
+                            setRenameFileFor(selectedNote.id);
+                            setRenameFileValue(selectedNote.fileStem);
+                          }
+                        }}
+                        disabled={!selectedId}
+                        className="w-7 h-7 flex items-center justify-center rounded-lg text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                        title={t("noteMenu.renameFile", { defaultValue: "重命名文件" })}
+                      >
+                        <svg
+                          width="14"
+                          height="14"
+                          viewBox="0 0 24 24"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        >
+                          <path d="M17 3a2.83 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+                        </svg>
+                      </button>
+                    )}
+                    {/* Sync title to filename button */}
+                    <button
+                      onClick={() => {
+                        if (selectedNote) {
+                          void renameNoteFileStem(
+                            selectedNote.id,
+                            selectedNote.title || selectedNote.fileStem,
+                          )
+                            .then(() => refreshNotes())
+                            .catch((err) => setErrorMessage(getErrorMessage(err)));
+                        }
+                      }}
+                      disabled={!selectedId}
+                      className="w-7 h-7 flex items-center justify-center rounded-lg text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+                      title={t("noteMenu.syncTitleToFile", { defaultValue: "标题同步为文件名" })}
+                    >
+                      <svg
+                        width="14"
+                        height="14"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <polyline points="17 1 21 5 17 9" />
+                        <path d="M3 11V9a4 4 0 0 1 4-4h14" />
+                        <polyline points="7 23 3 19 7 15" />
+                        <path d="M21 13v2a4 4 0 0 1-4 4H3" />
+                      </svg>
                     </button>
                   </div>
-                ) : (
-                  <button
-                    onClick={() => setDeleteConfirm(true)}
-                    disabled={!selectedId}
-                    className="w-7 h-7 flex items-center justify-center rounded-lg text-ink-ghost hover:text-red-400 hover:bg-danger-bg transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
-                    title={t("noteMenu.delete", { defaultValue: "删除笔记" })}
-                  >
-                    <svg
-                      width="13"
-                      height="13"
-                      viewBox="0 0 24 24"
-                      fill="none"
-                      stroke="currentColor"
-                      strokeWidth="2"
-                      strokeLinecap="round"
-                      strokeLinejoin="round"
-                    >
-                      <polyline points="3,6 5,6 21,6" />
-                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                    </svg>
-                  </button>
-                )}
-              </div>
-
-              <SlidingButtonGroup
-                options={viewModeOptions}
-                value={viewMode}
-                onChange={setViewMode}
-                buttonClassName="px-3 py-1"
-              />
-            </div>
-
-            <div
-              key={noteTransitionKey}
-              className="animate-note-enter px-6 pt-4 pb-2 shrink-0 border-b border-paper-deep/15"
-            >
-              <input
-                type="text"
-                value={title}
-                onChange={(event) => {
-                  setTitle(event.target.value);
-                  markDirty();
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") {
-                    event.preventDefault();
-                    contentRef.current?.focus();
-                  }
-                }}
-                placeholder={t("common.untitledNote", { defaultValue: "无标题笔记" })}
-                disabled={!selectedId}
-                className="flex-1 text-[20px] font-display font-bold text-ink placeholder:text-ink-ghost/50 tracking-wide disabled:opacity-60 min-w-0"
-              />
-              {title.trim() && selectedId && settingsConfig?.aiEnabled && (
-                <button
-                  type="button"
-                  onClick={async () => {
-                    const generated = await handleGenerateTitle();
-                    if (generated) setTitle(generated);
-                  }}
-                  disabled={aiTitlePending}
-                  className="shrink-0 w-7 h-7 flex items-center justify-center rounded-lg text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/50 transition-all cursor-pointer disabled:opacity-40"
-                  title="AI 生成标题"
-                >
-                  <svg
-                    width="14"
-                    height="14"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    className={aiTitlePending ? "animate-spin" : ""}
-                  >
-                    <path d="M12 2l2.4 7.2h7.6l-6 4.8 2.4 7.2-6.4-4.8-6.4 4.8 2.4-7.2-6-4.8h7.6z" />
-                  </svg>
-                </button>
-              )}
-              </div>
-              <div className="flex items-center gap-3 mt-1.5">
-                <span className="text-[10px] text-ink-ghost font-mono tabular-nums truncate max-w-[200px]">
-                  {selectedExternalFile
-                    ? t("main.externalFile.label", {
-                        path: selectedExternalFile.filePath,
-                        defaultValue: "外部文件 · {{path}}",
-                      })
-                    : selectedNote
-                      ? `${formatShortDate(selectedNote.updatedAt)} ${formatTime(selectedNote.updatedAt)}`
-                      : "--"}
-                </span>
-                <span className="text-[10px] text-ink-ghost/40">·</span>
-                <span className="text-[10px] text-ink-ghost font-mono tabular-nums">
-                  {t("common.wordCount", { count: charCount, defaultValue: "{{count}} 字" })}
-                </span>
-                <span className="text-[10px] text-ink-ghost/40">·</span>
-                <span
-                  key={saveState}
-                  className={`text-[10px] font-mono tabular-nums animate-status-fade ${
-                    saveState === "error"
-                      ? "text-red-400"
-                      : saveState === "dirty"
-                        ? "text-amber-500/70"
-                        : "text-bamboo/60"
-                  }`}
-                >
-                  {saveStateLabel[saveState]}
-                </span>
-              </div>
-            </div>
-
-            <div
-              key={viewMode}
-              ref={splitContainerRef}
-              className="flex-1 flex min-h-0 animate-view-fade"
-            >
-              {!selectedId && !isLoading ? (
-                <div className="flex-1 flex items-center justify-center text-[13px] text-ink-ghost">
-                  {t("main.editor.emptyHint", { defaultValue: "选择或新建一篇笔记" })}
                 </div>
-              ) : (
-                <>
-                  {(viewMode === "edit" || viewMode === "split") && (
-                    <div
-                      className="flex flex-col min-h-0 shrink-0"
-                      style={{ width: viewMode === "split" ? `${splitRatio * 100}%` : "100%" }}
-                    >
-                      <div className="flex items-center gap-0.5 px-4 pt-2 pb-1 shrink-0">
-                        {toolbarButtons.map((button) => (
-                          <button
-                            key={button.label}
-                            title={button.title}
-                            onMouseDown={(e) => e.preventDefault()}
-                            onClick={() => {
-                              if (contentRef.current) {
-                                applyFormat(
-                                  contentRef.current,
-                                  button.action,
-                                  t,
-                                  setContent,
-                                  markDirty,
-                                );
-                              }
-                            }}
-                            className={`w-6 h-6 flex items-center justify-center rounded text-[11px] text-ink-ghost hover:text-ink-faint hover:bg-paper-warm transition-all cursor-pointer ${button.style}`}
-                          >
-                            {button.label}
-                          </button>
-                        ))}
-                        <div className="w-px h-4 bg-paper-deep/30 mx-1" />
-                        <AIButton
-                          label="生成"
-                          title="AI 生成内容 (输入提示词)"
-                          active={aiGenOpen}
-                          loading={aiLoadingAction === "gen"}
-                          onClick={() => {
-                            setAiGenOpen(!aiGenOpen);
-                            setAiError(null);
-                            setFimSuggestion(null);
-                            if (!aiGenOpen) setTimeout(() => aiInputRef.current?.focus(), 50);
-                          }}
-                        />
-                        <AIButton
-                          label="续写"
-                          title="续写选中文本"
-                          active={false}
-                          loading={aiLoadingAction === "pref"}
-                          disabled={!hasSelection()}
-                          onClick={handleAiContinue}
-                        />
-                        <AIButton
-                          label="补全"
-                          title="FIM 补全 (Tab 接受)"
-                          active={false}
-                          loading={aiLoadingAction === "fim"}
-                          onClick={handleAiFim}
-                        />
-                        <AIButton
-                          label="排版"
-                          title="AI 一键排版 (识别章节标题并添加 MD 标记)"
-                          active={false}
-                          loading={aiLoadingAction === "fmt"}
-                          onClick={handleAiFormat}
-                        />
-                      </div>
-                      {aiGenOpen && (
-                        <div className="px-4 pb-2 shrink-0 space-y-1.5">
-                          <textarea
-                            ref={aiInputRef}
-                            value={aiPrompt}
-                            onChange={(e) => setAiPrompt(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
-                                e.preventDefault();
-                                handleAiGenerate();
-                              } else if (e.key === "Escape") {
-                                setAiGenOpen(false);
-                                setAiPrompt("");
-                                setAiError(null);
-                                contentRef.current?.focus();
-                              }
-                            }}
-                            placeholder="输入提示词，Ctrl+Enter 发送..."
-                            rows={2}
-                            className="w-full bg-paper-warm/50 border border-paper-deep/30 rounded-lg px-2.5 py-1.5 text-[12px] text-ink-soft placeholder:text-ink-ghost/50 outline-none focus:border-bamboo/50 resize-none"
-                          />
-                          <div className="flex items-center justify-between">
-                            <span className="text-[9px] text-ink-ghost/60">
-                              Ctrl+Enter 发送 · Esc 取消
-                            </span>
-                            <button
-                              type="button"
-                              onClick={handleAiGenerate}
-                              disabled={aiLoading || !aiPrompt.trim()}
-                              className="px-3 py-1 rounded text-[11px] bg-bamboo text-white hover:bg-bamboo/90 disabled:opacity-40 transition-colors cursor-pointer"
-                            >
-                              {aiLoadingAction === "gen" ? "生成中..." : "发送"}
-                            </button>
-                          </div>
-                        </div>
-                      )}
-                      {aiError && (
-                        <div className="px-4 pb-1 shrink-0">
-                          <div className="text-[10px] text-red-400">{aiError}</div>
-                        </div>
-                      )}
-                      {fimSuggestion && (
-                        <div className="px-4 pb-1.5 shrink-0">
-                          <div className="flex items-center gap-2 bg-bamboo-mist/20 border border-bamboo/25 rounded-lg px-2.5 py-1.5">
-                            <span className="text-[9px] text-bamboo/70 font-medium shrink-0">补全建议</span>
-                            <span className="text-[11px] text-ink-soft font-mono truncate flex-1">
-                              {fimSuggestion.slice(0, 80)}{fimSuggestion.length > 80 ? "…" : ""}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={acceptFimSuggestion}
-                              className="px-2 py-0.5 rounded text-[10px] bg-bamboo text-white hover:bg-bamboo/90 transition-colors cursor-pointer shrink-0"
-                            >
-                              Tab
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setFimSuggestion(null)}
-                              className="text-[10px] text-ink-ghost hover:text-ink-faint transition-colors cursor-pointer shrink-0"
-                            >
-                              ✕
-                            </button>
-                          </div>
-                        </div>
-                      )}
 
-                      <div className="flex-1 overflow-hidden px-5 pb-4">
-                        <textarea
-                          ref={contentRef}
-                          data-tab-indent="true"
-                          value={content}
-                          onChange={(event) => {
-                            setContent(event.target.value);
-                            markDirty();
-                          }}
-                          onPaste={imagePasteHandler}
-                          onDrop={imageDropHandler}
-                          onDragOver={imageDragOverHandler}
-                          onScroll={handleEditorScroll}
-                          onKeyDown={(e) => {
-                            if (e.key === "Tab" && fimSuggestion) {
-                              e.preventDefault();
-                              acceptFimSuggestion();
-                            }
-                            // TodoList: auto-continue checkbox on Enter
-                            if (e.key === "Enter") {
-                              const textarea = e.currentTarget;
-                              const before = textarea.value.slice(0, textarea.selectionStart);
-                              const after = textarea.value.slice(textarea.selectionEnd);
-                              const lineStart = before.lastIndexOf("\n") + 1;
-                              const currentLine = before.slice(lineStart);
-                              const taskMatch = currentLine.match(/^(\s*)- \[([ x])\] /);
-                              if (!taskMatch) return;
-                              e.preventDefault();
-                              const indent = taskMatch[1];
-                              const restOfLine = currentLine.slice(taskMatch[0].length);
-                              if (!restOfLine.trim()) {
-                                const newBefore = before.slice(0, lineStart);
-                                setContent(newBefore + after);
-                                markDirty();
-                                requestAnimationFrame(() => {
-                                  textarea.focus();
-                                  textarea.setSelectionRange(newBefore.length, newBefore.length);
-                                });
-                              } else {
-                                const insertion = `\n${indent}- [ ] `;
-                                setContent(before + insertion + after);
-                                markDirty();
-                                requestAnimationFrame(() => {
-                                  textarea.focus();
-                                  const cursor = before.length + insertion.length;
-                                  textarea.setSelectionRange(cursor, cursor);
-                                });
-                              }
-                            }
-                          }}
-                          className="w-full h-full leading-[1.9] text-ink-soft font-body placeholder:text-ink-ghost/40"
-                          style={{
-                            fontSize: `${settingsConfig?.fontSize ?? 14}px`,
-                            tabSize: `var(--tab-indent-size, 2)`,
-                          }}
-                          placeholder={t("main.editor.contentPlaceholder", {
-                            defaultValue: "开始写作……",
-                          })}
-                          spellCheck={false}
-                          disabled={!selectedId}
-                        />
-                      </div>
-                    </div>
-                  )}
-
-                  {viewMode === "split" && (
-                    <div
-                      className={`w-1.5 shrink-0 cursor-col-resize group relative flex items-center justify-center ${isResizingSplit ? "bg-bamboo/30" : "hover:bg-bamboo/20"} transition-colors`}
-                      onMouseDown={(e) => {
-                        e.preventDefault();
-                        setIsResizingSplit(true);
-                      }}
-                    >
-                      <div
-                        className={`absolute inset-y-0 -left-1.5 -right-1.5 ${isResizingSplit ? "" : "group-hover:bg-bamboo/5"}`}
-                      />
-                      {/* 拖拽手柄指示器 */}
-                      <div className="relative z-10 flex flex-col gap-[3px] opacity-0 group-hover:opacity-100 transition-opacity">
-                        <div className="w-[3px] h-[3px] rounded-full bg-ink-ghost/60" />
-                        <div className="w-[3px] h-[3px] rounded-full bg-ink-ghost/60" />
-                        <div className="w-[3px] h-[3px] rounded-full bg-ink-ghost/60" />
-                      </div>
-                    </div>
-                  )}
-
-                  {(viewMode === "preview" || viewMode === "split") && (
-                    <div className="flex flex-col min-h-0 min-w-0 flex-1">
-                      {viewMode === "split" && (
-                        <div className="px-4 pt-2.5 pb-1 shrink-0">
-                          <span className="text-[10px] text-ink-ghost/60 font-mono tracking-widest uppercase">
-                            {t("main.editor.previewLabel", { defaultValue: "Preview" })}
-                          </span>
-                        </div>
-                      )}
-                      <div
-                        ref={previewScrollRef}
-                        onScroll={handlePreviewScroll}
-                        className={`flex-1 overflow-y-auto px-6 pb-6 ${
-                          viewMode === "preview" ? "pt-3" : "pt-1"
-                        }`}
-                      >
-                        <MarkdownPreview
-                          content={deferredContent}
-                          fontSize={settingsConfig?.fontSize ?? 14}
-                          renderHtml={settingsConfig?.renderHtmlMarkdown ?? false}
-                          imageBaseDir={imageBaseDir ?? undefined}
-                        />
-                      </div>
-                    </div>
-                  )}
-                </>
-              )}
-            </div>
-
-            <div className="flex items-center justify-between px-4 h-7 border-t border-paper-deep/20 bg-paper/30 shrink-0">
-              <div className="flex items-center gap-3">
-                <span className="text-[10px] text-ink-ghost font-mono tabular-nums">
-                  {t("main.statusBar.lineNumber", {
-                    count: lineCount,
-                    defaultValue: "Ln {{count}}",
-                  })}
-                </span>
-                <span className="text-[10px] text-ink-ghost/40">|</span>
-                <span className="text-[10px] text-ink-ghost font-mono">
-                  {t("main.statusBar.format", { defaultValue: "Markdown + LaTeX" })}
-                </span>
-              </div>
-              <div className="flex items-center gap-3">
-                {selectedId && !isExternal && content.includes("images/") && (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => void handleCleanUnusedImages()}
-                      className="text-[10px] text-ink-ghost hover:text-bamboo font-mono cursor-pointer transition-colors"
-                    >
-                      {t("main.images.cleanUnused", { defaultValue: "清理未使用图片" })}
-                    </button>
-                    <span className="text-[10px] text-ink-ghost/40">|</span>
-                  </>
-                )}
-                <span className="text-[10px] text-ink-ghost font-mono">
-                  {t("main.statusBar.encoding", { defaultValue: "UTF-8" })}
-                </span>
-                <span className="text-[10px] text-ink-ghost/40">|</span>
-                <span className="text-[10px] text-ink-ghost font-mono tabular-nums">
-                  {t("main.statusBar.byteSize", { size: byteSize, defaultValue: "{{size}} KB" })}
-                </span>
-              </div>
-            </div>
-          </div>
-          {settingsConfig && settingsOpen && settingsOverlay && (
-            <div className="absolute inset-0 z-20" onClick={handleCloseSettings} />
-          )}
-          <div
-            className={`relative shrink-0 overflow-hidden h-full transition-[width] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
-              sidePanelExpanded || mountedSidePanel ? "border-l border-paper-deep/20" : "border-l-0"
-            } ${
-              settingsOverlay
-                ? `absolute right-0 top-0 bottom-0 z-30 ${visibleSidePanel ? "w-[360px] shadow-xl" : "w-0"}`
-                : `${sidePanelExpanded ? "w-[360px]" : "w-0"}`
-            }`}
-          >
-            <div
-              className={`absolute inset-0 w-[360px] h-full transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
-                mountedSidePanel === "about"
-                  ? sidePanelContentVisible && visibleSidePanel === "about"
-                    ? "translate-x-0 opacity-100"
-                    : "pointer-events-none translate-x-4 opacity-0"
-                  : "pointer-events-none translate-x-4 opacity-0"
-              }`}
-            >
-              {mountedSidePanel === "about" ? (
-                <Suspense fallback={null}>
-                  <AboutPanel onClose={handleCloseAbout} />
-                </Suspense>
-              ) : null}
-            </div>
-            <div
-              className={`absolute inset-0 w-[360px] h-full transition-[opacity,transform] duration-300 ease-[cubic-bezier(0.22,1,0.36,1)] ${
-                mountedSidePanel === "settings"
-                  ? sidePanelContentVisible && visibleSidePanel === "settings"
-                    ? "translate-x-0 opacity-100"
-                    : "pointer-events-none translate-x-4 opacity-0"
-                  : "pointer-events-none translate-x-4 opacity-0"
-              }`}
-            >
-              {mountedSidePanel === "settings" && settingsConfig ? (
-                <Suspense fallback={null}>
-                  <SettingsPanel
-                    config={settingsConfig}
-                    onChange={handleSettingsChange}
-                    onMigrateDataDir={() => void handleMigrateDataDir()}
-                    onClose={handleCloseSettings}
+                <div
+                  key={`title-${noteTransitionKey}`}
+                  className="animate-note-enter px-6 pt-4 pb-2 shrink-0 border-b border-paper-deep/15"
+                >
+                  <input
+                    type="text"
+                    value={title}
+                    onChange={(event) => {
+                      setTitle(event.target.value);
+                      markDirty();
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        // Focus is handled by WysiwygEditor internally
+                      }
+                    }}
+                    placeholder={t("common.untitledNote", { defaultValue: "无标题笔记" })}
+                    disabled={!selectedId || isReadOnlyExternal || isReadOnlyInternal}
+                    className="w-full text-[20px] font-display font-bold text-ink placeholder:text-ink-ghost/50 tracking-wide disabled:opacity-60"
                   />
-                </Suspense>
-              ) : null}
-            </div>
+                  <div className="flex items-center gap-3 mt-1.5">
+                    <span className="text-[10px] text-ink-ghost font-mono tabular-nums truncate max-w-[200px]">
+                      {selectedExternalFile
+                        ? t("main.externalFile.label", {
+                            path: selectedExternalFile.filePath,
+                            defaultValue: "外部文件 · {{path}}",
+                          })
+                        : selectedNote
+                          ? `${formatShortDate(selectedNote.updatedAt)} ${formatTime(selectedNote.updatedAt)}`
+                          : "--"}
+                    </span>
+                    <span className="text-[10px] text-ink-ghost/40">·</span>
+                    <span className="text-[10px] text-ink-ghost font-mono tabular-nums">
+                      {t("common.wordCount", { count: charCount, defaultValue: "{{count}} 字" })}
+                    </span>
+                    <span className="text-[10px] text-ink-ghost/40">·</span>
+                    <span
+                      key={saveState}
+                      className={`text-[10px] font-mono tabular-nums animate-status-fade ${
+                        saveState === "error"
+                          ? "text-red-400"
+                          : saveState === "dirty"
+                            ? "text-amber-500/70"
+                            : "text-bamboo/60"
+                      }`}
+                    >
+                      {isReadOnlyExternal || isReadOnlyInternal
+                        ? t("main.statusBar.readOnly", { defaultValue: "只读" })
+                        : saveStateLabel[saveState]}
+                    </span>
+                  </div>
+                </div>
+
+                <div
+                  key={`editor-${noteTransitionKey}`}
+                  ref={splitContainerRef}
+                  className="flex-1 flex flex-col min-h-0 animate-view-fade"
+                >
+                  {!selectedId && !isLoading ? (
+                    <div className="flex-1 flex items-center justify-center text-[13px] text-ink-ghost">
+                      {t("main.editor.emptyHint", { defaultValue: "选择或新建一篇笔记" })}
+                    </div>
+                  ) : isLoading && selectedId ? (
+                    <div className="flex-1 flex flex-col gap-3 px-6 pt-5 pb-4 animate-fade-in">
+                      {/* Loading skeleton — mimics title + content layout */}
+                      <div className="space-y-3">
+                        <div className="h-7 w-2/5 rounded bg-ink-ghost/15 animate-pulse" />
+                        <div className="flex items-center gap-3">
+                          <div className="h-3 w-24 rounded bg-ink-ghost/10 animate-pulse" />
+                          <div className="h-3 w-16 rounded bg-ink-ghost/10 animate-pulse" />
+                          <div className="h-3 w-16 rounded bg-ink-ghost/10 animate-pulse" />
+                        </div>
+                      </div>
+                      <div className="border-t border-paper-deep/15 pt-4 space-y-2.5">
+                        {Array.from({ length: 8 }).map((_, i) => (
+                          <div
+                            key={i}
+                            className="h-4 rounded bg-ink-ghost/10 animate-pulse"
+                            style={{ width: `${60 + Math.random() * 35}%` }}
+                          />
+                        ))}
+                      </div>
+                    </div>
+                  ) : (
+                    <WysiwygEditor
+                      ref={wysiwygRef}
+                      key={selectedId}
+                      content={content}
+                      onChange={(newValue) => {
+                        setContent(newValue);
+                        markDirty();
+                      }}
+                      fontSize={settingsConfig?.fontSize ?? 14}
+                      disabled={!selectedId || isReadOnlyExternal || isReadOnlyInternal}
+                      placeholder={t("main.editor.contentPlaceholder", {
+                        defaultValue: "开始写作……",
+                      })}
+                      onDirty={markDirty}
+                      hideFirstHeading={!!title.trim()}
+                      onScrollTop={handleEditorScroll}
+                      initialMode={
+                        settingsConfig?.defaultViewMode as "wysiwyg" | "source" | "read" | undefined
+                      }
+                    />
+                  )}
+                </div>
+
+                <div className="flex items-center justify-between px-4 h-7 border-t border-paper-deep/20 bg-paper/30 shrink-0">
+                  <div className="flex items-center gap-3">
+                    <span className="text-[10px] text-ink-ghost font-mono tabular-nums">
+                      {t("main.statusBar.lineNumber", {
+                        count: lineCount,
+                        defaultValue: "Ln {{count}}",
+                      })}
+                    </span>
+                    <span className="text-[10px] text-ink-ghost/40">|</span>
+                    <span className="text-[10px] text-ink-ghost font-mono">
+                      {isReadOnlyInternal && selectedNote
+                        ? getFileTypeLabel(selectedNote)
+                        : isReadOnlyExternal && selectedExternalFile
+                          ? selectedExternalFile.contentFormat === "html"
+                            ? (selectedExternalFile.mimeType ?? "HTML")
+                            : (selectedExternalFile.mimeType ?? "Document")
+                          : t("main.statusBar.format", { defaultValue: "Markdown + LaTeX" })}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-[10px] text-ink-ghost font-mono">
+                      {t("main.statusBar.encoding", { defaultValue: "UTF-8" })}
+                    </span>
+                    <span className="text-[10px] text-ink-ghost/40">|</span>
+                    <span className="text-[10px] text-ink-ghost font-mono tabular-nums">
+                      {t("main.statusBar.byteSize", {
+                        size: byteSize,
+                        defaultValue: "{{size}} KB",
+                      })}
+                    </span>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         </div>
       </div>
       {noteMenu && noteMenuTarget && (
         <div
-          ref={noteMenuRef}
-          className={`popup-menu fixed z-[9999] min-w-[168px] py-1.5 bg-cloud/95 backdrop-blur-sm border border-paper-deep/50 rounded-lg overflow-x-hidden overflow-y-auto select-none ${noteMenuClosing ? "animate-menu-exit" : "animate-menu-enter"}`}
-          style={{
-            left: noteMenuPosition?.x ?? noteMenu.x,
-            top: noteMenuPosition?.y ?? noteMenu.y,
-            maxWidth: `calc(100vw - ${POPUP_VIEWPORT_MARGIN * 2}px)`,
-            maxHeight: `calc(100vh - ${POPUP_VIEWPORT_MARGIN * 2}px)`,
-          }}
+          className={`fixed z-[9999] min-w-[168px] py-1.5 bg-cloud/95 backdrop-blur-sm border border-paper-deep/50 rounded-lg overflow-hidden select-none ${noteMenuClosing ? "animate-menu-exit" : "animate-menu-enter"}`}
+          style={{ left: noteMenu.x, top: noteMenu.y }}
           onMouseDown={(event) => event.stopPropagation()}
         >
           {noteMenuMode === "main" ? (
@@ -3488,19 +3253,12 @@ export function MainWindow({
 
       {categoryMenu && (
         <div
-          ref={categoryMenuRef}
-          className={`popup-menu fixed z-[9999] min-w-[140px] py-1.5 bg-cloud/95 backdrop-blur-sm border border-paper-deep/50 rounded-lg overflow-x-hidden overflow-y-auto select-none ${categoryMenuClosing ? "animate-menu-exit" : "animate-menu-enter"}`}
-          data-hover-suppressed={categoryMenuHoverSuppressed ? "" : undefined}
-          style={{
-            left: categoryMenuPosition?.x ?? categoryMenu.x,
-            top: categoryMenuPosition?.y ?? categoryMenu.y,
-            maxWidth: `calc(100vw - ${POPUP_VIEWPORT_MARGIN * 2}px)`,
-            maxHeight: `calc(100vh - ${POPUP_VIEWPORT_MARGIN * 2}px)`,
-          }}
+          className={`fixed z-[9999] min-w-[140px] py-1.5 bg-cloud/95 backdrop-blur-sm border border-paper-deep/50 rounded-lg overflow-hidden select-none ${categoryMenuClosing ? "animate-menu-exit" : "animate-menu-enter"}`}
+          style={{ left: categoryMenu.x, top: categoryMenu.y }}
           onMouseDown={(event) => event.stopPropagation()}
         >
           {categoryMenuConfirmDelete ? (
-            <div key="category-confirm" className="animate-menu-slide-left">
+            <div className="animate-menu-slide-left">
               <div className="px-3 py-1.5 text-[11px] font-body text-ink-faint border-b border-paper-deep/20">
                 {t("main.category.confirmDelete", {
                   category: categoryMenu.category,
@@ -3508,25 +3266,23 @@ export function MainWindow({
                 })}
               </div>
               <button
-                onMouseDown={(event) => event.preventDefault()}
                 onClick={() => {
                   void handleDeleteCategory(categoryMenu.category);
                   setCategoryMenuClosing(true);
                 }}
-                className="w-full text-left px-3 py-1.5 text-[12px] font-body text-red-400 hover:bg-danger-bg hover:text-red-500 transition-colors cursor-pointer outline-none"
+                className="w-full text-left px-3 py-1.5 text-[12px] font-body text-red-400 hover:bg-danger-bg hover:text-red-500 transition-colors cursor-pointer"
               >
                 {t("main.category.confirmDeleteAction", { defaultValue: "确认删除" })}
               </button>
               <button
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => switchCategoryMenuPanel(false)}
-                className="w-full text-left px-3 py-1.5 text-[12px] font-body text-ink-soft hover:bg-bamboo-mist/60 hover:text-bamboo transition-colors cursor-pointer outline-none"
+                onClick={() => setCategoryMenuConfirmDelete(false)}
+                className="w-full text-left px-3 py-1.5 text-[12px] font-body text-ink-soft hover:bg-bamboo-mist/60 hover:text-bamboo transition-colors cursor-pointer"
               >
                 {t("common.cancel", { defaultValue: "取消" })}
               </button>
             </div>
           ) : (
-            <div key="category-main" className="animate-menu-slide-right">
+            <div className="animate-menu-slide-right">
               <button
                 onClick={() => {
                   setCategoryMenuClosing(true);
@@ -3538,9 +3294,8 @@ export function MainWindow({
                 {t("main.category.rename", { defaultValue: "重命名" })}
               </button>
               <button
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => switchCategoryMenuPanel(true)}
-                className="w-full text-left px-3 py-1.5 text-[12px] font-body text-red-400 hover:bg-danger-bg hover:text-red-500 transition-colors cursor-pointer border-t border-paper-deep/20 outline-none"
+                onClick={() => setCategoryMenuConfirmDelete(true)}
+                className="w-full text-left px-3 py-1.5 text-[12px] font-body text-red-400 hover:bg-danger-bg hover:text-red-500 transition-colors cursor-pointer border-t border-paper-deep/20"
               >
                 {t("main.category.delete", { defaultValue: "删除分类" })}
               </button>
@@ -3548,43 +3303,75 @@ export function MainWindow({
           )}
         </div>
       )}
-    </div>
-  );
-}
 
-function AIButton({
-  label,
-  title,
-  active,
-  loading,
-  disabled,
-  onClick,
-}: {
-  label: string;
-  title: string;
-  active: boolean;
-  loading: boolean;
-  disabled?: boolean;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      title={title}
-      disabled={disabled}
-      onMouseDown={(e) => e.preventDefault()}
-      onClick={onClick}
-      className={`h-6 px-1.5 flex items-center justify-center rounded text-[10px] transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed ${
-        active
-          ? "text-bamboo bg-bamboo-mist/30"
-          : "text-ink-ghost hover:text-bamboo hover:bg-bamboo-mist/20"
-      }`}
-    >
-      {loading ? (
-        <span className="inline-block w-2.5 h-2.5 border-2 border-bamboo/40 border-t-bamboo rounded-full animate-spin" />
-      ) : (
-        label
+      {/* External file path recording prompt */}
+      {pendingPathPrompt && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/20 backdrop-blur-sm"
+          onClick={() => setPendingPathPrompt(null)}
+        >
+          <div
+            className="bg-cloud border border-paper-deep/40 rounded-2xl shadow-lg p-5 w-[420px] max-w-[90vw]"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="text-[14px] font-display font-medium text-ink-soft mb-2">
+              {t("main.externalPathPrompt.title", {
+                defaultValue: "记录新的笔记目录？",
+              })}
+            </h3>
+            <p className="text-[12px] text-ink-faint mb-3 leading-relaxed">
+              {t("main.externalPathPrompt.message", {
+                defaultValue: "打开的文件不在已知笔记目录下。是否将以下路径记录为笔记目录？",
+              })}
+            </p>
+            <label className="block text-[11px] text-ink-faint mb-1">
+              {t("main.externalPathPrompt.pathLabel", {
+                defaultValue: "笔记目录路径",
+              })}
+            </label>
+            <input
+              type="text"
+              value={pendingPathPrompt.inputValue}
+              onChange={(e) =>
+                setPendingPathPrompt({
+                  ...pendingPathPrompt,
+                  inputValue: e.target.value,
+                })
+              }
+              className="w-full px-2.5 h-8 rounded-lg text-[12px] font-mono text-ink bg-paper-warm/80 border border-paper-deep/40 focus:border-bamboo/30 mb-4"
+            />
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setPendingPathPrompt(null)}
+                className="px-4 py-1.5 rounded-lg text-[12px] text-ink-faint hover:bg-paper-warm border border-paper-deep/30 transition-colors cursor-pointer"
+              >
+                {t("main.externalPathPrompt.cancel", {
+                  defaultValue: "取消记录",
+                })}
+              </button>
+              <button
+                onClick={async () => {
+                  const path = pendingPathPrompt.inputValue.trim();
+                  if (!path) return;
+                  setErrorMessage(null);
+                  try {
+                    await addNotesDir(path);
+                    await switchNotesDir(path, true);
+                    setPendingPathPrompt(null);
+                  } catch (error) {
+                    setErrorMessage(getErrorMessage(error));
+                  }
+                }}
+                className="px-4 py-1.5 rounded-lg text-[12px] text-white bg-bamboo hover:bg-bamboo-light transition-colors cursor-pointer"
+              >
+                {t("main.externalPathPrompt.save", {
+                  defaultValue: "保存并切换",
+                })}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
-    </button>
+    </div>
   );
 }

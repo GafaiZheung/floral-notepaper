@@ -402,8 +402,8 @@ mod keyboard_hook {
 use tauri::{
     menu::{CheckMenuItem, Menu, MenuBuilder, MenuItem, PredefinedMenuItem, SubmenuBuilder},
     tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
-    App, AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl,
-    WebviewWindow, WebviewWindowBuilder, Window, WindowEvent, Wry,
+    App, AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindow,
+    WebviewWindowBuilder, Window, WindowEvent, Wry,
 };
 use uuid::Uuid;
 
@@ -1116,7 +1116,13 @@ pub fn extract_file_arg(args: &[String]) -> Option<String> {
     args.iter()
         .find(|arg| {
             let lower = arg.to_lowercase();
-            lower.ends_with(".md") || lower.ends_with(".markdown") || lower.ends_with(".txt")
+            lower.ends_with(".md")
+                || lower.ends_with(".markdown")
+                || lower.ends_with(".txt")
+                || lower.ends_with(".docx")
+                || lower.ends_with(".doc")
+                || lower.ends_with(".pdf")
+                || lower.ends_with(".xlsx")
         })
         .cloned()
 }
@@ -1415,9 +1421,8 @@ pub fn show_main_window(app: &AppHandle) -> Result<(), AppError> {
                 min_width: 900.0,
                 min_height: 620.0,
             },
-            // On macOS, tauri.macos.conf.json sets titleBarStyle: "Overlay"
-            // with native traffic lights; decorations: false would conflict.
-            decorations: !cfg!(target_os = "macos"),
+            // 无边框窗口：标题栏/窗口控制按钮由前端自定义（含 macOS）
+            decorations: false,
             always_on_top: false,
             shadow: true,
             skip_taskbar: false,
@@ -1850,27 +1855,12 @@ fn open_or_focus_window(
         .skip_taskbar(opts.skip_taskbar)
         .visible(false);
 
-    // 仅主窗口使用 macOS 原生红绿灯（Overlay 标题栏）。notepad / tile 是
-    // decorations: false 的透明无边框窗口，叠加红绿灯会渲染在内容区上方造成冲突
-    #[cfg(target_os = "macos")]
-    let builder = if label == MAIN_WINDOW_LABEL {
-        builder
-            .title_bar_style(tauri::TitleBarStyle::Overlay)
-            .hidden_title(true)
-            .traffic_light_position(tauri::Position::Logical(tauri::LogicalPosition::new(
-                14.0, 20.0,
-            )))
-    } else {
-        builder
-    };
-
     let window = builder.build()?;
 
     apply_window_bounds(&window, opts.bounds)?;
 
     if let Some(window) = app.get_webview_window(label) {
-        let is_auxiliary =
-            label.starts_with("notepad-") || label.starts_with("tile-");
+        let is_auxiliary = label.starts_with("notepad-") || label.starts_with("tile-");
         apply_macos_window_behavior(&window, is_auxiliary);
     }
 
@@ -2522,11 +2512,13 @@ mod tests {
                 vec![
                     "show-main",
                     "quick-note",
+                    "toggle-close-to-tray",
                     "toggle-autostart",
                     "quit"
                 ]
             );
-            assert_eq!(specs[2].checked, Some(false));
+            assert_eq!(specs[2].checked, Some(true));
+            assert_eq!(specs[3].checked, Some(false));
         }
     }
 
@@ -2627,6 +2619,7 @@ mod tests {
         AppConfig {
             locale: "zh-CN".into(),
             data_dir: Some("D:\\notes".into()),
+            notes_dirs: vec!["D:\\notes".into()],
             global_shortcut: global_shortcut.into(),
             close_to_tray: true,
             autostart: false,
@@ -2640,6 +2633,17 @@ mod tests {
             surface_font_size: 14,
             tab_indent_size: 2,
             external_file_auto_save: true,
+            ai_enabled: false,
+            ai_api_key: String::new(),
+            ai_api_endpoint: "https://api.deepseek.com".into(),
+            ai_model: "deepseek-v4-pro".into(),
+            ai_fim_endpoint: "https://api.deepseek.com/beta".into(),
+            ai_title_model: "deepseek-v4-flash".into(),
+            ai_title_prompt: String::new(),
+            ai_continue_prompt: String::new(),
+            ai_fim_prompt: String::new(),
+            ai_format_model: "deepseek-v4-flash".into(),
+            ai_format_prompt: String::new(),
             background_image_path: String::new(),
             background_fit: "cover".into(),
             background_dim: 0.25,
@@ -2660,6 +2664,9 @@ mod tests {
             toggle_visibility_shortcut: toggle_visibility_shortcut.into(),
             notes_dir: None,
             last_known_base_dir: None,
+            hidden_categories: vec![],
+            tab_layout: "compact".into(),
+            auto_open_outline: false,
         }
     }
 
@@ -2712,6 +2719,7 @@ mod tests {
         let previous = AppConfig {
             locale: "zh-CN".into(),
             data_dir: Some("D:\\notes".into()),
+            notes_dirs: vec!["D:\\notes".into()],
             global_shortcut: "Ctrl+Space".into(),
             close_to_tray: true,
             autostart: false,
@@ -2756,10 +2764,14 @@ mod tests {
             toggle_visibility_shortcut: String::new(),
             notes_dir: None,
             last_known_base_dir: None,
+            hidden_categories: vec![],
+            tab_layout: "compact".into(),
+            auto_open_outline: false,
         };
         let next = AppConfig {
             locale: "en-US".into(),
             data_dir: Some("D:\\other-notes".into()),
+            notes_dirs: vec!["D:\\other-notes".into()],
             global_shortcut: "Alt+Space".into(),
             close_to_tray: false,
             autostart: true,
@@ -2804,6 +2816,9 @@ mod tests {
             toggle_visibility_shortcut: "Ctrl+Shift+H".into(),
             notes_dir: None,
             last_known_base_dir: None,
+            hidden_categories: vec![],
+            tab_layout: "compact".into(),
+            auto_open_outline: false,
         };
 
         assert_eq!(

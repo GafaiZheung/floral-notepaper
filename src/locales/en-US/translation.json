@@ -24,7 +24,9 @@
     "untitledNote": "Untitled Note",
     "untitledFile": "Untitled File",
     "wordCount": "{{count}} characters",
-    "wordCountUnit": "characters"
+    "wordCountUnit": "characters",
+    "retry": "Retry",
+    "refresh": "Refresh"
   },
   "contextMenu": {
     "edit": {
@@ -68,6 +70,14 @@
       "caution": "Caution"
     }
   },
+  "mermaid": {
+    "clickToZoom": "Click to enlarge",
+    "downloadPng": "Download PNG",
+    "downloadSvg": "Download SVG",
+    "renderError": "Mermaid render error",
+    "rendering": "Rendering diagram…",
+    "zoomIn": "Enlarge"
+  },
   "main": {
     "category": {
       "confirmDelete": "Delete \"{{category}}\"?",
@@ -78,6 +88,21 @@
       "placeholder": "Enter category name…",
       "rename": "Rename",
       "uncategorized": "Uncategorized"
+    },
+    "notesDir": {
+      "label": "Notes Directory",
+      "select": "Switch notes directory",
+      "add": "Add directory",
+      "delete": "Delete directory",
+      "confirmDelete": "Delete \"{{path}}\"?",
+      "confirmDeleteAction": "Confirm Delete"
+    },
+    "externalPathPrompt": {
+      "title": "Record new notes directory?",
+      "message": "The opened file is not in any known notes directory. Save this path as a notes directory?",
+      "pathLabel": "Notes directory path",
+      "save": "Save & Switch",
+      "cancel": "Don't record"
     },
     "confirm": {
       "unsavedExternalFile": "\"{{title}}\" has unsaved changes. Save to the original file?"
@@ -116,7 +141,13 @@
       "clearSearch": "Clear search",
       "importMarkdown": "Import Markdown",
       "newNote": "New Note",
-      "searchPlaceholder": "Search notes…"
+      "searchPlaceholder": "Search notes…",
+      "tabDirectory": "Directory",
+      "tabOutline": "Outline",
+      "tabGit": "Git"
+    },
+    "outline": {
+      "empty": "No headings in this document"
     },
     "images": {
       "cleanUnused": "Clean unused images",
@@ -163,7 +194,9 @@
   "noteMenu": {
     "delete": "Delete Note",
     "export": "Export Markdown",
-    "moveToCategory": "Move to category…"
+    "moveToCategory": "Move to category…",
+    "renameFile": "Rename file",
+    "syncTitleToFile": "Sync title to filename"
   },
   "notepad": {
     "button": {
@@ -207,14 +240,23 @@
       "note": "Auto-save notes",
       "surface": "Auto-save surface notes"
     },
+    "autoOpenOutline": "Auto-open outline on scroll",
     "autostart": "Launch on Startup",
     "closeTitle": "Close Settings",
     "closeToTray": "Close to Tray",
+    "category": {
+      "general": "General",
+      "editor": "Editor",
+      "appearance": "Appearance",
+      "shortcuts": "Shortcuts",
+      "sync": "Sync",
+      "about": "About"
+    },
     "defaultView": {
-      "edit": "Edit",
       "label": "Default view",
-      "preview": "Preview",
-      "split": "Split"
+      "wysiwyg": "Reading",
+      "source": "Source",
+      "read": "Read"
     },
     "fontSize": {
       "editor": "Editor font size",
@@ -227,10 +269,17 @@
       "zhHK": "繁體中文"
     },
     "dataDir": "Data directory",
+    "notesDir": "Notes directory",
+    "notesDirs": "Saved notes directories",
     "openAtCursor": "Open near cursor with shortcut",
     "quickNoteShortcut": "Quick Note shortcut",
     "rememberSurfaceSize": "Remember surface size",
     "tabIndentSize": "Tab indent width",
+    "tabLayout": {
+      "label": "Tab layout",
+      "compact": "Compact",
+      "default": "Default"
+    },
     "selectFolder": "Select Folder",
     "shortcut": {
       "cancelHint": "Esc to cancel",
@@ -269,6 +318,11 @@
     "tileSaveReturnsToPin": "Return to tile after saving",
     "renderHtmlMarkdown": "Render HTML tags in Markdown",
     "splitScrollSync": "Split view scroll sync",
+    "hiddenCategories": {
+      "label": "Hidden category folders",
+      "placeholder": "Type a folder name and press Enter…",
+      "hint": "These folders will not appear as categories in the sidebar"
+    },
     "title": "Settings",
     "update": {
       "advanced": "Advanced",
@@ -419,6 +473,17 @@
       "title": "Updates"
     },
     "visibilityShortcut": "Show/Hide window shortcut",
+    "oneDrive": {
+      "sectionTitle": "OneDrive Cloud Sync",
+      "browseFolders": "Browse OneDrive folders",
+      "syncedFolders": "Recorded folders",
+      "useFolder": "Select",
+      "useDirectly": "Use directly",
+      "copyTo": "Copy to…",
+      "clearConfig": "Clear config",
+      "notFoundHint": "OneDrive local folder not detected. Make sure the OneDrive desktop client is installed and has completed its first sync.",
+      "notFoundDetail": "The OneDrive client keeps cloud files synced locally. Floral Notepaper reads them directly from the local folder."
+    },
     "background": {
       "label": "Background image",
       "default": "Default background",
@@ -438,5 +503,102 @@
   },
   "tile": {
     "empty": "Empty"
+  },
+  "git": {
+    "checking": "Checking…",
+    "commit": "Commit",
+    "committing": "Committing…",
+    "commitMessagePlaceholder": "Enter commit message…",
+    "downloadGit": "Download Git →",
+    "error": "Failed to fetch Git status",
+    "initDescription": "Initialize to manage note version history with Git",
+    "initializing": "Initializing…",
+    "initRepo": "Initialize Git Repository",
+    "noChanges": "No changes to commit",
+    "noCommits": "No commits yet",
+    "notAGitRepo": "This directory is not a Git repository",
+    "notInstalled": "Git not detected",
+    "notInstalledHint": "Please install Git to use version control features",
+    "revert": "Revert",
+    "showChanges": "Changes",
+    "showLog": "Log",
+    "stage": "Stage",
+    "stageAll": "Stage All",
+    "stageAllShort": "Stage All",
+    "stagedChanges": "Staged ({{count}})",
+    "unstage": "Unstage",
+    "unstageAll": "Unstage All",
+    "unstagedChanges": "Unstaged ({{count}})",
+    "untrackedFiles": "Untracked ({{count}})",
+    "workingTreeClean": "Working tree clean",
+    "changesTab": "Changes",
+    "historyTab": "History",
+    "stashTab": "Stash",
+    "branches": "Branches",
+    "currentBranch": "Current branch",
+    "newBranchPlaceholder": "New branch name…",
+    "deleteBranch": "Delete branch",
+    "merge": "Merge",
+    "mergeIntoCurrent": "Merge into current branch",
+    "push": "Push",
+    "pull": "Pull",
+    "fetch": "Fetch",
+    "remotes": "Remotes",
+    "remoteNamePlaceholder": "Name (e.g. origin)",
+    "remoteUrlPlaceholder": "URL (e.g. https://…)",
+    "addRemote": "Add Remote",
+    "noRemotes": "No remotes configured",
+    "diff": "Diff",
+    "noDiff": "No differences",
+    "stashPush": "Stash changes",
+    "stashPopLatest": "Pop latest",
+    "stashMessagePlaceholder": "Stash message (optional)…",
+    "stash": "Stash",
+    "noStashes": "No stashes",
+    "pop": "Pop",
+    "drop": "Drop",
+    "amend": "Amend",
+    "amendHint": "Amend last commit",
+    "conflicts": "Conflicts",
+    "conflictsDetected": "{{count}} conflicted file(s) detected",
+    "abortMerge": "Abort merge",
+    "mergeBtn": "Merge branch",
+    "mergeInto": "Merge into {{branch}}",
+    "noOtherBranches": "No other branches",
+    "ctxSwitchTo": "Switch to {{branch}}",
+    "ctxMerge": "Merge {{branch}} into {{currentBranch}}",
+    "ctxDeleteBranch": "Delete branch",
+    "ctxNewBranchPrompt": "Create new branch from this commit:",
+    "ctxCreateBranchHere": "Create branch here",
+    "ctxCopyHash": "Copy commit hash",
+    "hostingSetup": "Configure GitHub / GitLab",
+    "hostingSetupTitle": "Hosting Account Setup",
+    "savedAccounts": "Saved accounts",
+    "addAccount": "Add account",
+    "username": "Username",
+    "tokenPlaceholder": "Personal Access Token",
+    "gitlabUrl": "https://gitlab.com (leave empty for default)",
+    "saveAccount": "Save account",
+    "tokenHelp": "GitHub: Settings → Developer settings → Personal access tokens → Tokens (classic), requires repo scope",
+    "createRemoteRepo": "Create remote repository",
+    "createRemoteRepoTitle": "Create Remote Repository",
+    "repoNamePlaceholder": "Repository name",
+    "privateRepo": "Private repository",
+    "createAndAddRemote": "Create & add as remote",
+    "noAccountForProvider": "No {{provider}} account configured",
+    "repoCreated": "Repository created"
+  },
+  "tabs": {
+    "close": "Close",
+    "newTab": "New Tab",
+    "unsavedConfirm": "\"{{title}}\" has unsaved changes. Close it?",
+    "unsavedMultipleConfirm": "{{count}} tab(s) have unsaved changes. Save all and close?",
+    "contextMenu": {
+      "close": "Close",
+      "closeOthers": "Close Others",
+      "closeRight": "Close to the Right",
+      "closeAll": "Close All",
+      "closeSaved": "Close Saved"
+    }
   }
 }

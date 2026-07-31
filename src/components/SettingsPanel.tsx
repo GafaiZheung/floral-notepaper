@@ -21,6 +21,8 @@ import { DEFAULT_TILE_COLOR, normalizeTileColor } from "../features/settings/til
 import { applyTheme, watchSystemTheme } from "../features/settings/theme";
 import { LOCALE_OPTIONS } from "../locales/locale-whitelist";
 import { SlidingButtonGroup } from "./SlidingButtonGroup";
+import { OneDriveSettings } from "../features/onedrive/OneDriveSettings";
+import { GitHostingSettings } from "../features/git/GitHostingSettings";
 
 const HARMONY_FONT_LICENSE_URL = new URL("../assets/fonts/LICENSE_Fonts", import.meta.url).href;
 
@@ -62,12 +64,8 @@ export function SettingsPanel({ config, onChange, onMigrateDataDir, onClose }: S
   );
   const viewModes = useMemo<Array<{ value: ViewMode; label: string }>>(
     () => [
-      { value: "edit", label: t("settings.defaultView.edit", { defaultValue: "编辑" }) },
-      { value: "split", label: t("settings.defaultView.split", { defaultValue: "分栏" }) },
-      {
-        value: "preview",
-        label: t("settings.defaultView.preview", { defaultValue: "预览" }),
-      },
+      { value: "wysiwyg", label: t("settings.defaultView.wysiwyg", { defaultValue: "阅读编辑" }) },
+      { value: "source", label: t("settings.defaultView.source", { defaultValue: "源码编辑" }) },
     ],
     [t],
   );
@@ -220,6 +218,63 @@ export function SettingsPanel({ config, onChange, onMigrateDataDir, onClose }: S
             checked={config.splitScrollSync ?? true}
             onChange={(checked) => setConfigValue("splitScrollSync", checked)}
           />
+          <div className="space-y-2 pt-1">
+            <label className="block text-[11px] font-body text-ink-faint">
+              {t("settings.hiddenCategories.label", { defaultValue: "隐藏的分类目录" })}
+            </label>
+            <div className="flex flex-wrap gap-1.5">
+              {(config.hiddenCategories ?? []).map((name) => (
+                <span
+                  key={name}
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono bg-paper-warm border border-paper-deep/40 text-ink-faint"
+                >
+                  {name}
+                  <button
+                    onClick={() =>
+                      setConfigValue(
+                        "hiddenCategories",
+                        (config.hiddenCategories ?? []).filter((c) => c !== name),
+                      )
+                    }
+                    className="text-ink-ghost hover:text-red-400 transition-colors cursor-pointer"
+                  >
+                    <svg
+                      width="10"
+                      height="10"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                    >
+                      <path d="M18 6L6 18M6 6l12 12" />
+                    </svg>
+                  </button>
+                </span>
+              ))}
+            </div>
+            <input
+              type="text"
+              placeholder={t("settings.hiddenCategories.placeholder", {
+                defaultValue: "输入目录名后回车…",
+              })}
+              className="w-full h-7 px-2.5 rounded-lg text-[11px] font-mono text-ink bg-paper-warm/70 border border-paper-deep/40 focus:border-bamboo/30 placeholder:text-ink-ghost/60"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && e.currentTarget.value.trim()) {
+                  const name = e.currentTarget.value.trim();
+                  if (!(config.hiddenCategories ?? []).includes(name)) {
+                    setConfigValue("hiddenCategories", [...(config.hiddenCategories ?? []), name]);
+                  }
+                  e.currentTarget.value = "";
+                }
+              }}
+            />
+            <p className="text-[10px] text-ink-ghost/60">
+              {t("settings.hiddenCategories.hint", {
+                defaultValue: "这些目录不会在侧栏显示为分类",
+              })}
+            </p>
+          </div>
         </section>
 
         {/* 快捷键功能设置区域，与上方常规设置分开 */}
@@ -263,89 +318,65 @@ export function SettingsPanel({ config, onChange, onMigrateDataDir, onClose }: S
           {config.aiEnabled && (
             <>
               <div className="space-y-1.5">
-                <label className="block text-[11px] font-body text-ink-faint">
-                  API Key
-                </label>
+                <label className="block text-[11px] font-body text-ink-faint">API Key</label>
                 <input
                   type="password"
                   value={config.aiApiKey}
-                  onChange={(event) =>
-                    setConfigValue("aiApiKey", event.target.value)
-                  }
+                  onChange={(event) => setConfigValue("aiApiKey", event.target.value)}
                   placeholder="sk-..."
                   spellCheck={false}
                   className="w-full h-8 px-2.5 rounded-lg bg-paper-warm/70 border border-paper-deep/40 text-[12px] font-mono text-ink-soft outline-none placeholder:text-ink-ghost/50"
                 />
               </div>
               <div className="space-y-1.5">
-                <label className="block text-[11px] font-body text-ink-faint">
-                  API Endpoint
-                </label>
+                <label className="block text-[11px] font-body text-ink-faint">API Endpoint</label>
                 <input
                   type="text"
                   value={config.aiApiEndpoint}
-                  onChange={(event) =>
-                    setConfigValue("aiApiEndpoint", event.target.value)
-                  }
+                  onChange={(event) => setConfigValue("aiApiEndpoint", event.target.value)}
                   placeholder="https://api.deepseek.com"
                   spellCheck={false}
                   className="w-full h-8 px-2.5 rounded-lg bg-paper-warm/70 border border-paper-deep/40 text-[12px] font-mono text-ink-soft outline-none placeholder:text-ink-ghost/50"
                 />
               </div>
               <div className="space-y-1.5">
-                <label className="block text-[11px] font-body text-ink-faint">
-                  FIM Endpoint
-                </label>
+                <label className="block text-[11px] font-body text-ink-faint">FIM Endpoint</label>
                 <input
                   type="text"
                   value={config.aiFimEndpoint}
-                  onChange={(event) =>
-                    setConfigValue("aiFimEndpoint", event.target.value)
-                  }
+                  onChange={(event) => setConfigValue("aiFimEndpoint", event.target.value)}
                   placeholder="https://api.deepseek.com/beta"
                   spellCheck={false}
                   className="w-full h-8 px-2.5 rounded-lg bg-paper-warm/70 border border-paper-deep/40 text-[12px] font-mono text-ink-soft outline-none placeholder:text-ink-ghost/50"
                 />
               </div>
               <div className="space-y-1.5">
-                <label className="block text-[11px] font-body text-ink-faint">
-                  Generate Model
-                </label>
+                <label className="block text-[11px] font-body text-ink-faint">Generate Model</label>
                 <input
                   type="text"
                   value={config.aiModel}
-                  onChange={(event) =>
-                    setConfigValue("aiModel", event.target.value)
-                  }
+                  onChange={(event) => setConfigValue("aiModel", event.target.value)}
                   placeholder="deepseek-v4-pro"
                   spellCheck={false}
                   className="w-full h-8 px-2.5 rounded-lg bg-paper-warm/70 border border-paper-deep/40 text-[12px] font-mono text-ink-soft outline-none placeholder:text-ink-ghost/50"
                 />
               </div>
               <div className="space-y-1.5">
-                <label className="block text-[11px] font-body text-ink-faint">
-                  Title Model
-                </label>
+                <label className="block text-[11px] font-body text-ink-faint">Title Model</label>
                 <input
                   type="text"
                   value={config.aiTitleModel}
-                  onChange={(event) =>
-                    setConfigValue("aiTitleModel", event.target.value)
-                  }
+                  onChange={(event) => setConfigValue("aiTitleModel", event.target.value)}
                   placeholder="deepseek-v4-flash"
                   spellCheck={false}
                   className="w-full h-8 px-2.5 rounded-lg bg-paper-warm/70 border border-paper-deep/40 text-[12px] font-mono text-ink-soft outline-none placeholder:text-ink-ghost/50"
                 />
               </div>
               <div className="space-y-1.5">
-                <label className="block text-[11px] font-body text-ink-faint">
-                  Title Prompt
-                </label>
+                <label className="block text-[11px] font-body text-ink-faint">Title Prompt</label>
                 <textarea
                   value={config.aiTitlePrompt}
-                  onChange={(event) =>
-                    setConfigValue("aiTitlePrompt", event.target.value)
-                  }
+                  onChange={(event) => setConfigValue("aiTitlePrompt", event.target.value)}
                   placeholder="为以下内容生成一个简洁的标题..."
                   spellCheck={false}
                   rows={2}
@@ -358,9 +389,7 @@ export function SettingsPanel({ config, onChange, onMigrateDataDir, onClose }: S
                 </label>
                 <textarea
                   value={config.aiContinuePrompt}
-                  onChange={(event) =>
-                    setConfigValue("aiContinuePrompt", event.target.value)
-                  }
+                  onChange={(event) => setConfigValue("aiContinuePrompt", event.target.value)}
                   placeholder="请续写以下文本..."
                   spellCheck={false}
                   rows={2}
@@ -368,14 +397,10 @@ export function SettingsPanel({ config, onChange, onMigrateDataDir, onClose }: S
                 />
               </div>
               <div className="space-y-1.5">
-                <label className="block text-[11px] font-body text-ink-faint">
-                  FIM Prompt
-                </label>
+                <label className="block text-[11px] font-body text-ink-faint">FIM Prompt</label>
                 <textarea
                   value={config.aiFimPrompt}
-                  onChange={(event) =>
-                    setConfigValue("aiFimPrompt", event.target.value)
-                  }
+                  onChange={(event) => setConfigValue("aiFimPrompt", event.target.value)}
                   placeholder="留空使用默认 FIM 行为..."
                   spellCheck={false}
                   rows={2}
@@ -383,29 +408,21 @@ export function SettingsPanel({ config, onChange, onMigrateDataDir, onClose }: S
                 />
               </div>
               <div className="space-y-1.5">
-                <label className="block text-[11px] font-body text-ink-faint">
-                  Format Model
-                </label>
+                <label className="block text-[11px] font-body text-ink-faint">Format Model</label>
                 <input
                   type="text"
                   value={config.aiFormatModel}
-                  onChange={(event) =>
-                    setConfigValue("aiFormatModel", event.target.value)
-                  }
+                  onChange={(event) => setConfigValue("aiFormatModel", event.target.value)}
                   placeholder="deepseek-v4-flash"
                   spellCheck={false}
                   className="w-full h-8 px-2.5 rounded-lg bg-paper-warm/70 border border-paper-deep/40 text-[12px] font-mono text-ink-soft outline-none placeholder:text-ink-ghost/50"
                 />
               </div>
               <div className="space-y-1.5">
-                <label className="block text-[11px] font-body text-ink-faint">
-                  Format Prompt
-                </label>
+                <label className="block text-[11px] font-body text-ink-faint">Format Prompt</label>
                 <textarea
                   value={config.aiFormatPrompt}
-                  onChange={(event) =>
-                    setConfigValue("aiFormatPrompt", event.target.value)
-                  }
+                  onChange={(event) => setConfigValue("aiFormatPrompt", event.target.value)}
                   placeholder="请分析以下 Markdown 文本..."
                   spellCheck={false}
                   rows={2}
@@ -623,6 +640,10 @@ export function SettingsPanel({ config, onChange, onMigrateDataDir, onClose }: S
 
         <UpdateSettingsSection mode="settingsOnly" />
 
+        <OneDriveSettings config={config} onChange={onChange} />
+
+        <GitHostingSettings />
+
         <section className="pt-2 border-t border-paper-deep/25">
           <p className="text-[10px] leading-relaxed text-ink-ghost/75">
             <span>
@@ -646,22 +667,28 @@ export function SettingsPanel({ config, onChange, onMigrateDataDir, onClose }: S
   );
 }
 
-interface ToggleRowProps {
+export interface ToggleRowProps {
   label: string;
   checked: boolean;
   onChange: (checked: boolean) => void;
 }
 
-function ToggleRow({ label, checked, onChange }: ToggleRowProps) {
+export function ToggleRow({ label, checked, onChange }: ToggleRowProps) {
   return (
-    <label className="flex items-center justify-between h-9 rounded-lg px-2.5 bg-paper-warm/45 border border-paper-deep/25 cursor-pointer">
+    <div
+      role="switch"
+      aria-checked={checked}
+      tabIndex={0}
+      className="flex items-center justify-between h-9 rounded-lg px-2.5 bg-paper-warm/45 border border-paper-deep/25 cursor-pointer outline-none focus-visible:ring-1 focus-visible:ring-bamboo/40"
+      onClick={() => onChange(!checked)}
+      onKeyDown={(e) => {
+        if (e.key === "Enter" || e.key === " ") {
+          e.preventDefault();
+          onChange(!checked);
+        }
+      }}
+    >
       <span className="text-[12px] text-ink-soft">{label}</span>
-      <input
-        type="checkbox"
-        checked={checked}
-        onChange={(event) => onChange(event.target.checked)}
-        className="sr-only"
-      />
       <div
         className={`relative w-8 h-[18px] rounded-full transition-colors duration-250 ease-[cubic-bezier(0.22,1,0.36,1)] ${
           checked ? "bg-bamboo" : "bg-paper-deep/50"
@@ -673,7 +700,7 @@ function ToggleRow({ label, checked, onChange }: ToggleRowProps) {
           }`}
         />
       </div>
-    </label>
+    </div>
   );
 }
 
@@ -687,7 +714,7 @@ interface RangeRowProps {
   onChange: (value: number) => void;
 }
 
-function RangeRow({ label, value, min, max, step, format, onChange }: RangeRowProps) {
+export function RangeRow({ label, value, min, max, step, format, onChange }: RangeRowProps) {
   return (
     <div className="flex items-center gap-3 h-9 rounded-lg px-2.5 bg-paper-warm/45 border border-paper-deep/25">
       <span className="w-9 text-[11px] text-ink-faint">{label}</span>
@@ -714,7 +741,7 @@ interface ShortcutRecorderProps {
 
 type ShortcutMsg = { key: string; params?: Record<string, string> } | { raw: string };
 
-function ShortcutRecorder({ value, onChange }: ShortcutRecorderProps) {
+export function ShortcutRecorder({ value, onChange }: ShortcutRecorderProps) {
   const { t } = useTranslation();
   const [checkState, setCheckState] = useState<"idle" | "checking" | "ok" | "warning" | "error">(
     "idle",

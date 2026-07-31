@@ -1,6 +1,7 @@
 import { useState, useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import Markdown from "react-markdown";
+import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeKatex from "rehype-katex";
@@ -13,6 +14,8 @@ import type { Components } from "react-markdown";
 import "katex/dist/katex.min.css";
 import remarkAlerts from "./remarkAlerts";
 import { resolveMarkdownImageSrc } from "./imageSrc";
+import { MermaidDiagram } from "./MermaidDiagram";
+import { SyntaxHighlightedCode } from "./SyntaxHighlightedCode";
 
 function CodeBlock({ children, language }: { children: React.ReactNode; language?: string }) {
   const { t } = useTranslation();
@@ -71,7 +74,7 @@ interface MarkdownPreviewProps {
   imageBaseDir?: string;
 }
 
-const remarkPlugins = [remarkGfm, remarkMath, remarkAlerts];
+const remarkPlugins = [remarkBreaks, remarkGfm, remarkMath, remarkAlerts];
 const sanitizeSchema = {
   ...defaultSchema,
   tagNames: [...(defaultSchema.tagNames ?? []), "mark", "center", "font", "u", "abbr"],
@@ -210,8 +213,20 @@ const staticComponents: Components = {
     <hr className="my-6 border-none h-px bg-gradient-to-r from-transparent via-paper-deep to-transparent" />
   ),
   code: ({ className, children }) => {
-    const isBlock = className?.startsWith("language-") || String(children).includes("\n");
+    const isMermaid = className === "language-mermaid";
+    const childText = extractText(children);
+
+    if (isMermaid) {
+      return <MermaidDiagram chart={childText} />;
+    }
+
+    const hasLanguage = className?.startsWith("language-");
+    const isBlock = hasLanguage || childText.includes("\n");
     if (isBlock) {
+      // Use syntax highlighting for fenced code blocks with a language tag
+      if (hasLanguage && className) {
+        return <SyntaxHighlightedCode code={childText} className={className} />;
+      }
       return (
         <code className="text-[0.85em] font-mono text-ink-soft leading-[1.8] whitespace-pre">
           {children}

@@ -31,6 +31,8 @@ describe("settings api", () => {
     const config: AppConfig = {
       locale: "zh-CN",
       dataDir: "D:\\notes",
+      notesDir: "D:\\notes",
+      notesDirs: ["D:\\notes"],
       globalShortcut: "Ctrl+Space",
       closeToTray: true,
       autostart: false,
@@ -76,6 +78,8 @@ describe("settings api", () => {
     const config: AppConfig = {
       locale: "zh-CN",
       dataDir: "D:\\notes",
+      notesDir: "D:\\notes",
+      notesDirs: ["D:\\notes"],
       globalShortcut: "Alt+Space",
       closeToTray: false,
       autostart: true,
@@ -132,11 +136,14 @@ describe("settings api", () => {
     });
   });
 
-  test("normalizes supported view modes and falls back to split", () => {
-    expect(normalizeViewMode("edit")).toBe("edit");
-    expect(normalizeViewMode("split")).toBe("split");
-    expect(normalizeViewMode("preview")).toBe("preview");
-    expect(normalizeViewMode("unknown")).toBe("split");
+  test("normalizes supported view modes and migrates legacy values", () => {
+    expect(normalizeViewMode("wysiwyg")).toBe("wysiwyg");
+    expect(normalizeViewMode("source")).toBe("source");
+    // Legacy migrations
+    expect(normalizeViewMode("edit")).toBe("source");
+    expect(normalizeViewMode("split")).toBe("source");
+    expect(normalizeViewMode("preview")).toBe("wysiwyg");
+    expect(normalizeViewMode("unknown")).toBe("wysiwyg");
   });
 
   test("chooses a data directory through the folder picker", async () => {
