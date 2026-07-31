@@ -3,11 +3,7 @@ import { PhysicalPosition, PhysicalSize } from "@tauri-apps/api/dpi";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import type { WindowBounds } from "./api";
 
-export type ResizeDirection =
-  | "NorthWest"
-  | "NorthEast"
-  | "SouthWest"
-  | "SouthEast";
+export type ResizeDirection = "NorthWest" | "NorthEast" | "SouthWest" | "SouthEast";
 
 export async function showCurrentWindow(): Promise<void> {
   const window = getCurrentWindow();
@@ -49,18 +45,18 @@ export function startCurrentWindowDrag(): Promise<void> {
   return getCurrentWindow().startDragging();
 }
 
-export function startCurrentWindowResize(
-  direction: ResizeDirection = "SouthEast",
-): Promise<void> {
+/** Shift window by `(dx, dy)` logical px then start an OS drag, in one IPC. */
+export function startCurrentWindowDragWithOffset(dx: number, dy: number): Promise<void> {
+  return invoke("start_window_drag_with_offset", { dx, dy });
+}
+
+export function startCurrentWindowResize(direction: ResizeDirection = "SouthEast"): Promise<void> {
   return getCurrentWindow().startResizeDragging(direction);
 }
 
 export async function getCurrentWindowBounds(): Promise<WindowBounds> {
   const window = getCurrentWindow();
-  const [position, size] = await Promise.all([
-    window.outerPosition(),
-    window.innerSize(),
-  ]);
+  const [position, size] = await Promise.all([window.outerPosition(), window.innerSize()]);
 
   return {
     x: position.x,
@@ -70,9 +66,7 @@ export async function getCurrentWindowBounds(): Promise<WindowBounds> {
   };
 }
 
-export async function setCurrentWindowBounds(
-  bounds: WindowBounds,
-): Promise<void> {
+export async function setCurrentWindowBounds(bounds: WindowBounds): Promise<void> {
   const window = getCurrentWindow();
   await Promise.all([
     window.setPosition(new PhysicalPosition(bounds.x, bounds.y)),

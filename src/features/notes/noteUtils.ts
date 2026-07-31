@@ -1,13 +1,17 @@
+import { t, type TFunction } from "i18next";
 import type { Note, NoteMetadata } from "./types";
 
-export function getDisplayTitle(note: Pick<NoteMetadata, "title" | "preview">): string {
+export function getDisplayTitle(
+  note: Pick<NoteMetadata, "title" | "preview">,
+  translate: TFunction = t,
+): string {
   const title = note.title.trim();
   if (title) return title;
 
   const preview = note.preview.trim();
   if (preview) return preview.slice(0, 20);
 
-  return "无标题笔记";
+  return translate("common.untitledNote", { defaultValue: "无标题笔记" });
 }
 
 export function buildPreview(content: string): string {
@@ -88,12 +92,7 @@ export function filterNotes(notes: NoteMetadata[], query: string): NoteMetadata[
   if (!normalized) return notes;
 
   return notes.filter((note) => {
-    const haystack = [
-      note.title,
-      note.preview,
-      note.fileName,
-      getDisplayTitle(note),
-    ]
+    const haystack = [note.title, note.preview, note.fileName, getDisplayTitle(note)]
       .join(" ")
       .toLowerCase();
     return haystack.includes(normalized);

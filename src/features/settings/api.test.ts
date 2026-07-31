@@ -2,7 +2,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import {
-  chooseNotesDirectory,
+  checkGlobalShortcut,
+  chooseDataDirectory,
   getConfig,
   normalizeViewMode,
   saveConfig,
@@ -28,7 +29,8 @@ describe("settings api", () => {
 
   test("gets config through Rust", async () => {
     const config: AppConfig = {
-      notesDir: "D:\\notes",
+      locale: "zh-CN",
+      dataDir: "D:\\notes",
       globalShortcut: "Ctrl+Space",
       closeToTray: true,
       autostart: false,
@@ -40,6 +42,7 @@ describe("settings api", () => {
       theme: "light",
       fontSize: 14,
       surfaceFontSize: 14,
+      tabIndentSize: 2,
       externalFileAutoSave: true,
       aiEnabled: false,
       aiApiKey: "",
@@ -52,6 +55,15 @@ describe("settings api", () => {
       aiFimPrompt: "",
       aiFormatModel: "deepseek-v4-flash",
       aiFormatPrompt: "排版：\n\n{content}",
+      rememberSurfaceSize: true,
+      tileCtrlClose: true,
+      tileDoubleClickToEdit: false,
+      tileSaveReturnsToPin: false,
+      toggleVisibilityShortcut: "",
+      tileRenderMarkdown: false,
+      renderHtmlMarkdown: false,
+      splitScrollSync: true,
+      openAtCursor: true,
     };
     mockedInvoke.mockResolvedValue(config);
 
@@ -62,7 +74,8 @@ describe("settings api", () => {
 
   test("saves config through Rust", async () => {
     const config: AppConfig = {
-      notesDir: "D:\\notes",
+      locale: "zh-CN",
+      dataDir: "D:\\notes",
       globalShortcut: "Alt+Space",
       closeToTray: false,
       autostart: true,
@@ -74,6 +87,7 @@ describe("settings api", () => {
       theme: "dark",
       fontSize: 16,
       surfaceFontSize: 16,
+      tabIndentSize: 4,
       externalFileAutoSave: true,
       aiEnabled: true,
       aiApiKey: "sk-test",
@@ -86,12 +100,36 @@ describe("settings api", () => {
       aiFimPrompt: "",
       aiFormatModel: "deepseek-v4-flash",
       aiFormatPrompt: "排版：\n\n{content}",
+      rememberSurfaceSize: true,
+      tileCtrlClose: true,
+      tileDoubleClickToEdit: true,
+      tileSaveReturnsToPin: true,
+      toggleVisibilityShortcut: "",
+      tileRenderMarkdown: false,
+      renderHtmlMarkdown: false,
+      splitScrollSync: true,
+      openAtCursor: true,
     };
     mockedInvoke.mockResolvedValue(config);
 
     await expect(saveConfig(config)).resolves.toBe(config);
 
     expect(invoke).toHaveBeenCalledWith("config_save", { config });
+  });
+
+  test("checks global shortcut availability through Rust", async () => {
+    const result = {
+      available: false,
+      conflictType: "system",
+      message: "与 macOS 系统快捷键冲突",
+    };
+    mockedInvoke.mockResolvedValue(result);
+
+    await expect(checkGlobalShortcut("Command+Space")).resolves.toBe(result);
+
+    expect(invoke).toHaveBeenCalledWith("global_shortcut_check", {
+      shortcut: "Command+Space",
+    });
   });
 
   test("normalizes supported view modes and falls back to split", () => {
@@ -101,10 +139,10 @@ describe("settings api", () => {
     expect(normalizeViewMode("unknown")).toBe("split");
   });
 
-  test("chooses a notes directory through the folder picker", async () => {
+  test("chooses a data directory through the folder picker", async () => {
     mockedOpen.mockResolvedValue("D:\\notes");
 
-    await expect(chooseNotesDirectory()).resolves.toBe("D:\\notes");
+    await expect(chooseDataDirectory()).resolves.toBe("D:\\notes");
 
     expect(open).toHaveBeenCalledWith({
       directory: true,
@@ -112,9 +150,9 @@ describe("settings api", () => {
     });
   });
 
-  test("returns null when choosing a notes directory is cancelled", async () => {
+  test("returns null when choosing a data directory is cancelled", async () => {
     mockedOpen.mockResolvedValue(null);
 
-    await expect(chooseNotesDirectory()).resolves.toBeNull();
+    await expect(chooseDataDirectory()).resolves.toBeNull();
   });
 });

@@ -1,6 +1,12 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { listen } from "@tauri-apps/api/event";
+import { readText, writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { getConfig } from "../features/settings/api";
+import type { AppConfig } from "../features/settings/types";
 import { requestSurfaceAction } from "../features/windows/surfaceActions";
-import { tileContextMenuItems } from "../features/windows/tileContextMenu";
+import { getTileContextMenuItems } from "../features/windows/tileContextMenu";
+import { POPUP_VIEWPORT_MARGIN, useViewportPopupPosition } from "./popupPosition";
 
 interface MenuState {
   x: number;
@@ -9,18 +15,42 @@ interface MenuState {
   type: "edit" | "tile";
 }
 
+const textareaSetter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
+const inputSetter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+
 export function ContextMenuProvider({ children }: { children: React.ReactNode }) {
+  const { t } = useTranslation();
   const [menu, setMenu] = useState<MenuState | null>(null);
   const [menuClosing, setMenuClosing] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
+  const { popupRef: menuRef, popupPosition: menuPosition } = useViewportPopupPosition(
+    menu,
+    menu?.type,
+  );
+  const editableTargetRef = useRef<HTMLInputElement | HTMLTextAreaElement | HTMLElement | null>(
+    null,
+  );
+  const tileCtrlCloseRef = useRef(true);
+  const tileContextMenuItems = useMemo(() => getTileContextMenuItems(t), [t]);
+
+  useEffect(() => {
+    getConfig()
+      .then((c) => {
+        tileCtrlCloseRef.current = c.tileCtrlClose ?? true;
+      })
+      .catch(() => {});
+    const unlisten = listen<AppConfig>("config-changed", (event) => {
+      tileCtrlCloseRef.current = event.payload.tileCtrlClose ?? true;
+    });
+    return () => {
+      void unlisten.then((fn) => fn());
+    };
+  }, []);
 
   useEffect(() => {
     function handleContextMenu(event: MouseEvent) {
       const target = event.target as HTMLElement;
       const isEditable =
-        target.tagName === "TEXTAREA" ||
-        target.tagName === "INPUT" ||
-        target.isContentEditable;
+        target.tagName === "TEXTAREA" || target.tagName === "INPUT" || target.isContentEditable;
       const tileTarget = target.closest<HTMLElement>('[data-context-menu="tile"]');
 
       if (!isEditable && !tileTarget) {
@@ -30,32 +60,35 @@ export function ContextMenuProvider({ children }: { children: React.ReactNode })
 
       event.preventDefault();
 
-      if (tileTarget && event.ctrlKey) {
+      if (tileTarget && event.ctrlKey && tileCtrlCloseRef.current) {
         requestSurfaceAction("close");
         return;
       }
-      const selection = window.getSelection()?.toString() || "";
-
-      let x = event.clientX;
-      let y = event.clientY;
-      const menuWidth = 160;
-      const menuHeight = tileTarget ? 150 : 170;
-      if (x + menuWidth > window.innerWidth) x = window.innerWidth - menuWidth - 4;
-      if (y + menuHeight > window.innerHeight) y = window.innerHeight - menuHeight - 4;
+      let selection = window.getSelection()?.toString() || "";
+      if (target instanceof HTMLTextAreaElement || target instanceof HTMLInputElement) {
+        selection = target.value.slice(target.selectionStart ?? 0, target.selectionEnd ?? 0);
+      }
 
       if (tileTarget) {
+        editableTargetRef.current = null;
         setMenuClosing(false);
         setMenu({
-          x,
-          y,
+          x: event.clientX,
+          y: event.clientY,
           hasSelection: false,
           type: "tile",
         });
         return;
       }
 
+      editableTargetRef.current = target;
       setMenuClosing(false);
-      setMenu({ x, y, hasSelection: selection.length > 0, type: "edit" });
+      setMenu({
+        x: event.clientX,
+        y: event.clientY,
+        hasSelection: selection.length > 0,
+        type: "edit",
+      });
     }
 
     function handleClick() {
@@ -89,54 +122,98 @@ export function ContextMenuProvider({ children }: { children: React.ReactNode })
     setMenuClosing(true);
   }, []);
 
-  const runCommand = (command: string) => {
-    document.execCommand(command);
+  const runCommand = async (command: string) => {
+    const target = editableTargetRef.current;
+
+    if (target instanceof HTMLTextAreaElement || target instanceof HTMLInputElement) {
+      const start = target.selectionStart ?? 0;
+      const end = target.selectionEnd ?? 0;
+      const value = target.value;
+      const selected = value.slice(start, end);
+      const before = value.slice(0, start);
+      const after = value.slice(end);
+
+      target.focus();
+
+      const nativeSetter = target instanceof HTMLTextAreaElement ? textareaSetter : inputSetter;
+      const setValue = (newValue: string, cursorPos: number) => {
+        nativeSetter?.call(target, newValue);
+        target.selectionStart = target.selectionEnd = cursorPos;
+        target.dispatchEvent(new Event("input", { bubbles: true }));
+      };
+
+      switch (command) {
+        case "copy":
+          if (selected) await writeText(selected);
+          break;
+        case "cut":
+          if (selected) {
+            await writeText(selected);
+            setValue(before + after, start);
+          }
+          break;
+        case "paste": {
+          const text = await readText();
+          setValue(before + text + after, start + text.length);
+          break;
+        }
+        case "selectAll":
+          target.select();
+          break;
+      }
+    } else {
+      target?.focus();
+      document.execCommand(command);
+    }
+
     dismissMenu();
   };
 
-  const runSurfaceAction = (
-    action: (typeof tileContextMenuItems)[number]["action"],
-  ) => {
+  const runSurfaceAction = (action: (typeof tileContextMenuItems)[number]["action"]) => {
     requestSurfaceAction(action);
     dismissMenu();
   };
 
-  const items = menu
-    ? menu.type === "tile"
-      ? tileContextMenuItems.map((item) => ({
-          ...item,
-          shortcut: "",
-          action: () => runSurfaceAction(item.action),
-          disabled: false,
-        }))
-      : [
-          {
-            label: "剪切",
-            shortcut: "Ctrl+X",
-            action: () => runCommand("cut"),
-            disabled: !menu.hasSelection,
-          },
-          {
-            label: "复制",
-            shortcut: "Ctrl+C",
-            action: () => runCommand("copy"),
-            disabled: !menu.hasSelection,
-          },
-          {
-            label: "粘贴",
-            shortcut: "Ctrl+V",
-            action: () => runCommand("paste"),
-            disabled: false,
-          },
-          { separator: true as const },
-          {
-            label: "全选",
-            shortcut: "Ctrl+A",
-            action: () => runCommand("selectAll"),
-            disabled: false,
-          },
-        ]
-    : [];
+  const items = useMemo(
+    () =>
+      menu
+        ? menu.type === "tile"
+          ? tileContextMenuItems.map((item) => ({
+              ...item,
+              shortcut: "",
+              action: () => runSurfaceAction(item.action),
+              disabled: false,
+            }))
+          : [
+              {
+                label: t("contextMenu.edit.cut", { defaultValue: "剪切" }),
+                shortcut: "Ctrl+X",
+                action: () => runCommand("cut"),
+                disabled: !menu.hasSelection,
+              },
+              {
+                label: t("contextMenu.edit.copy", { defaultValue: "复制" }),
+                shortcut: "Ctrl+C",
+                action: () => runCommand("copy"),
+                disabled: !menu.hasSelection,
+              },
+              {
+                label: t("contextMenu.edit.paste", { defaultValue: "粘贴" }),
+                shortcut: "Ctrl+V",
+                action: () => runCommand("paste"),
+                disabled: false,
+              },
+              { separator: true as const },
+              {
+                label: t("contextMenu.edit.selectAll", { defaultValue: "全选" }),
+                shortcut: "Ctrl+A",
+                action: () => runCommand("selectAll"),
+                disabled: false,
+              },
+            ]
+        : [],
+    [menu, runCommand, t, tileContextMenuItems],
+  );
 
   return (
     <>
@@ -144,10 +221,12 @@ export function ContextMenuProvider({ children }: { children: React.ReactNode })
       {menu && (
         <div
           ref={menuRef}
-          className={`fixed z-[9999] min-w-[152px] py-1.5 bg-cloud/95 backdrop-blur-sm border border-paper-deep/50 rounded-lg overflow-hidden select-none ${menuClosing ? "animate-menu-exit" : "animate-menu-enter"}`}
+          className={`fixed z-[9999] min-w-[152px] py-1.5 bg-cloud/95 backdrop-blur-sm border border-paper-deep/50 rounded-lg overflow-x-hidden overflow-y-auto select-none ${menuClosing ? "animate-menu-exit" : "animate-menu-enter"}`}
           style={{
-            left: menu.x,
-            top: menu.y,
+            left: menuPosition?.x ?? menu.x,
+            top: menuPosition?.y ?? menu.y,
+            maxWidth: `calc(100vw - ${POPUP_VIEWPORT_MARGIN * 2}px)`,
+            maxHeight: `calc(100vh - ${POPUP_VIEWPORT_MARGIN * 2}px)`,
           }}
           onMouseDown={(event) => event.stopPropagation()}
         >
