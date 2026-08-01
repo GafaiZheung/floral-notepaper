@@ -142,6 +142,7 @@
       "importMarkdown": "匯入 Markdown",
       "newNote": "新增筆記",
       "searchPlaceholder": "搜尋筆記…",
+      "tabBrowser": "瀏覽器",
       "tabDirectory": "目錄",
       "tabOutline": "大綱",
       "tabGit": "Git 版本管理"
@@ -542,5 +543,43 @@
     "createAndAddRemote": "建立並新增為遠端倉庫",
     "noAccountForProvider": "未配置 {{provider}} 賬號",
     "repoCreated": "倉庫已建立"
+  },
+  "browser": {
+    "tab": {
+      "close": "關閉標籤",
+      "new": "新標籤"
+    },
+    "toolbar": {
+      "addressPlaceholder": "輸入網址或搜尋…",
+      "back": "後退",
+      "forward": "前進",
+      "reload": "重新整理",
+      "stop": "停止",
+      "zoomIn": "放大字型",
+      "zoomOut": "縮小字型"
+    },
+    "menu": {
+      "closeAll": "關閉全部",
+      "copyUrl": "複製網址",
+      "floating": "浮窗顯示",
+      "more": "更多",
+      "openInSystem": "在系統瀏覽器開啟",
+      "retract": "收回",
+      "saveAsNote": "存為筆記",
+      "unfloat": "停靠回面板"
+    },
+    "empty": {
+      "hint": "輸入網址或關鍵詞開始瀏覽",
+      "title": "瀏覽器"
+    },
+    "content": {
+      "hint": "網頁內容在右側停靠視窗中顯示"
+    },
+    "toast": {
+      "copyFailed": "複製網址失敗",
+      "noteSaved": "已存為筆記",
+      "saveFailed": "存為筆記失敗",
+      "urlCopied": "網址已複製"
+    }
   }
 }

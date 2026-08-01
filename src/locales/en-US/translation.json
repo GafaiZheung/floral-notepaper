@@ -142,6 +142,7 @@
       "importMarkdown": "Import Markdown",
       "newNote": "New Note",
       "searchPlaceholder": "Search notes…",
+      "tabBrowser": "Browser",
       "tabDirectory": "Directory",
       "tabOutline": "Outline",
       "tabGit": "Git"
@@ -599,6 +600,44 @@
       "closeRight": "Close to the Right",
       "closeAll": "Close All",
       "closeSaved": "Close Saved"
+    }
+  },
+  "browser": {
+    "tab": {
+      "close": "Close tab",
+      "new": "New tab"
+    },
+    "toolbar": {
+      "addressPlaceholder": "Enter a URL or search…",
+      "back": "Back",
+      "forward": "Forward",
+      "reload": "Reload",
+      "stop": "Stop",
+      "zoomIn": "Zoom in",
+      "zoomOut": "Zoom out"
+    },
+    "menu": {
+      "closeAll": "Close all",
+      "copyUrl": "Copy URL",
+      "floating": "Floating window",
+      "more": "More",
+      "openInSystem": "Open in system browser",
+      "retract": "Retract",
+      "saveAsNote": "Save as note",
+      "unfloat": "Dock back to panel"
+    },
+    "empty": {
+      "hint": "Enter a URL or keyword to start browsing",
+      "title": "Browser"
+    },
+    "content": {
+      "hint": "Page content is shown in the docked window on the right"
+    },
+    "toast": {
+      "copyFailed": "Failed to copy URL",
+      "noteSaved": "Saved as note",
+      "saveFailed": "Failed to save as note",
+      "urlCopied": "URL copied"
     }
   }
 }

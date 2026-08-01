@@ -21,7 +21,7 @@ import type { AppConfig } from "../features/settings/types";
 import { displayPathLabel, parentDirFromFilePath } from "../features/settings/notePaths";
 import { normalizeTileColor } from "../features/settings/tileColor";
 import { BackgroundLayer } from "./BackgroundLayer";
-import { LeftIconSidebar } from "./LeftIconSidebar";
+import { LeftIconSidebar, type SidebarPanel } from "./LeftIconSidebar";
 import { GitPanel } from "./GitPanel";
 import { SettingsTab } from "./SettingsTab";
 import { TabBar } from "./TabBar";
@@ -78,6 +78,18 @@ import {
   TILE_WINDOW_UNPINNED_EVENT,
   syncPinnedTileIds,
 } from "../features/windows/tileWindowEvents";
+import {
+  browserActivate,
+  browserClose,
+  browserGetState,
+  browserOpen,
+  browserSetVisible,
+  browserSetWidth,
+} from "../features/browser/api";
+import { subscribeBrowserState } from "../features/browser/events";
+import { DEFAULT_BROWSER_STATE, type BrowserState } from "../features/browser/types";
+
+import { BrowserPanel, type BrowserPanelHandle } from "./BrowserPanel";
 
 type SaveState = "idle" | "dirty" | "saving" | "saved" | "error";
 
@@ -133,7 +145,16 @@ export function MainWindow({
 
   const [searchQuery, setSearchQuery] = useState("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
-  const [sidebarTab, setSidebarTab] = useState<"directory" | "outline" | "git">("directory");
+  const [sidebarTab, setSidebarTab] = useState<SidebarPanel>("directory");
+  const [browserState, setBrowserState] = useState<BrowserState>(DEFAULT_BROWSER_STATE);
+  const [browserWidth, setBrowserWidth] = useState<number>(420);
+  const [isResizingBrowser, setIsResizingBrowser] = useState(false);
+  const browserPanelRef = useRef<BrowserPanelHandle>(null);
+  const browserWidthRef = useRef<number>(420);
+  const sidebarTabRef = useRef<SidebarPanel>("directory");
+  const browserStateRef = useRef<BrowserState>(DEFAULT_BROWSER_STATE);
+  sidebarTabRef.current = sidebarTab;
+  browserStateRef.current = browserState;
   const [content, setContent] = useState("");
   const [contentFormat, setContentFormat] = useState<string>("markdown");
   const [title, setTitle] = useState("");
@@ -1542,6 +1563,119 @@ export function MainWindow({
     };
   }, [isResizingSidebar]);
 
+  // --- 浏览器侧边栏 ---
+
+  // 订阅 Rust 侧浏览器状态（唯一数据源）
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void subscribeBrowserState((state) => {
+      setBrowserState(state);
+      setBrowserWidth(state.dockWidth);
+    }).then((fn) => {
+      unlisten = fn;
+    });
+    void browserGetState()
+      .then((state) => {
+        setBrowserState(state);
+        setBrowserWidth(state.dockWidth);
+      })
+      .catch(() => {});
+    return () => {
+      unlisten?.();
+    };
+  }, []);
+
+  // 展开浏览列时让停靠子窗口可见
+  useEffect(() => {
+    if (sidebarTab === "browser") {
+      void browserSetVisible(true);
+    }
+  }, [sidebarTab]);
+
+  // 浏览列宽度拖拽（300px 至主窗口宽 60%）
+  useEffect(() => {
+    if (!isResizingBrowser) return;
+
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+
+    const onMouseMove = (e: globalThis.MouseEvent) => {
+      const maxWidth = Math.max(window.innerWidth * 0.6, 300);
+      const next = Math.min(Math.max(window.innerWidth - e.clientX, 300), maxWidth);
+      browserWidthRef.current = next;
+      setBrowserWidth(next);
+    };
+    const onMouseUp = () => {
+      setIsResizingBrowser(false);
+      void browserSetWidth(browserWidthRef.current).catch(() => {});
+    };
+
+    document.addEventListener("mousemove", onMouseMove);
+    document.addEventListener("mouseup", onMouseUp);
+    return () => {
+      document.removeEventListener("mousemove", onMouseMove);
+      document.removeEventListener("mouseup", onMouseUp);
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+    };
+  }, [isResizingBrowser]);
+
+  // 侧边栏面板选择：浏览器图标展开/收回浏览列，切其他面板时收回浏览列
+  const handleSidebarSelect = useCallback((panel: SidebarPanel) => {
+    if (panel === "browser") {
+      if (sidebarTabRef.current === "browser") {
+        setSidebarTab("directory");
+        void browserSetVisible(false).catch(() => {});
+      } else {
+        setSidebarTab("browser");
+      }
+      return;
+    }
+    setSidebarTab(panel);
+    void browserSetVisible(false).catch(() => {});
+  }, []);
+
+  // 笔记正文链接 → 侧边栏浏览器
+  const openBrowserTab = useCallback((href: string) => {
+    setSidebarTab("browser");
+    void browserOpen(href).catch(() => {});
+  }, []);
+
+  // 浏览器快捷键（浏览列展开时）：Ctrl+W 关标签、Ctrl+Tab 切换、Ctrl+L 聚焦地址栏
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (sidebarTabRef.current !== "browser") return;
+      if (!(event.ctrlKey || event.metaKey)) return;
+
+      const target = event.target as HTMLElement | null;
+      const isEditing =
+        target?.tagName === "INPUT" || target?.tagName === "TEXTAREA" || target?.isContentEditable;
+
+      if (event.key.toLowerCase() === "w") {
+        if (isEditing) return;
+        event.preventDefault();
+        const tabId = browserStateRef.current.activeTabId;
+        if (tabId) void browserClose(tabId).catch(() => {});
+      } else if (event.key.toLowerCase() === "l") {
+        event.preventDefault();
+        browserPanelRef.current?.focusAddressBar();
+      } else if (event.key === "Tab") {
+        if (isEditing) return;
+        event.preventDefault();
+        const tabs = browserStateRef.current.tabs;
+        if (tabs.length === 0) return;
+        const activeIndex = tabs.findIndex((tab) => tab.active);
+        const nextIndex = event.shiftKey
+          ? (activeIndex - 1 + tabs.length) % tabs.length
+          : (activeIndex + 1) % tabs.length;
+        void browserActivate(tabs[nextIndex].tabId).catch(() => {});
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
   const handlePinEntry = async () => {
     if (!selectedId) return;
     const isPinned = pinnedTileIds.has(selectedId);
@@ -2029,7 +2163,7 @@ export function MainWindow({
         <div className="relative z-10 flex flex-1 min-h-0">
           <LeftIconSidebar
             activePanel={sidebarTab}
-            onSelectPanel={setSidebarTab}
+            onSelectPanel={handleSidebarSelect}
             onSettings={() => void toggleSettingsTab()}
           />
           <div
@@ -2038,7 +2172,7 @@ export function MainWindow({
             }`}
             style={sidebarCollapsed ? undefined : { width: `${sidebarWidth}px` }}
           >
-            {sidebarTab !== "git" && (
+            {sidebarTab !== "git" && sidebarTab !== "browser" && (
               <div className="px-3 pt-3 pb-2 shrink-0">
                 <div className="flex items-center gap-2 px-2.5 h-8 rounded-lg bg-paper-warm/80 border border-paper-deep/40 focus-within:border-bamboo/30 focus-within:bg-cloud transition-all">
                   <svg
@@ -3148,6 +3282,7 @@ export function MainWindow({
                       initialMode={
                         settingsConfig?.defaultViewMode as "wysiwyg" | "source" | "read" | undefined
                       }
+                      onExternalLink={openBrowserTab}
                     />
                   )}
                 </div>
@@ -3187,6 +3322,35 @@ export function MainWindow({
               </>
             )}
           </div>
+
+          {/* 浏览器侧边栏：浏览列 + 拖拽分隔条 */}
+          {sidebarTab === "browser" && (
+            <>
+              <div
+                className={`w-1 shrink-0 cursor-col-resize group relative ${isResizingBrowser ? "bg-bamboo/30" : "hover:bg-bamboo/20"} transition-colors`}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  setIsResizingBrowser(true);
+                }}
+              >
+                <div
+                  className={`absolute inset-y-0 -left-1 -right-1 ${isResizingBrowser ? "" : "group-hover:bg-bamboo/5"}`}
+                />
+              </div>
+              <div
+                className="shrink-0 flex flex-col min-h-0 border-l border-paper-deep/30 bg-paper/40"
+                style={{ width: `${browserWidth}px` }}
+              >
+                <BrowserPanel
+                  state={browserState}
+                  ref={browserPanelRef}
+                  onRetract={() => {
+                    setSidebarTab("directory");
+                  }}
+                />
+              </div>
+            </>
+          )}
         </div>
       </div>
       {noteMenu && noteMenuTarget && (

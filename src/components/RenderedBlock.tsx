@@ -11,6 +11,8 @@ export interface RenderedBlockProps {
   onChange: (newSource: string) => void;
   onBlur: () => void;
   fontSize: number;
+  /** 外部 http(s) 链接点击回调，透传给 MarkdownPreview。 */
+  onExternalLink?: (href: string) => void;
 }
 
 export function RenderedBlock({
@@ -20,6 +22,7 @@ export function RenderedBlock({
   onChange,
   onBlur,
   fontSize,
+  onExternalLink,
 }: RenderedBlockProps) {
   const editorRef = useRef<MarkdownEditorHandle>(null);
 
@@ -61,7 +64,7 @@ export function RenderedBlock({
         }
       }}
     >
-      <MarkdownPreview content={block.source} fontSize={fontSize} />
+      <MarkdownPreview content={block.source} fontSize={fontSize} onExternalLink={onExternalLink} />
     </div>
   );
 }

@@ -45,6 +45,8 @@ export interface WysiwygEditorProps {
   onScrollTop?: (scrollTop: number) => void;
   /** Initial editor mode — defaults to "wysiwyg" when undefined */
   initialMode?: WysiwygMode;
+  /** 外部 http(s) 链接点击回调，透传给 MarkdownPreview/RenderedBlock。 */
+  onExternalLink?: (href: string) => void;
 }
 
 /** Compute which heading is at or above the top of the scroll container */
@@ -91,6 +93,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
       onActiveHeadingChange,
       onScrollTop,
       initialMode = "wysiwyg",
+      onExternalLink,
     },
     ref,
   ) {
@@ -406,7 +409,11 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
           ) : mode === "read" ? (
             <div ref={readingScrollRef} className="overflow-y-auto h-full">
               {content ? (
-                <MarkdownPreview content={content} fontSize={fontSize} />
+                <MarkdownPreview
+                  content={content}
+                  fontSize={fontSize}
+                  onExternalLink={onExternalLink}
+                />
               ) : (
                 <p className="text-ink-ghost leading-[1.9] text-center pt-8">
                   {placeholder ||
@@ -431,6 +438,7 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
                     onChange={(newSource) => handleBlockChange(index, newSource)}
                     onBlur={() => setEditingBlockIndex(null)}
                     fontSize={fontSize}
+                    onExternalLink={onExternalLink}
                   />
                 ))
               )}

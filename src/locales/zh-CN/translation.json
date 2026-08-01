@@ -142,6 +142,7 @@
       "importMarkdown": "导入 Markdown",
       "newNote": "新建笔记",
       "searchPlaceholder": "搜索笔记…",
+      "tabBrowser": "浏览器",
       "tabDirectory": "目录",
       "tabOutline": "大纲",
       "tabGit": "Git 版本管理"
@@ -599,6 +600,44 @@
       "closeRight": "关闭右侧",
       "closeAll": "关闭所有",
       "closeSaved": "关闭已保存"
+    }
+  },
+  "browser": {
+    "tab": {
+      "close": "关闭标签",
+      "new": "新标签"
+    },
+    "toolbar": {
+      "addressPlaceholder": "输入网址或搜索…",
+      "back": "后退",
+      "forward": "前进",
+      "reload": "刷新",
+      "stop": "停止",
+      "zoomIn": "放大字号",
+      "zoomOut": "缩小字号"
+    },
+    "menu": {
+      "closeAll": "关闭全部",
+      "copyUrl": "复制网址",
+      "floating": "浮窗显示",
+      "more": "更多",
+      "openInSystem": "在系统浏览器打开",
+      "retract": "收回",
+      "saveAsNote": "存为笔记",
+      "unfloat": "停靠回面板"
+    },
+    "empty": {
+      "hint": "输入网址或关键词开始浏览",
+      "title": "浏览器"
+    },
+    "content": {
+      "hint": "网页内容在右侧停靠窗口中显示"
+    },
+    "toast": {
+      "copyFailed": "复制网址失败",
+      "noteSaved": "已存为笔记",
+      "saveFailed": "存为笔记失败",
+      "urlCopied": "网址已复制"
     }
   }
 }

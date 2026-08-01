@@ -1,4 +1,5 @@
 pub mod ai;
+pub mod browser;
 pub mod file_viewer;
 pub mod git;
 pub mod notes;

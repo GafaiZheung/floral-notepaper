@@ -406,11 +406,10 @@ fn copy_background_image(_app: AppHandle, source_path: String) -> Result<String,
 }
 
 #[tauri::command]
-fn config_save(app: AppHandle, mut config: AppConfig) -> Result<AppConfig, AppError> {
-    #[cfg(target_os = "macos")]
-    {
-        config.close_to_tray = true;
-    }
+fn config_save(app: AppHandle, config: AppConfig) -> Result<AppConfig, AppError> {
+    // 移除 macOS 强制 close_to_tray=true：设置开关应全平台一致生效。
+    // （关闭到托盘由 desktop::handle_window_event 按配置决定，Dock 图标由
+    //   desktop::sync_macos_dock_icon 按主窗口可见性同步。）
 
     let store = default_store()?;
     let previous = store.load_config()?;
@@ -558,6 +557,111 @@ async fn open_note_in_editor(app: AppHandle, note_id: String) -> Result<(), AppE
 #[tauri::command]
 fn take_startup_file() -> Option<String> {
     desktop::take_startup_file()
+}
+
+// --- 浏览器侧边栏 ---
+
+#[tauri::command]
+fn browser_get_state(app: AppHandle) -> services::browser::BrowserState {
+    services::browser::get_state(&app)
+}
+
+#[tauri::command]
+async fn browser_open(
+    app: AppHandle,
+    url: String,
+) -> Result<services::browser::BrowserState, AppError> {
+    services::browser::open(app, url).await
+}
+
+#[tauri::command]
+async fn browser_activate(
+    app: AppHandle,
+    tab_id: String,
+) -> Result<services::browser::BrowserState, AppError> {
+    services::browser::activate(app, tab_id).await
+}
+
+#[tauri::command]
+async fn browser_close(
+    app: AppHandle,
+    tab_id: String,
+) -> Result<services::browser::BrowserState, AppError> {
+    services::browser::close(app, tab_id).await
+}
+
+#[tauri::command]
+async fn browser_navigate(
+    app: AppHandle,
+    tab_id: String,
+    url: String,
+) -> Result<services::browser::BrowserState, AppError> {
+    services::browser::navigate(app, tab_id, url).await
+}
+
+#[tauri::command]
+async fn browser_back(
+    app: AppHandle,
+    tab_id: String,
+) -> Result<services::browser::BrowserState, AppError> {
+    services::browser::back(app, tab_id).await
+}
+
+#[tauri::command]
+async fn browser_forward(
+    app: AppHandle,
+    tab_id: String,
+) -> Result<services::browser::BrowserState, AppError> {
+    services::browser::forward(app, tab_id).await
+}
+
+#[tauri::command]
+async fn browser_reload(
+    app: AppHandle,
+    tab_id: String,
+) -> Result<services::browser::BrowserState, AppError> {
+    services::browser::reload(app, tab_id).await
+}
+
+#[tauri::command]
+async fn browser_stop(
+    app: AppHandle,
+    tab_id: String,
+) -> Result<services::browser::BrowserState, AppError> {
+    services::browser::stop(app, tab_id).await
+}
+
+#[tauri::command]
+async fn browser_set_zoom(
+    app: AppHandle,
+    tab_id: String,
+    zoom: f64,
+) -> Result<services::browser::BrowserState, AppError> {
+    services::browser::set_zoom(app, tab_id, zoom).await
+}
+
+#[tauri::command]
+async fn browser_toggle_float(
+    app: AppHandle,
+    tab_id: String,
+) -> Result<services::browser::BrowserState, AppError> {
+    services::browser::toggle_float(app, tab_id).await
+}
+
+#[tauri::command]
+async fn browser_set_width(
+    app: AppHandle,
+    width: f64,
+) -> Result<services::browser::BrowserState, AppError> {
+    services::browser::set_width(app, width).await
+}
+
+#[tauri::command]
+async fn browser_set_visible(
+    app: AppHandle,
+    visible: bool,
+) -> Result<services::browser::BrowserState, AppError> {
+    services::browser::set_visible(app, visible).await
 }
 
 fn cli_version_or_help_requested() -> bool {
@@ -955,7 +1059,16 @@ pub fn run() {
                 }
             }
             #[cfg(target_os = "macos")]
-            app.set_activation_policy(tauri::ActivationPolicy::Accessory);
+            {
+                // --silent 启动（仅菜单栏托盘）→ Accessory（无 Dock 图标）；
+                // 正常启动 → Regular（Dock 图标随主窗口可见性由 desktop::sync_macos_dock_icon 管理）。
+                let silent = std::env::args().any(|a| a == "--silent");
+                app.set_activation_policy(if silent {
+                    tauri::ActivationPolicy::Accessory
+                } else {
+                    tauri::ActivationPolicy::Regular
+                });
+            }
             Ok(())
         })
         .on_window_event(desktop::handle_window_event)
@@ -1007,6 +1120,19 @@ pub fn run() {
             ai_generate_title,
             ai_format_note,
             toggle_tile_window,
+            browser_get_state,
+            browser_open,
+            browser_activate,
+            browser_close,
+            browser_navigate,
+            browser_back,
+            browser_forward,
+            browser_reload,
+            browser_stop,
+            browser_set_zoom,
+            browser_toggle_float,
+            browser_set_width,
+            browser_set_visible,
             updater::commands::update_status,
             updater::commands::update_settings_get,
             updater::commands::update_settings_save,

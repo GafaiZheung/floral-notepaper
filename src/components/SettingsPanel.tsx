@@ -161,13 +161,11 @@ export function SettingsPanel({ config, onChange, onMigrateDataDir, onClose }: S
         </section>
 
         <section className="space-y-2">
-          {!/Mac/.test(navigator.platform) && (
-            <ToggleRow
-              label={t("settings.closeToTray", { defaultValue: "关闭到托盘" })}
-              checked={config.closeToTray}
-              onChange={(checked) => setConfigValue("closeToTray", checked)}
-            />
-          )}
+          <ToggleRow
+            label={t("settings.closeToTray", { defaultValue: "关闭到托盘" })}
+            checked={config.closeToTray}
+            onChange={(checked) => setConfigValue("closeToTray", checked)}
+          />
           <ToggleRow
             label={t("settings.autostart", { defaultValue: "开机自启" })}
             checked={config.autostart}

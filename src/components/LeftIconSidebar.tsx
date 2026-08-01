@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 
-export type SidebarPanel = "directory" | "outline" | "git";
+export type SidebarPanel = "directory" | "outline" | "git" | "browser";
 
 interface LeftIconSidebarProps {
   activePanel: SidebarPanel;
@@ -91,6 +91,32 @@ export function LeftIconSidebar({ activePanel, onSelectPanel, onSettings }: Left
           <circle cx="18" cy="6" r="3" />
           <path d="M18 9v1a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2V9" />
           <path d="M12 3v4" />
+        </svg>
+      </button>
+
+      {/* Browser icon */}
+      <button
+        onClick={() => onSelectPanel("browser")}
+        className={`w-9 h-9 flex items-center justify-center rounded-lg mb-1 transition-all cursor-pointer ${
+          activePanel === "browser"
+            ? "text-bamboo bg-bamboo-mist/60 shadow-sm"
+            : "text-ink-ghost hover:text-ink-faint hover:bg-paper-warm"
+        }`}
+        title={t("main.sidebar.tabBrowser", { defaultValue: "浏览器" })}
+      >
+        <svg
+          width="18"
+          height="18"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <circle cx="12" cy="12" r="10" />
+          <path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20" />
+          <path d="M2 12h20" />
         </svg>
       </button>
 

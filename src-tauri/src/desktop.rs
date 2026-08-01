@@ -1019,6 +1019,10 @@ fn clear_hidden_window_state(app: &AppHandle) {
     };
 
     for label in &labels {
+        // 浏览器子窗口只并入隐藏集合，恢复时不关闭（标签页需保留）。
+        if label.starts_with("browser-") {
+            continue;
+        }
         if label.starts_with("notepad-") || label.starts_with("tile-") {
             if let Some(window) = app.get_webview_window(label) {
                 let _ = window.close();
@@ -1137,6 +1141,7 @@ pub fn take_startup_file() -> Option<String> {
 pub fn setup_desktop(app: &mut App) -> Result<(), Box<dyn Error>> {
     app.manage(RuntimeState::default());
     app.manage(NotepadPool::default());
+    app.manage(crate::services::browser::BrowserRegistry::default());
     app.on_menu_event(|app, event| {
         if let Err(error) = handle_app_menu_event(app, event.id.as_ref()) {
             eprintln!("failed to handle app menu event {:?}: {error}", event.id);
@@ -1173,6 +1178,9 @@ pub fn handle_window_event(window: &Window, event: &WindowEvent) {
                 .app_handle()
                 .emit("tile-window-closed", note_id.to_string());
         }
+        if window.label().starts_with("browser-") {
+            crate::services::browser::handle_window_destroyed(window.app_handle(), window.label());
+        }
         return;
     }
 
@@ -1188,13 +1196,25 @@ pub fn handle_window_event(window: &Window, event: &WindowEvent) {
         return;
     }
 
+    // 浏览器停靠同步：主窗口移动/缩放/聚焦时，把可见停靠子窗口贴到右缘。
+    if matches!(event, WindowEvent::Moved(_))
+        || matches!(event, WindowEvent::Resized(_))
+        || matches!(event, WindowEvent::Focused(_))
+    {
+        let app = window.app_handle();
+        crate::services::browser::sync_dock(app);
+        if matches!(event, WindowEvent::Focused(_)) {
+            // 恢复托盘隐藏/焦点返回时，隐藏非活跃停靠标签并提升层级（Windows）。
+            crate::services::browser::sync_window_visibility(app);
+            crate::services::browser::raise_docked_windows(app);
+        }
+        return;
+    }
+
     let WindowEvent::CloseRequested { api, .. } = event else {
         return;
     };
 
-    #[cfg(target_os = "macos")]
-    let close_to_tray = true;
-    #[cfg(not(target_os = "macos"))]
     let close_to_tray = close_to_tray_enabled();
 
     match main_window_close_action(app_is_exiting(window.app_handle()), close_to_tray) {
@@ -1209,6 +1229,8 @@ pub fn handle_window_event(window: &Window, event: &WindowEvent) {
             if let Err(error) = window.hide() {
                 eprintln!("failed to hide main window to tray: {error}");
             }
+            // 主窗口已隐藏（托盘模式）：隐藏 Dock 图标（macOS）。
+            sync_macos_dock_icon(window.app_handle());
         }
         MainWindowCloseAction::ExitApp => {
             api.prevent_close();
@@ -1406,6 +1428,8 @@ pub fn show_main_window(app: &AppHandle) -> Result<(), AppError> {
         window.unminimize()?;
         window.show()?;
         window.set_focus()?;
+        // 主窗口显示：恢复 Dock 图标（macOS）。
+        sync_macos_dock_icon(app);
         return Ok(());
     }
 
@@ -1434,7 +1458,28 @@ pub fn show_main_window(app: &AppHandle) -> Result<(), AppError> {
         window.show()?;
         window.set_focus()?;
     }
+    sync_macos_dock_icon(app);
     Ok(())
+}
+
+/// macOS 上按主窗口可见性同步 activation policy：
+/// 主窗口可见 → Regular（Dock 显示应用图标）；主窗口全部隐藏（托盘模式）→ Accessory（仅菜单栏）。
+/// 其他平台为 no-op。
+pub fn sync_macos_dock_icon(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    {
+        let visible = app
+            .get_webview_window(MAIN_WINDOW_LABEL)
+            .is_some_and(|window| window.is_visible().unwrap_or(false));
+        let policy = if visible {
+            tauri::ActivationPolicy::Regular
+        } else {
+            tauri::ActivationPolicy::Accessory
+        };
+        if let Err(error) = app.set_activation_policy(policy) {
+            eprintln!("failed to sync activation policy: {error}");
+        }
+    }
 }
 
 fn open_notepad_window_now(
@@ -1478,7 +1523,7 @@ fn open_notepad_window_now(
 /// 后台常驻内存；激活取出时恢复 Normal。脚本与事件监听不受影响，
 /// 因此不影响窗口池的呼出速度。
 #[cfg(target_os = "windows")]
-fn set_webview_memory_usage_level(window: &tauri::WebviewWindow, low: bool) {
+pub(crate) fn set_webview_memory_usage_level(window: &tauri::WebviewWindow, low: bool) {
     use webview2_com::Microsoft::Web::WebView2::Win32::{
         ICoreWebView2_19, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL,
         COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_LOW, COREWEBVIEW2_MEMORY_USAGE_TARGET_LEVEL_NORMAL,
@@ -1504,7 +1549,7 @@ fn set_webview_memory_usage_level(window: &tauri::WebviewWindow, low: bool) {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn set_webview_memory_usage_level(_window: &tauri::WebviewWindow, _low: bool) {}
+pub(crate) fn set_webview_memory_usage_level(_window: &tauri::WebviewWindow, _low: bool) {}
 
 fn activate_pooled_notepad(app: &AppHandle, bounds: Option<WindowBounds>) -> Option<String> {
     let pool = app.try_state::<NotepadPool>()?;
@@ -1918,7 +1963,6 @@ fn load_config() -> Result<AppConfig, AppError> {
     default_store()?.load_config()
 }
 
-#[cfg(not(target_os = "macos"))]
 fn close_to_tray_enabled() -> bool {
     load_config()
         .map(|config| config.close_to_tray)
@@ -2391,30 +2435,41 @@ fn apply_autostart(_app: &AppHandle, _enabled: bool) -> Result<(), Box<dyn Error
 }
 
 #[cfg(target_os = "macos")]
-fn apply_macos_window_behavior(window: &WebviewWindow, is_auxiliary: bool) {
+pub(crate) fn apply_macos_window_behavior(window: &WebviewWindow, is_auxiliary: bool) {
     use objc2::runtime::NSObject;
 
-    let ns_window_ptr: *mut NSObject = match window.ns_window() {
-        Ok(w) => w as *mut NSObject,
-        Err(e) => {
-            eprintln!("failed to get NSWindow for behavior update: {e}");
-            return;
+    // AppKit 窗口 API 必须在主线程调用：
+    // 本函数可能从 tauri async command（tokio 工作线程）进入，
+    // 直接在非主线程 msg_send 会触发 WindowManagement 断言（EXC_BREAKPOINT）。
+    let app = window.app_handle();
+    let window = window.clone();
+    let _ = app.run_on_main_thread(move || {
+        let ns_window_ptr: *mut NSObject = match window.ns_window() {
+            Ok(w) => w as *mut NSObject,
+            Err(e) => {
+                eprintln!("failed to get NSWindow for behavior update: {e}");
+                return;
+            }
+        };
+
+        // 仅使用被 AppKit 接受的辅助窗口组合：
+        // CanJoinAllSpaces(1<<0) | Transient(1<<3) | FullScreenAuxiliary(1<<8)。
+        // 此前包含 MoveToActiveSpace(1<<1) / CanJoinAllApplications(1<<13)，
+        // 在 macOS 14+ 上 setCollectionBehavior: 触发 EXC_BREAKPOINT 断言导致进程崩溃。
+        let behavior: i64 = if is_auxiliary {
+            (1 << 0) | (1 << 3) | (1 << 8)
+        } else {
+            0
+        };
+
+        unsafe {
+            let _: () = msg_send![ns_window_ptr, setCollectionBehavior: behavior];
         }
-    };
-
-    let behavior: i64 = if is_auxiliary {
-        (1 << 1) | (1 << 13) | (1 << 8)
-    } else {
-        0
-    };
-
-    unsafe {
-        let _: () = msg_send![ns_window_ptr, setCollectionBehavior: behavior];
-    }
+    });
 }
 
 #[cfg(not(target_os = "macos"))]
-fn apply_macos_window_behavior(_window: &WebviewWindow, _is_auxiliary: bool) {}
+pub(crate) fn apply_macos_window_behavior(_window: &WebviewWindow, _is_auxiliary: bool) {}
 
 #[cfg(desktop)]
 pub fn start_shortcut_recording(app: &AppHandle) -> Result<(), Box<dyn Error>> {
@@ -2904,6 +2959,12 @@ mod tests {
         assert!(windows
             .iter()
             .any(|window| window.as_str() == Some("notepad-*")));
+        assert!(windows
+            .iter()
+            .any(|window| window.as_str() == Some("tile-*")));
+        assert!(windows
+            .iter()
+            .any(|window| window.as_str() == Some("browser-*")));
         assert!(permissions
             .iter()
             .any(|permission| permission.as_str() == Some("core:window:allow-set-focus")));

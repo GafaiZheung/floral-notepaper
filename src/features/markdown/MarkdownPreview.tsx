@@ -72,6 +72,11 @@ interface MarkdownPreviewProps {
   fontSize?: number;
   renderHtml?: boolean;
   imageBaseDir?: string;
+  /**
+   * 外部 http(s) 链接点击回调。缺省时用系统浏览器打开；
+   * 传入后（如侧边栏浏览器）链接改走该回调。
+   */
+  onExternalLink?: (href: string) => void;
 }
 
 const remarkPlugins = [remarkBreaks, remarkGfm, remarkMath, remarkAlerts];
@@ -254,24 +259,6 @@ const staticComponents: Components = {
 
     return <CodeBlock language={language}>{children}</CodeBlock>;
   },
-  a: ({ href, children }) => (
-    <a
-      href={href}
-      onClick={(e) => {
-        e.preventDefault();
-        if (!href) return;
-        if (/^https?:\/\//i.test(href)) {
-          openUrl(href);
-        } else if (href.startsWith("#")) {
-          const id = decodeURIComponent(href.slice(1));
-          document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
-        }
-      }}
-      className="text-bamboo hover:text-bamboo-light underline underline-offset-2 cursor-pointer"
-    >
-      {children}
-    </a>
-  ),
   table: ({ children }) => (
     <div className="my-3 overflow-x-auto">
       <table className="w-full text-[0.93em] border-collapse border border-paper-deep/50">
@@ -292,16 +279,47 @@ const staticComponents: Components = {
   ),
 };
 
+/**
+ * 外部 http(s) 链接路由：传入 onExternalLink（如侧边栏浏览器）则走回调，
+ * 否则系统浏览器打开。
+ */
+export function routeExternalLink(href: string, onExternalLink?: (href: string) => void) {
+  if (onExternalLink) {
+    onExternalLink(href);
+  } else {
+    openUrl(href);
+  }
+}
+
 export function MarkdownPreview({
   content,
   fontSize = 14,
   renderHtml = false,
   imageBaseDir,
+  onExternalLink,
 }: MarkdownPreviewProps) {
   const { t } = useTranslation();
   const components = useMemo<Components>(
     () => ({
       ...staticComponents,
+      a: ({ href, children }) => (
+        <a
+          href={href}
+          onClick={(e) => {
+            e.preventDefault();
+            if (!href) return;
+            if (/^https?:\/\//i.test(href)) {
+              routeExternalLink(href, onExternalLink);
+            } else if (href.startsWith("#")) {
+              const id = decodeURIComponent(href.slice(1));
+              document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
+            }
+          }}
+          className="text-bamboo hover:text-bamboo-light underline underline-offset-2 cursor-pointer"
+        >
+          {children}
+        </a>
+      ),
       img: ({ src, alt, ...props }) => {
         const resolvedSrc = resolveMarkdownImageSrc(src, imageBaseDir, convertFileSrc);
         return (
@@ -315,7 +333,7 @@ export function MarkdownPreview({
         );
       },
     }),
-    [imageBaseDir],
+    [imageBaseDir, onExternalLink],
   );
   return (
     <div className="font-body markdown-selectable" style={{ fontSize: `${fontSize}px` }}>

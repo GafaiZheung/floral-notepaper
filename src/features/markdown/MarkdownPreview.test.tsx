@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, test, vi } from "vitest";
-import { MarkdownPreview } from "./MarkdownPreview";
+import { MarkdownPreview, routeExternalLink } from "./MarkdownPreview";
+import { openUrl } from "@tauri-apps/plugin-opener";
 
 vi.mock("@tauri-apps/plugin-opener", () => ({
   openUrl: vi.fn(),
@@ -28,5 +29,22 @@ describe("MarkdownPreview", () => {
     expect(markup).toContain("markdown-code-scroll");
     expect(preCloseIndex).toBeGreaterThan(-1);
     expect(buttonIndex).toBeGreaterThan(preCloseIndex);
+  });
+
+  test("routes http links through onExternalLink when provided", () => {
+    const onExternalLink = vi.fn();
+    routeExternalLink("https://example.com", onExternalLink);
+    expect(onExternalLink).toHaveBeenCalledWith("https://example.com");
+    expect(openUrl).not.toHaveBeenCalled();
+  });
+
+  test("falls back to openUrl when onExternalLink is absent", () => {
+    const onExternalLink = vi.fn();
+    routeExternalLink("https://example.com", undefined);
+    expect(openUrl).toHaveBeenCalledWith("https://example.com");
+    expect(onExternalLink).not.toHaveBeenCalled();
+
+    const markup = renderToStaticMarkup(<MarkdownPreview content="[链接](https://example.com)" />);
+    expect(markup).toContain('href="https://example.com"');
   });
 });
