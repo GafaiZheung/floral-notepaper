@@ -4,7 +4,6 @@ use std::{collections::HashMap, sync::Mutex};
 use tauri::{
     async_runtime,
     webview::{NewWindowResponse, PageLoadEvent},
-    window::WindowBuilder,
     AppHandle, Emitter, LogicalSize, Manager, PhysicalPosition, PhysicalSize, Url, Webview,
     WebviewBuilder, WebviewUrl, Window,
 };
@@ -14,9 +13,6 @@ use uuid::Uuid;
 pub const BROWSER_EVENT: &str = "browser-state-changed";
 /// 网页 WebView 请求 UI 聚焦地址栏时使用的定向事件。
 pub const BROWSER_FOCUS_ADDRESS_EVENT: &str = "browser-focus-address";
-/// 网页子 WebView 的无边框内部宿主。它没有自己的应用 UI，
-/// 浏览器标签与工具栏直接渲染在 main WebView 扩展出的右侧区域。
-pub const BROWSER_HOST_LABEL: &str = "browser-content-host";
 const MAIN_WEBVIEW_LABEL: &str = "main";
 
 const CONTENT_LABEL_PREFIX: &str = "browser-content-";
@@ -407,10 +403,6 @@ fn content_webview(app: &AppHandle, tab_id: &str) -> Option<Webview> {
     app.get_webview(&content_label(tab_id))
 }
 
-fn host_window(app: &AppHandle) -> Option<Window> {
-    app.get_window(BROWSER_HOST_LABEL)
-}
-
 fn clamp_zoom(zoom: f64) -> f64 {
     (zoom.clamp(MIN_ZOOM, MAX_ZOOM) * 10.0).round() / 10.0
 }
@@ -438,9 +430,23 @@ fn normalize_external_url(url: &str) -> Result<String, AppError> {
     }
 }
 
-/// 无边框宿主内部的网页 WebView 总是填满宿主。
-fn content_rect_for(host_width: u32, host_height: u32) -> (i32, i32, u32, u32) {
-    (0, 0, host_width.max(1), host_height.max(1))
+/// 计算主原生窗口中网页子 WebView 的物理坐标。标签栏与工具栏仍由
+/// main WebView 绘制，网页只覆盖右侧延伸区的内容部分。
+fn content_rect_for(
+    window_width: u32,
+    window_height: u32,
+    editor_width: u32,
+    scale: f64,
+) -> (i32, i32, u32, u32) {
+    let border = (CONTENT_BORDER * scale).round().max(1.0) as u32;
+    let top = (BROWSER_CHROME_HEIGHT * scale).round().max(1.0) as u32;
+    let right = (RESIZE_HANDLE_WIDTH * scale).round().max(1.0) as u32;
+    let x = editor_width.saturating_add(border);
+    let width = window_width.saturating_sub(x.saturating_add(right)).max(1);
+    let height = window_height
+        .saturating_sub(top.saturating_add(border))
+        .max(1);
+    (x as i32, top as i32, width, height)
 }
 
 fn fitted_extension_width(preferred: u32, main_width: u32, work_width: u32) -> u32 {
@@ -477,31 +483,6 @@ fn fitted_main_position(
     };
 
     PhysicalPosition::new(left as i32, top as i32)
-}
-
-fn ensure_host(app: &AppHandle) -> Result<Window, AppError> {
-    if let Some(host) = host_window(app) {
-        return Ok(host);
-    }
-
-    let main = app
-        .get_window(MAIN_WEBVIEW_LABEL)
-        .ok_or_else(|| app_error("window_not_found", "main window unavailable"))?;
-    let builder = WindowBuilder::new(app, BROWSER_HOST_LABEL)
-        .title("")
-        .inner_size(1.0, 1.0)
-        .resizable(false)
-        .decorations(false)
-        .transparent(true)
-        .shadow(false)
-        .skip_taskbar(true)
-        .visible(false)
-        .focused(false)
-        .parent(&main)?;
-
-    let host = builder.build()?;
-    layout_content_host(app);
-    Ok(host)
 }
 
 fn shortcut_initialization_script() -> &'static str {
@@ -565,7 +546,7 @@ fn handle_shortcut_navigation(app: &AppHandle, tab_id: &str, url: &Url) -> bool 
 
 fn create_content_webview(
     app: &AppHandle,
-    host: &Window,
+    main: &Window,
     tab_id: &str,
     url: &str,
 ) -> Result<Webview, AppError> {
@@ -636,9 +617,16 @@ fn create_content_webview(
             }
         });
 
-    let size = host.inner_size()?;
-    let (x, y, width, height) = content_rect_for(size.width, size.height);
-    let webview = host.add_child(
+    let registry = app
+        .try_state::<BrowserRegistry>()
+        .ok_or_else(|| app_error("state", "browser registry unavailable"))?;
+    let size = main.inner_size()?;
+    let scale = main.scale_factor().unwrap_or(1.0);
+    let editor_width = (registry.main_width().unwrap_or(MAIN_MIN_WIDTH) * scale)
+        .round()
+        .max(1.0) as u32;
+    let (x, y, width, height) = content_rect_for(size.width, size.height, editor_width, scale);
+    let webview = main.add_child(
         builder,
         PhysicalPosition::new(x, y),
         PhysicalSize::new(width, height),
@@ -648,29 +636,6 @@ fn create_content_webview(
 }
 
 fn layout_content_webviews(app: &AppHandle) {
-    let Some(host) = host_window(app) else {
-        return;
-    };
-    let Ok(size) = host.inner_size() else {
-        return;
-    };
-    let (x, y, width, height) = content_rect_for(size.width, size.height);
-    let entries = app
-        .try_state::<BrowserRegistry>()
-        .map(|registry| registry.entries())
-        .unwrap_or_default();
-    for entry in entries {
-        if let Some(webview) = content_webview(app, &entry.tab_id) {
-            let _ = webview.set_position(PhysicalPosition::new(x, y));
-            let _ = webview.set_size(PhysicalSize::new(width, height));
-        }
-    }
-}
-
-fn layout_content_host(app: &AppHandle) {
-    let Some(host) = host_window(app) else {
-        return;
-    };
     let Some(main) = app.get_window(MAIN_WEBVIEW_LABEL) else {
         return;
     };
@@ -678,26 +643,21 @@ fn layout_content_host(app: &AppHandle) {
         return;
     };
     let Some(main_width) = registry.main_width() else {
-        let _ = host.hide();
         return;
     };
-    let (Ok(position), Ok(size)) = (main.outer_position(), main.outer_size()) else {
+    let Ok(size) = main.inner_size() else {
         return;
     };
     let scale = main.scale_factor().unwrap_or(1.0);
-    let base = (main_width * scale).round().max(1.0) as u32;
-    let border = (CONTENT_BORDER * scale).round().max(1.0) as u32;
-    let top = (BROWSER_CHROME_HEIGHT * scale).round().max(1.0) as u32;
-    let right = (RESIZE_HANDLE_WIDTH * scale).round().max(1.0) as u32;
-    let width = size.width.saturating_sub(base + border + right).max(1);
-    let height = size.height.saturating_sub(top + border).max(1);
-    let target = PhysicalPosition::new(
-        position.x + base as i32 + border as i32,
-        position.y + top as i32,
-    );
-    let _ = host.set_position(target);
-    let _ = host.set_size(PhysicalSize::new(width, height));
-    layout_content_webviews(app);
+    let editor_width = (main_width * scale).round().max(1.0) as u32;
+    let (x, y, width, height) = content_rect_for(size.width, size.height, editor_width, scale);
+    let entries = registry.entries();
+    for entry in entries {
+        if let Some(webview) = content_webview(app, &entry.tab_id) {
+            let _ = webview.set_position(PhysicalPosition::new(x, y));
+            let _ = webview.set_size(PhysicalSize::new(width, height));
+        }
+    }
 }
 
 fn apply_extension_size(app: &AppHandle) {
@@ -742,10 +702,10 @@ fn apply_extension_size(app: &AppHandle) {
             let _ = main.set_position(target);
         }
     }
-    layout_content_host(app);
+    layout_content_webviews(app);
 }
 
-/// 主窗口移动/缩放时，同步扩展宽度与内部网页宿主。
+/// 主窗口移动/缩放时，同步扩展宽度与同窗口网页子 WebView。
 pub fn sync_dock(app: &AppHandle) {
     let Some(registry) = app.try_state::<BrowserRegistry>() else {
         return;
@@ -764,7 +724,7 @@ pub fn sync_dock(app: &AppHandle) {
         let total = size.width as f64 / scale;
         let base = registry.main_width().unwrap_or(total);
         registry.set_dock_width((total - base).max(1.0));
-        layout_content_host(app);
+        layout_content_webviews(app);
     }
     sync_window_visibility(app);
     emit_state(app);
@@ -772,8 +732,14 @@ pub fn sync_dock(app: &AppHandle) {
 
 /// 主窗口暂时隐藏时隐藏浏览器，但不改变用户的可见意图。
 pub fn hide_with_main(app: &AppHandle) {
-    if let Some(host) = host_window(app) {
-        let _ = host.hide();
+    let entries = app
+        .try_state::<BrowserRegistry>()
+        .map(|registry| registry.entries())
+        .unwrap_or_default();
+    for entry in entries {
+        if let Some(webview) = content_webview(app, &entry.tab_id) {
+            let _ = webview.hide();
+        }
     }
 }
 
@@ -817,8 +783,8 @@ pub fn restore_with_main(app: &AppHandle) {
     }
 }
 
-/// 只显示活跃标签的网页子 WebView；空白页时宿主整体隐藏，
-/// 露出 main WebView 中的欢迎页。
+/// 只显示活跃标签的同窗口网页子 WebView；空白页时露出 main
+/// WebView 中的欢迎页。
 pub fn sync_window_visibility(app: &AppHandle) {
     let entries = app
         .try_state::<BrowserRegistry>()
@@ -842,13 +808,8 @@ pub fn sync_window_visibility(app: &AppHandle) {
             let _ = webview.hide();
         }
     }
-    if let Some(host) = host_window(app) {
-        if can_show {
-            layout_content_host(app);
-            let _ = host.show();
-        } else {
-            let _ = host.hide();
-        }
+    if can_show {
+        layout_content_webviews(app);
     }
 }
 
@@ -859,9 +820,8 @@ pub fn raise_docked_windows(app: &AppHandle) {
 /// 由 macOS 应用菜单接管 WebKit 会预先消耗的 Cmd+L。
 /// 其他平台仍使用网页注入脚本。
 fn focus_main_address_now(app: &AppHandle) {
-    // The external page is hosted by a child native window. Focusing only the
-    // main WebView is not sufficient on macOS while that child is the key
-    // window, so make the parent key first and then transfer WebView focus.
+    // Both UI and external content are WebViews in the same native window.
+    // Focus the application UI WebView before selecting the address field.
     if let Some(main_window) = app.get_window(MAIN_WEBVIEW_LABEL) {
         let _ = main_window.set_focus();
     }
@@ -886,8 +846,7 @@ pub fn focus_address_from_native_shortcut(app: &AppHandle) -> bool {
 
     focus_main_address_now(app);
     // Cocoa dispatches menu callbacks while it is still completing menu
-    // tracking. A second focus transfer after the callback returns is required
-    // when the key window was an external-page child window.
+    // tracking, so repeat the transfer once the callback has returned.
     let handle = app.clone();
     std::thread::spawn(move || {
         std::thread::sleep(std::time::Duration::from_millis(60));
@@ -977,14 +936,16 @@ pub async fn open(app: AppHandle, url: String) -> Result<BrowserState, AppError>
     registry.set_visible(true);
     apply_extension_size(&app);
 
-    let host = ensure_host(&app)?;
-    if let Err(error) = create_content_webview(&app, &host, &tab_id, &url) {
+    let main = app
+        .get_window(MAIN_WEBVIEW_LABEL)
+        .ok_or_else(|| app_error("window_not_found", "main window unavailable"))?;
+    if let Err(error) = create_content_webview(&app, &main, &tab_id, &url) {
         registry.remove_tab(&tab_id);
         emit_state(&app);
         return Err(error);
     }
 
-    layout_content_host(&app);
+    layout_content_webviews(&app);
     sync_window_visibility(&app);
     if let Some(webview) = content_webview(&app, &tab_id) {
         let _ = webview.set_focus();
@@ -1195,8 +1156,11 @@ mod tests {
 
     #[test]
     fn computes_content_rect_with_scale() {
-        assert_eq!(content_rect_for(480, 720), (0, 0, 480, 720));
-        assert_eq!(content_rect_for(0, 0), (0, 0, 1, 1));
+        assert_eq!(content_rect_for(1660, 720, 1180, 1.0), (1181, 84, 473, 635));
+        assert_eq!(
+            content_rect_for(3320, 1440, 2360, 2.0),
+            (2362, 168, 946, 1270)
+        );
     }
 
     #[test]
