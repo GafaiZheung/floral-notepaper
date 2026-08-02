@@ -399,10 +399,12 @@ input::placeholder {
 }
 .animate-window-enter {
   animation: window-enter 0.18s cubic-bezier(0.22, 1, 0.36, 1) both;
+  will-change: transform, opacity;
 }
 .animate-window-exit {
   animation: window-exit 0.12s cubic-bezier(0.22, 1, 0.36, 1) forwards;
   pointer-events: none;
+  will-change: transform, opacity;
 }
 .animate-menu-enter {
   animation: menu-enter 0.2s cubic-bezier(0.22, 1, 0.36, 1) forwards;

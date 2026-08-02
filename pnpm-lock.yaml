@@ -53,6 +53,9 @@ importers:
       i18next:
         specifier: ^26.2.0
         version: 26.3.6(typescript@5.8.3)
+      indent-textarea:
+        specifier: ^4.0.0
+        version: 4.0.0
       katex:
         specifier: ^0.16.47
         version: 0.16.47
@@ -95,6 +98,9 @@ importers:
       remark-math:
         specifier: ^6.0.0
         version: 6.0.0
+      unified:
+        specifier: ^11.0.5
+        version: 11.0.5
       unist-util-visit:
         specifier: ^5.1.0
         version: 5.1.0
@@ -111,6 +117,9 @@ importers:
       '@types/katex':
         specifier: ^0.16.8
         version: 0.16.8
+      '@types/mdast':
+        specifier: ^4.0.4
+        version: 4.0.4
       '@types/react':
         specifier: ^19.1.8
         version: 19.2.17
@@ -1469,6 +1478,10 @@ packages:
   import-meta-resolve@4.2.0:
     resolution: {integrity: sha512-Iqv2fzaTQN28s/FwZAoFq0ZSs/7hMAHJVX+w8PZl3cY19Pxk6jFFalxQoIfW2826i/fDLXv8IiEZRIT0lDuWcg==}
 
+  indent-textarea@4.0.0:
+    resolution: {integrity: sha512-klZ+UIsxLAkctG8nci8N+FOnAfoL7VzXdoJvsUwx0trgP9mH291lC0N7QzNGCjX/Rid5C+NCeRobCrhWDDdfKQ==}
+    engines: {node: '>=18'}
+
   inline-style-parser@0.2.7:
     resolution: {integrity: sha512-Nb2ctOyNR8DqQoR0OwRG95uNWIC0C1lCgf5Naz5H6Ji72KZ8OcFZLz2P5sNgwlyoJ8Yif11oMuYs5pBQa86csA==}
 
@@ -2020,6 +2033,10 @@ packages:
   tapable@2.3.3:
     resolution: {integrity: sha512-uxc/zpqFg6x7C8vOE7lh6Lbda8eEL9zmVm/PLeTPBRhh1xCgdWaQ+J1CUieGpIfm2HdtsUpRv+HshiasBMcc6A==}
     engines: {node: '>=6'}
+
+  text-field-edit@4.1.1:
+    resolution: {integrity: sha512-bgvsU5CFdBm8YuDdpLALNqS7Th8bVaRD5cww9VMYaBYab324iN3XOXvuQxTxp9JSPhHHF6zGCDEyF08JUV2hPw==}
+    engines: {node: '>=18'}
 
   tinybench@2.9.0:
     resolution: {integrity: sha512-0+DUvqWMValLmha6lr4kD8iAMK1HzV0/aKnCtWb9v9641TnP/MFb7Pc2bxoxQjTXAErryXVgUOfv2YqNllqGeg==}
@@ -3593,6 +3610,10 @@ snapshots:
 
   import-meta-resolve@4.2.0: {}
 
+  indent-textarea@4.0.0:
+    dependencies:
+      text-field-edit: 4.1.1
+
   inline-style-parser@0.2.7: {}
 
   internmap@1.0.1: {}
@@ -4416,6 +4437,8 @@ snapshots:
   tailwindcss@4.3.3: {}
 
   tapable@2.3.3: {}
+
+  text-field-edit@4.1.1: {}
 
   tinybench@2.9.0: {}
 

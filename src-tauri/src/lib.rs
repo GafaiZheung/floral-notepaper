@@ -22,6 +22,18 @@ use tauri_plugin_opener::OpenerExt;
 const APP_FONT_FAMILY: &str = "HarmonyOS Sans SC";
 const APP_FONT_BYTES: &[u8] = include_bytes!("../../src/assets/fonts/HarmonyOS_Sans_SC.ttf");
 
+/// 在 tokio 阻塞线程池上执行同步 I/O（读/写大文件、JSON 序列化等），
+/// 避免阻塞 Tauri 主线程（窗口事件循环）导致 UI 冻结。
+async fn run_blocking<T, F>(f: F) -> Result<T, AppError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> Result<T, AppError> + Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(f)
+        .await
+        .map_err(|error| AppError::new("taskJoin", error.to_string()))?
+}
+
 #[tauri::command]
 fn app_name() -> Result<String, AppError> {
     let locale = Locale::from_tag(&default_store()?.load_config()?.locale);
@@ -29,94 +41,116 @@ fn app_name() -> Result<String, AppError> {
 }
 
 #[tauri::command]
-fn notes_list() -> Result<Vec<NoteMetadata>, AppError> {
-    default_store()?.list_notes()
+async fn notes_list() -> Result<Vec<NoteMetadata>, AppError> {
+    let store = default_store()?;
+    run_blocking(move || store.list_notes()).await
 }
 
 #[tauri::command]
-fn notes_get(id: String) -> Result<Note, AppError> {
-    default_store()?.read_note(&id)
+async fn notes_get(id: String) -> Result<Note, AppError> {
+    let store = default_store()?;
+    run_blocking(move || store.read_note(&id)).await
 }
 
 #[tauri::command]
-fn notes_create(app: AppHandle, request: SaveNoteRequest) -> Result<Note, AppError> {
-    let note = default_store()?.create_note(request)?;
+async fn notes_create(app: AppHandle, request: SaveNoteRequest) -> Result<Note, AppError> {
+    let store = default_store()?;
+    let note = run_blocking(move || store.create_note(request)).await?;
     let _ = app.emit("notes-changed", ());
     Ok(note)
 }
 
 #[tauri::command]
-fn notes_update(app: AppHandle, id: String, request: SaveNoteRequest) -> Result<Note, AppError> {
-    let note = default_store()?.update_note(&id, request)?;
+async fn notes_update(
+    app: AppHandle,
+    id: String,
+    request: SaveNoteRequest,
+) -> Result<Note, AppError> {
+    let store = default_store()?;
+    let note = run_blocking(move || store.update_note(&id, request)).await?;
     let _ = app.emit("notes-changed", ());
     Ok(note)
 }
 
 #[tauri::command]
-fn notes_delete(app: AppHandle, id: String) -> Result<(), AppError> {
-    default_store()?.delete_note(&id)?;
+async fn notes_delete(app: AppHandle, id: String) -> Result<(), AppError> {
+    let store = default_store()?;
+    run_blocking(move || store.delete_note(&id)).await?;
     let _ = app.emit("notes-changed", ());
     Ok(())
 }
 
 #[tauri::command]
-fn notes_import_markdown(
+async fn notes_import_markdown(
     app: AppHandle,
     path: String,
     category: Option<String>,
 ) -> Result<Note, AppError> {
-    let note = default_store()?
-        .import_markdown_file(&PathBuf::from(path), &category.unwrap_or_default())?;
+    let store = default_store()?;
+    let note = run_blocking(move || {
+        store.import_markdown_file(&PathBuf::from(path), &category.unwrap_or_default())
+    })
+    .await?;
     let _ = app.emit("notes-changed", ());
     Ok(note)
 }
 
 #[tauri::command]
-fn notes_export_markdown(id: String, path: String) -> Result<(), AppError> {
-    default_store()?.export_markdown_file(&id, &PathBuf::from(path))
+async fn notes_export_markdown(id: String, path: String) -> Result<(), AppError> {
+    let store = default_store()?;
+    run_blocking(move || store.export_markdown_file(&id, &PathBuf::from(path))).await
 }
 
 #[tauri::command]
-fn read_external_file(path: String) -> Result<String, AppError> {
-    std::fs::read_to_string(&path).map_err(|e| AppError {
-        code: "io".into(),
-        message: e.to_string(),
-        details: Default::default(),
+async fn read_external_file(path: String) -> Result<String, AppError> {
+    run_blocking(move || {
+        std::fs::read_to_string(&path).map_err(|e| AppError {
+            code: "io".into(),
+            message: e.to_string(),
+            details: Default::default(),
+        })
     })
+    .await
 }
 
 #[tauri::command]
-fn get_file_modified_time(path: String) -> Result<f64, AppError> {
-    let metadata = std::fs::metadata(&path).map_err(|e| AppError {
-        code: "io".into(),
-        message: e.to_string(),
-        details: Default::default(),
-    })?;
-    let modified = metadata.modified().map_err(|e| AppError {
-        code: "io".into(),
-        message: e.to_string(),
-        details: Default::default(),
-    })?;
-    let duration = modified
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    Ok(duration.as_secs_f64() * 1000.0)
-}
-
-#[tauri::command]
-fn save_external_file(path: String, content: String) -> Result<(), AppError> {
-    if let Some(parent) = PathBuf::from(&path).parent() {
-        std::fs::create_dir_all(parent).map_err(|e| AppError {
+async fn get_file_modified_time(path: String) -> Result<f64, AppError> {
+    run_blocking(move || {
+        let metadata = std::fs::metadata(&path).map_err(|e| AppError {
             code: "io".into(),
             message: e.to_string(),
             details: Default::default(),
         })?;
-    }
-    std::fs::write(&path, content).map_err(|e| AppError {
-        code: "io".into(),
-        message: e.to_string(),
-        details: Default::default(),
+        let modified = metadata.modified().map_err(|e| AppError {
+            code: "io".into(),
+            message: e.to_string(),
+            details: Default::default(),
+        })?;
+        let duration = modified
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default();
+        Ok(duration.as_secs_f64() * 1000.0)
     })
+    .await
+}
+
+#[tauri::command]
+async fn save_external_file(path: String, content: String) -> Result<(), AppError> {
+    run_blocking(move || {
+        if let Some(parent) = PathBuf::from(&path).parent() {
+            std::fs::create_dir_all(parent).map_err(|e| AppError {
+                code: "io".into(),
+                message: e.to_string(),
+                details: Default::default(),
+            })?;
+        }
+        std::fs::write(&path, content).map_err(|e| AppError {
+            code: "io".into(),
+            message: e.to_string(),
+            details: Default::default(),
+        })
+    })
+    .await
 }
 
 #[tauri::command]
@@ -363,8 +397,9 @@ fn open_file_classify(file_path: String) -> Result<OpenedFileClassification, App
 }
 
 #[tauri::command]
-fn config_get() -> Result<AppConfig, AppError> {
-    default_store()?.load_config()
+async fn config_get() -> Result<AppConfig, AppError> {
+    let store = default_store()?;
+    run_blocking(move || store.load_config()).await
 }
 
 #[tauri::command]
@@ -406,13 +441,13 @@ fn copy_background_image(_app: AppHandle, source_path: String) -> Result<String,
 }
 
 #[tauri::command]
-fn config_save(app: AppHandle, config: AppConfig) -> Result<AppConfig, AppError> {
+async fn config_save(app: AppHandle, config: AppConfig) -> Result<AppConfig, AppError> {
     // 移除 macOS 强制 close_to_tray=true：设置开关应全平台一致生效。
     // （关闭到托盘由 desktop::handle_window_event 按配置决定，Dock 图标由
     //   desktop::sync_macos_dock_icon 按主窗口可见性同步。）
 
     let store = default_store()?;
-    let previous = store.load_config()?;
+    let previous = run_blocking(move || store.load_config()).await?;
     let notes_dir_changed = previous.notes_dir != config.notes_dir;
     desktop::apply_runtime_config(&app, &previous, &config).map_err(|error| {
         match error.downcast::<AppError>() {
@@ -424,7 +459,8 @@ fn config_save(app: AppHandle, config: AppConfig) -> Result<AppConfig, AppError>
             },
         }
     })?;
-    let saved = store.save_config(config)?;
+    let store = default_store()?;
+    let saved = run_blocking(move || store.save_config(config)).await?;
     if let Err(error) = desktop::refresh_shell_state(&app, &saved) {
         eprintln!("failed to refresh desktop shell state: {error}");
     }
@@ -527,6 +563,17 @@ fn start_window_drag_with_offset(
     window.set_position(tauri::PhysicalPosition::new(next_x, next_y))?;
     window.start_dragging()?;
     Ok(())
+}
+
+/// 原生窗口位移动画：单次 IPC，动画循环在 Rust 侧线程按帧推进，
+/// 替代前端逐帧 setPosition/setSize 的多次 IPC。
+#[tauri::command]
+async fn animate_window_bounds(
+    window: tauri::WebviewWindow,
+    target: desktop::WindowBounds,
+    duration_ms: u64,
+) -> Result<(), AppError> {
+    desktop::animate_window_bounds(window, target, duration_ms).await
 }
 
 #[tauri::command]
@@ -1112,6 +1159,7 @@ pub fn run() {
             open_notepad_window,
             recycle_notepad_window,
             start_window_drag_with_offset,
+            animate_window_bounds,
             open_tile_window,
             open_note_in_editor,
             ai_chat,

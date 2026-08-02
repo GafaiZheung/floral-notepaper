@@ -1,6 +1,7 @@
 import {
   forwardRef,
   useCallback,
+  useDeferredValue,
   useEffect,
   useImperativeHandle,
   useMemo,
@@ -11,14 +12,17 @@ import { useTranslation } from "react-i18next";
 import { MarkdownEditor } from "./MarkdownEditor";
 import type { MarkdownEditorHandle } from "./MarkdownEditor";
 import { RenderedBlock } from "./RenderedBlock";
-import { MarkdownPreview } from "../features/markdown/MarkdownPreview";
+import { MarkdownPreviewLazy as MarkdownPreview } from "../features/markdown/MarkdownPreviewLazy";
 import { parseBlocks, updateBlock } from "../features/markdown/markdownBlocks";
+import type { MarkdownBlock } from "../features/markdown/markdownBlocks";
 import { applyFormat } from "../features/editor/formatActions";
 import type { FormatAction } from "../features/editor/formatActions";
 import { extractHeadings } from "../features/markdown/extractHeadings";
 import type { Heading } from "../features/markdown/extractHeadings";
 
 type WysiwygMode = "wysiwyg" | "source" | "read";
+
+const EMPTY_BLOCKS = [] as MarkdownBlock[];
 
 interface ToolbarButton {
   label: string;
@@ -103,7 +107,15 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
     const sourceEditorRef = useRef<MarkdownEditorHandle>(null);
     const readingScrollRef = useRef<HTMLDivElement>(null);
 
-    const allBlocks = useMemo(() => parseBlocks(content), [content]);
+    // 阅读模式预览是唯一的重渲染路径（react-markdown + KaTeX + Prism + mermaid），
+    // 用 deferred 内容避免外部加载/变更阻塞 UI 线程；解析本身已是 O(n)。
+    const deferredContent = useDeferredValue(content);
+
+    // 块解析仅在 WYSIWYG 模式需要；source/read 模式跳过整篇解析。
+    const allBlocks = useMemo(() => {
+      if (mode === "source" || mode === "read") return EMPTY_BLOCKS;
+      return parseBlocks(content);
+    }, [content, mode]);
     const blocks = useMemo(() => {
       if (hideFirstHeading && allBlocks.length > 0 && allBlocks[0].type === "heading") {
         return allBlocks.slice(1);
@@ -270,13 +282,20 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
       [t],
     );
 
+    // 通过 ref 读取最新 content/blocks，让 handleBlockChange 闭包稳定，
+    // 配合 RenderedBlock 的 memo（忽略 handler prop 变化）避免陈旧闭包写回旧内容。
+    const contentRef = useRef(content);
+    contentRef.current = content;
+    const blocksRef = useRef(blocks);
+    blocksRef.current = blocks;
+
     const handleBlockChange = useCallback(
       (index: number, newSource: string) => {
-        const updated = updateBlock(content, index, newSource, blocks);
+        const updated = updateBlock(contentRef.current, index, newSource, blocksRef.current);
         onChange(updated);
         onDirty?.();
       },
-      [content, blocks, onChange, onDirty],
+      [onChange, onDirty],
     );
 
     const handleSourceChange = useCallback(
@@ -408,9 +427,9 @@ export const WysiwygEditor = forwardRef<WysiwygEditorHandle, WysiwygEditorProps>
             />
           ) : mode === "read" ? (
             <div ref={readingScrollRef} className="overflow-y-auto h-full">
-              {content ? (
+              {deferredContent ? (
                 <MarkdownPreview
-                  content={content}
+                  content={deferredContent}
                   fontSize={fontSize}
                   onExternalLink={onExternalLink}
                 />

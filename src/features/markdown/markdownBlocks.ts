@@ -21,24 +21,28 @@ function classifyBlock(firstLine: string, content: string): MarkdownBlock["type"
 /**
  * Split markdown content into logical blocks.
  * Fenced code blocks (```) are kept intact (not split by blank lines inside them).
+ * Offset 采用增量累计（O(n)），避免逐块重建整个前缀字符串（O(n²)）。
  */
 export function parseBlocks(content: string): MarkdownBlock[] {
   const blocks: MarkdownBlock[] = [];
   if (!content) return blocks;
 
   const lines = content.split("\n");
+  const lineLengths = lines.map((line) => line.length);
   let i = 0;
+  // 当前行在原始 content 中的起始偏移，随消费进度增量推进
+  let currentOffset = 0;
 
   while (i < lines.length) {
-    const lineStart = i === 0 ? 0 : lines.slice(0, i).join("\n").length + 1;
-
     // Skip blank lines between blocks
     if (lines[i].trim() === "") {
+      currentOffset += lineLengths[i] + 1;
       i++;
       continue;
     }
 
     const firstLine = lines[i];
+    const startOffset = currentOffset;
 
     // Fenced code block: capture from opening ``` to closing ```
     if (/^```/.test(firstLine)) {
@@ -49,10 +53,10 @@ export function parseBlocks(content: string): MarkdownBlock[] {
       if (j < lines.length) j++;
       else j = lines.length;
       const source = lines.slice(i, j).join("\n");
-      const startOffset = lineStart;
       const endOffset = startOffset + source.length;
       blocks.push({ type: classifyBlock(firstLine, source), source, startOffset, endOffset });
       i = j;
+      currentOffset = endOffset + 1;
       continue;
     }
 
@@ -65,10 +69,10 @@ export function parseBlocks(content: string): MarkdownBlock[] {
       if (j < lines.length) j++;
       else j = lines.length;
       const source = lines.slice(i, j).join("\n");
-      const startOffset = lineStart;
       const endOffset = startOffset + source.length;
       blocks.push({ type: "math", source, startOffset, endOffset });
       i = j;
+      currentOffset = endOffset + 1;
       continue;
     }
 
@@ -82,19 +86,19 @@ export function parseBlocks(content: string): MarkdownBlock[] {
         }
       }
       const source = lines.slice(i, j).join("\n");
-      const startOffset = lineStart;
       const endOffset = startOffset + source.length;
       blocks.push({ type: "table", source, startOffset, endOffset });
       i = j;
+      currentOffset = endOffset + 1;
       continue;
     }
 
     // Horizontal rule
     if (/^-{3,}$/.test(firstLine.trim()) || /^\*{3,}$/.test(firstLine.trim())) {
-      const startOffset = lineStart;
       const endOffset = startOffset + firstLine.length;
       blocks.push({ type: "hr", source: firstLine, startOffset, endOffset });
       i++;
+      currentOffset = endOffset + 1;
       continue;
     }
 
@@ -111,10 +115,10 @@ export function parseBlocks(content: string): MarkdownBlock[] {
         }
       }
       const source = lines.slice(i, j).join("\n");
-      const startOffset = lineStart;
       const endOffset = startOffset + source.length;
       blocks.push({ type: "list", source, startOffset, endOffset });
       i = j;
+      currentOffset = endOffset + 1;
       continue;
     }
 
@@ -125,19 +129,19 @@ export function parseBlocks(content: string): MarkdownBlock[] {
         j++;
       }
       const source = lines.slice(i, j).join("\n");
-      const startOffset = lineStart;
       const endOffset = startOffset + source.length;
       blocks.push({ type: "quote", source, startOffset, endOffset });
       i = j;
+      currentOffset = endOffset + 1;
       continue;
     }
 
     // Heading
     if (/^#{1,6}\s/.test(firstLine)) {
-      const startOffset = lineStart;
       const endOffset = startOffset + firstLine.length;
       blocks.push({ type: "heading", source: firstLine, startOffset, endOffset });
       i++;
+      currentOffset = endOffset + 1;
       continue;
     }
 
@@ -163,10 +167,10 @@ export function parseBlocks(content: string): MarkdownBlock[] {
         j++;
       }
       const source = lines.slice(i, j).join("\n");
-      const startOffset = lineStart;
       const endOffset = startOffset + source.length;
       blocks.push({ type: "paragraph", source, startOffset, endOffset });
       i = j;
+      currentOffset = endOffset + 1;
     }
   }
 

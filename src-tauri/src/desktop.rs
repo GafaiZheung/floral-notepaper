@@ -437,6 +437,50 @@ const NOTEPAD_POOL_CAPACITY: usize = 2;
 /// previous approach of emitting an event after a hardcoded delay.
 static STARTUP_FILE: Mutex<Option<String>> = Mutex::new(None);
 
+/// 停靠子窗口同步节流状态：主窗口拖动期间 `Moved/Resized` 事件密集，
+/// 若每事件都同步重排所有停靠子窗口会造成原生窗口 churn。合并为
+/// ~16ms 一次 + 尾部补一次，保证最终对齐。
+struct DockSyncThrottleState {
+    last: Option<std::time::Instant>,
+    pending: bool,
+}
+static DOCK_SYNC_THROTTLE: Mutex<DockSyncThrottleState> = Mutex::new(DockSyncThrottleState {
+    last: None,
+    pending: false,
+});
+
+fn throttle_dock_sync(app: &AppHandle) {
+    use std::time::{Duration, Instant};
+    const MIN_INTERVAL: Duration = Duration::from_millis(16);
+
+    let mut state = DOCK_SYNC_THROTTLE
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+
+    if let Some(last) = state.last {
+        let elapsed = last.elapsed();
+        if elapsed < MIN_INTERVAL {
+            if !state.pending {
+                state.pending = true;
+                let app = app.clone();
+                std::thread::spawn(move || {
+                    std::thread::sleep(MIN_INTERVAL - elapsed);
+                    crate::services::browser::sync_dock(&app);
+                    if let Ok(mut state) = DOCK_SYNC_THROTTLE.lock() {
+                        state.pending = false;
+                        state.last = Some(Instant::now());
+                    }
+                });
+            }
+            return;
+        }
+    }
+
+    state.last = Some(Instant::now());
+    drop(state);
+    crate::services::browser::sync_dock(app);
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TrayMenuAction {
     ShowMain,
@@ -523,6 +567,81 @@ pub struct WindowBounds {
     pub y: i32,
     pub width: u32,
     pub height: u32,
+}
+
+fn interpolate_bounds(start: WindowBounds, target: WindowBounds, progress: f64) -> WindowBounds {
+    WindowBounds {
+        x: start.x + ((target.x - start.x) as f64 * progress).round() as i32,
+        y: start.y + ((target.y - start.y) as f64 * progress).round() as i32,
+        width: (start.width as f64 + (target.width as f64 - start.width as f64) * progress)
+            .round()
+            .max(1.0) as u32,
+        height: (start.height as f64 + (target.height as f64 - start.height as f64) * progress)
+            .round()
+            .max(1.0) as u32,
+    }
+}
+
+fn animate_window_bounds_loop(
+    window: WebviewWindow,
+    start: WindowBounds,
+    target: WindowBounds,
+    duration_ms: u64,
+) -> Result<(), String> {
+    let started_at = std::time::Instant::now();
+    const STEP_MS: u64 = 16;
+
+    loop {
+        let elapsed_ms = started_at.elapsed().as_millis() as f64;
+        let progress = (elapsed_ms / duration_ms.max(1) as f64).min(1.0);
+        let eased = 1.0 - (1.0 - progress).powi(3);
+        let next = interpolate_bounds(start, target, eased);
+
+        window
+            .set_position(PhysicalPosition::new(next.x, next.y))
+            .map_err(|error| error.to_string())?;
+        window
+            .set_size(PhysicalSize::new(next.width, next.height))
+            .map_err(|error| error.to_string())?;
+
+        if progress >= 1.0 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(STEP_MS));
+    }
+    Ok(())
+}
+
+/// 原生窗口位移动画：单次 IPC 进入，动画循环在 Rust 侧线程按 ~16ms 步进
+/// 推进窗口位置/大小，避免前端每帧两次 IPC 往返导致掉帧。
+pub async fn animate_window_bounds(
+    window: WebviewWindow,
+    target: WindowBounds,
+    duration_ms: u64,
+) -> Result<(), AppError> {
+    let start_pos = window.outer_position()?;
+    let start_size = window.inner_size()?;
+    let start = WindowBounds {
+        x: start_pos.x,
+        y: start_pos.y,
+        width: start_size.width,
+        height: start_size.height,
+    };
+
+    if duration_ms == 0 || start == target {
+        window.set_position(PhysicalPosition::new(target.x, target.y))?;
+        window.set_size(PhysicalSize::new(target.width, target.height))?;
+        return Ok(());
+    }
+
+    tauri::async_runtime::spawn_blocking(move || {
+        animate_window_bounds_loop(window, start, target, duration_ms)
+    })
+    .await
+    .map_err(|error| AppError::new("animateWindowBounds", error.to_string()))?
+    .map_err(|message| AppError::new("animateWindowBounds", message))?;
+
+    Ok(())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1197,17 +1316,18 @@ pub fn handle_window_event(window: &Window, event: &WindowEvent) {
     }
 
     // 浏览器停靠同步：主窗口移动/缩放/聚焦时，把可见停靠子窗口贴到右缘。
-    if matches!(event, WindowEvent::Moved(_))
-        || matches!(event, WindowEvent::Resized(_))
-        || matches!(event, WindowEvent::Focused(_))
-    {
+    if matches!(event, WindowEvent::Moved(_)) || matches!(event, WindowEvent::Resized(_)) {
+        // 拖动期间事件密集，合并节流（~16ms 一次 + 尾部补一次），
+        // 避免每个事件都同步重排所有停靠子窗口造成原生窗口 churn。
+        throttle_dock_sync(window.app_handle());
+        return;
+    }
+    if matches!(event, WindowEvent::Focused(_)) {
         let app = window.app_handle();
         crate::services::browser::sync_dock(app);
-        if matches!(event, WindowEvent::Focused(_)) {
-            // 恢复托盘隐藏/焦点返回时，隐藏非活跃停靠标签并提升层级（Windows）。
-            crate::services::browser::sync_window_visibility(app);
-            crate::services::browser::raise_docked_windows(app);
-        }
+        // 恢复托盘隐藏/焦点返回时，隐藏非活跃停靠标签并提升层级（Windows）。
+        crate::services::browser::sync_window_visibility(app);
+        crate::services::browser::raise_docked_windows(app);
         return;
     }
 

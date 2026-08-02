@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { MouseEvent } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { DragEvent, MouseEvent } from "react";
 import { useTranslation } from "react-i18next";
 import { emit, listen } from "@tauri-apps/api/event";
 import { revealItemInDir } from "@tauri-apps/plugin-opener";
@@ -119,6 +119,99 @@ interface MainWindowProps {
   initialErrorMessage?: string | null;
 }
 
+/**
+ * 笔记列表项的手柄集合：父组件每帧把最新闭包写入 ref，
+ * 列表项 memo 后仍能调用到最新回调，且不受按键 re-render 影响。
+ */
+interface NoteListItemHandlers {
+  onSelect: (noteId: string) => void;
+  onDoubleClick: (noteId: string) => void;
+  onOpenMenu: (event: MouseEvent<HTMLElement>, noteId: string) => void;
+  onDragStart: (event: DragEvent<HTMLDivElement>, noteId: string) => void;
+  onMouseEnter: (noteId: string) => void;
+  onMouseLeave: () => void;
+}
+
+interface NoteListItemProps {
+  note: NoteMetadata;
+  isSelected: boolean;
+  isHovered: boolean;
+  handlersRef: React.MutableRefObject<NoteListItemHandlers>;
+  t: ReturnType<typeof useTranslation>["t"];
+}
+
+/**
+ * memo 化的笔记列表项：notes 状态未变时（如编辑器按键），
+ * 各列表项 props 引用稳定，跳过 re-render。
+ */
+const NoteListItem = memo(function NoteListItem({
+  note,
+  isSelected,
+  isHovered,
+  handlersRef,
+  t,
+}: NoteListItemProps) {
+  return (
+    <div
+      key={note.id}
+      draggable
+      onDragStart={(event) => handlersRef.current.onDragStart(event, note.id)}
+      onClick={() => handlersRef.current.onSelect(note.id)}
+      onDoubleClick={() => handlersRef.current.onDoubleClick(note.id)}
+      onContextMenu={(event) => handlersRef.current.onOpenMenu(event, note.id)}
+      onMouseEnter={() => handlersRef.current.onMouseEnter(note.id)}
+      onMouseLeave={() => handlersRef.current.onMouseLeave()}
+      className={`w-full text-left rounded-xl px-3 py-2.5 transition-all duration-[600ms] cursor-pointer group relative ${
+        isSelected ? "bg-bamboo-mist/70" : isHovered ? "bg-paper-warm/70" : "bg-transparent"
+      }`}
+    >
+      <div
+        className={`absolute left-0 top-1/2 -translate-y-1/2 w-[3px] rounded-r-full bg-bamboo/60 transition-all duration-[600ms] ${
+          isSelected ? "h-5 opacity-100" : "h-0 opacity-0"
+        }`}
+      />
+      <div className="flex items-baseline mb-0.5">
+        <div className="min-w-0 flex-1">
+          <span
+            className={`text-[13px] font-display font-medium block truncate transition-colors flex items-center gap-1.5 ${
+              isSelected ? "text-bamboo" : "text-ink-soft"
+            }`}
+          >
+            {isReadOnlyNote(note) && (
+              <span
+                className={`text-[9px] font-mono shrink-0 px-1 rounded ${getFileTypeIconColor(note)} bg-current/10`}
+              >
+                {getFileTypeLabel(note)}
+              </span>
+            )}
+            {getDisplayTitle(note, t)}
+          </span>
+          {note.fileStem && note.title && note.title !== note.fileStem && (
+            <span className="text-[10px] text-ink-ghost/50 font-mono block truncate mt-0.5">
+              {note.fileStem}
+            </span>
+          )}
+        </div>
+      </div>
+      <p className="text-[11px] text-ink-ghost leading-relaxed line-clamp-2 group-hover:text-ink-faint transition-colors">
+        {note.preview || t("common.blankNote", { defaultValue: "空白笔记" })}
+      </p>
+      <div className="flex items-center gap-2 mt-1">
+        <span className="text-[10px] text-ink-ghost/60 font-mono tabular-nums">
+          {formatShortDate(note.updatedAt)} {formatTime(note.updatedAt)}
+        </span>
+        <span className="text-[10px] text-ink-ghost/40">·</span>
+        <span className="text-[10px] text-ink-ghost/60 font-mono tabular-nums">
+          {t("common.wordCount", {
+            count: note.wordCount,
+            defaultValue: "{{count}} 字",
+          })}
+        </span>
+      </div>
+    </div>
+  );
+});
+
 export function MainWindow({
   initialSettingsOpen = false,
   initialConfig = undefined,
@@ -159,6 +252,10 @@ export function MainWindow({
   const [contentFormat, setContentFormat] = useState<string>("markdown");
   const [title, setTitle] = useState("");
   const [saveState, setSaveState] = useState<SaveState>("idle");
+  const contentValueRef = useRef(content);
+  contentValueRef.current = content;
+  const titleValueRef = useRef(title);
+  titleValueRef.current = title;
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [errorMessage, setErrorMessage] = useState<string | null>(initialErrorMessage);
@@ -671,24 +768,28 @@ export function MainWindow({
         // Restore persisted tabs, or fall back to loading the first note
         const persistedTabs = loadedConfig.openTabs;
         if (persistedTabs && persistedTabs.length > 0) {
-          const restoredTabs: TabState[] = [];
-          for (const tabId of persistedTabs) {
-            const meta = loadedNotes.find((n) => n.id === tabId);
-            if (!meta) continue;
-            try {
-              const note = await getNote(tabId);
-              restoredTabs.push({
-                noteId: note.id,
-                title: note.title,
-                fileStem: note.fileStem,
-                content: note.content,
-                contentFormat: note.fileFormat && note.fileFormat !== "md" ? "html" : "markdown",
-                saveState: "saved" as SaveState,
-              });
-            } catch {
-              // Note may have been deleted — skip
-            }
-          }
+          // 并行加载所有持久化 tab，避免长文档逐个串行读取阻塞启动
+          const loadedTabs = await Promise.all(
+            persistedTabs.map(async (tabId): Promise<TabState | null> => {
+              const meta = loadedNotes.find((n) => n.id === tabId);
+              if (!meta) return null;
+              try {
+                const note = await getNote(tabId);
+                return {
+                  noteId: note.id,
+                  title: note.title,
+                  fileStem: note.fileStem,
+                  content: note.content,
+                  contentFormat: note.fileFormat && note.fileFormat !== "md" ? "html" : "markdown",
+                  saveState: "saved" as SaveState,
+                };
+              } catch {
+                // Note may have been deleted — skip
+                return null;
+              }
+            }),
+          );
+          const restoredTabs = loadedTabs.filter((tab): tab is TabState => tab !== null);
           if (restoredTabs.length > 0 && !cancelled) {
             setTabs(restoredTabs);
             const restoreActiveId =
@@ -734,6 +835,15 @@ export function MainWindow({
             void getNote(currentId)
               .then((note) => {
                 if (selectedIdRef.current !== currentId) return;
+                // 内容未变时跳过 setState，避免其他窗口的自动保存
+                // （周期 ~900ms）触发本窗口整篇重渲染
+                if (
+                  note.content === contentValueRef.current &&
+                  note.title === titleValueRef.current
+                ) {
+                  setSaveState("saved");
+                  return;
+                }
                 setTitle(note.title);
                 setContent(note.content);
                 setSaveState("saved");
@@ -1358,6 +1468,27 @@ export function MainWindow({
     });
   };
 
+  // 列表项 memo 需要引用稳定：每帧把最新闭包写入 ref，点击时取最新实现
+  const noteListHandlersRef = useRef<NoteListItemHandlers>({
+    onSelect: () => undefined,
+    onDoubleClick: () => undefined,
+    onOpenMenu: () => undefined,
+    onDragStart: () => undefined,
+    onMouseEnter: () => undefined,
+    onMouseLeave: () => undefined,
+  });
+  noteListHandlersRef.current = {
+    onSelect: (noteId) => void handleSelectNote(noteId),
+    onDoubleClick: (noteId) => void handleDoubleClickNote(noteId),
+    onOpenMenu: (event, noteId) => handleOpenNoteMenu(event, noteId),
+    onDragStart: (event, noteId) => {
+      event.dataTransfer.setData("text/plain", noteId);
+      event.dataTransfer.effectAllowed = "move";
+    },
+    onMouseEnter: (noteId) => setHoveredId(noteId),
+    onMouseLeave: () => setHoveredId(null),
+  };
+
   const handleExportNote = async (note: NoteMetadata) => {
     setErrorMessage(null);
     try {
@@ -1547,21 +1678,38 @@ export function MainWindow({
     document.body.style.userSelect = "none";
     document.body.style.cursor = "col-resize";
 
+    // 拖动期间 rAF 节流：每个 mousemove 只写 ref，下一帧统一提交，
+    // 避免每次事件都触发全树 re-render + layout。
+    let rafId = 0;
+    let pendingWidth = sidebarWidth;
     const onMouseMove = (e: globalThis.MouseEvent) => {
-      const newWidth = Math.min(Math.max(e.clientX, 180), 500);
-      setSidebarWidth(newWidth);
+      pendingWidth = Math.min(Math.max(e.clientX, 180), 500);
+      if (rafId === 0) {
+        rafId = requestAnimationFrame(() => {
+          rafId = 0;
+          setSidebarWidth(pendingWidth);
+        });
+      }
     };
-    const onMouseUp = () => setIsResizingSidebar(false);
+    const onMouseUp = () => {
+      if (rafId !== 0) {
+        cancelAnimationFrame(rafId);
+        rafId = 0;
+      }
+      setSidebarWidth(pendingWidth);
+      setIsResizingSidebar(false);
+    };
 
     document.addEventListener("mousemove", onMouseMove);
     document.addEventListener("mouseup", onMouseUp);
     return () => {
+      if (rafId !== 0) cancelAnimationFrame(rafId);
       document.removeEventListener("mousemove", onMouseMove);
       document.removeEventListener("mouseup", onMouseUp);
       document.body.style.userSelect = "";
       document.body.style.cursor = "";
     };
-  }, [isResizingSidebar]);
+  }, [isResizingSidebar, sidebarWidth]);
 
   // --- 浏览器侧边栏 ---
 
@@ -1599,13 +1747,26 @@ export function MainWindow({
     document.body.style.userSelect = "none";
     document.body.style.cursor = "col-resize";
 
+    // 拖动期间 rAF 节流，避免每个 mousemove 事件都触发全树 re-render。
+    let rafId = 0;
+    let pendingWidth = browserWidthRef.current;
     const onMouseMove = (e: globalThis.MouseEvent) => {
       const maxWidth = Math.max(window.innerWidth * 0.6, 300);
-      const next = Math.min(Math.max(window.innerWidth - e.clientX, 300), maxWidth);
-      browserWidthRef.current = next;
-      setBrowserWidth(next);
+      pendingWidth = Math.min(Math.max(window.innerWidth - e.clientX, 300), maxWidth);
+      browserWidthRef.current = pendingWidth;
+      if (rafId === 0) {
+        rafId = requestAnimationFrame(() => {
+          rafId = 0;
+          setBrowserWidth(browserWidthRef.current);
+        });
+      }
     };
     const onMouseUp = () => {
+      if (rafId !== 0) {
+        cancelAnimationFrame(rafId);
+        rafId = 0;
+      }
+      setBrowserWidth(browserWidthRef.current);
       setIsResizingBrowser(false);
       void browserSetWidth(browserWidthRef.current).catch(() => {});
     };
@@ -1613,6 +1774,7 @@ export function MainWindow({
     document.addEventListener("mousemove", onMouseMove);
     document.addEventListener("mouseup", onMouseUp);
     return () => {
+      if (rafId !== 0) cancelAnimationFrame(rafId);
       document.removeEventListener("mousemove", onMouseMove);
       document.removeEventListener("mouseup", onMouseUp);
       document.body.style.userSelect = "";
@@ -2586,80 +2748,16 @@ export function MainWindow({
                                 if (noteId) void handleMoveNote(noteId, "");
                               }}
                             >
-                              {group.notes.map((note) => {
-                                const isSelected = note.id === selectedId;
-                                const isHovered = note.id === hoveredId;
-                                return (
-                                  <div
-                                    key={note.id}
-                                    draggable
-                                    onDragStart={(e) => {
-                                      e.dataTransfer.setData("text/plain", note.id);
-                                      e.dataTransfer.effectAllowed = "move";
-                                    }}
-                                    onClick={() => void handleSelectNote(note.id)}
-                                    onDoubleClick={() => void handleDoubleClickNote(note.id)}
-                                    onContextMenu={(event) => handleOpenNoteMenu(event, note.id)}
-                                    onMouseEnter={() => setHoveredId(note.id)}
-                                    onMouseLeave={() => setHoveredId(null)}
-                                    className={`w-full text-left rounded-xl px-3 py-2.5 transition-all duration-[600ms] cursor-pointer group relative ${
-                                      isSelected
-                                        ? "bg-bamboo-mist/70"
-                                        : isHovered
-                                          ? "bg-paper-warm/70"
-                                          : "bg-transparent"
-                                    }`}
-                                  >
-                                    <div
-                                      className={`absolute left-0 top-1/2 -translate-y-1/2 w-[3px] rounded-r-full bg-bamboo/60 transition-all duration-[600ms] ${
-                                        isSelected ? "h-5 opacity-100" : "h-0 opacity-0"
-                                      }`}
-                                    />
-                                    <div className="flex items-baseline mb-0.5">
-                                      <div className="min-w-0 flex-1">
-                                        <span
-                                          className={`text-[13px] font-display font-medium block truncate transition-colors flex items-center gap-1.5 ${
-                                            isSelected ? "text-bamboo" : "text-ink-soft"
-                                          }`}
-                                        >
-                                          {isReadOnlyNote(note) && (
-                                            <span
-                                              className={`text-[9px] font-mono shrink-0 px-1 rounded ${getFileTypeIconColor(note)} bg-current/10`}
-                                            >
-                                              {getFileTypeLabel(note)}
-                                            </span>
-                                          )}
-                                          {getDisplayTitle(note, t)}
-                                        </span>
-                                        {note.fileStem &&
-                                          note.title &&
-                                          note.title !== note.fileStem && (
-                                            <span className="text-[10px] text-ink-ghost/50 font-mono block truncate mt-0.5">
-                                              {note.fileStem}
-                                            </span>
-                                          )}
-                                      </div>
-                                    </div>
-                                    <p className="text-[11px] text-ink-ghost leading-relaxed line-clamp-2 group-hover:text-ink-faint transition-colors">
-                                      {note.preview ||
-                                        t("common.blankNote", { defaultValue: "空白笔记" })}
-                                    </p>
-                                    <div className="flex items-center gap-2 mt-1">
-                                      <span className="text-[10px] text-ink-ghost/60 font-mono tabular-nums">
-                                        {formatShortDate(note.updatedAt)}{" "}
-                                        {formatTime(note.updatedAt)}
-                                      </span>
-                                      <span className="text-[10px] text-ink-ghost/40">·</span>
-                                      <span className="text-[10px] text-ink-ghost/60 font-mono tabular-nums">
-                                        {t("common.wordCount", {
-                                          count: note.wordCount,
-                                          defaultValue: "{{count}} 字",
-                                        })}
-                                      </span>
-                                    </div>
-                                  </div>
-                                );
-                              })}
+                              {group.notes.map((note) => (
+                                <NoteListItem
+                                  key={note.id}
+                                  note={note}
+                                  isSelected={note.id === selectedId}
+                                  isHovered={note.id === hoveredId}
+                                  handlersRef={noteListHandlersRef}
+                                  t={t}
+                                />
+                              ))}
                             </div>
                           );
                         }

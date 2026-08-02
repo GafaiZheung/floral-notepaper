@@ -1,6 +1,15 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { renderToStaticMarkup } from "react-dom/server";
 import { WysiwygEditor } from "./WysiwygEditor";
+
+// 预览组件已懒加载（MarkdownPreviewLazy），SSR 场景下 lazy 只渲染 Suspense
+// fallback。这里 mock 掉懒加载边界，验证 WysiwygEditor 正确地把块内容
+// 传给预览组件；真实渲染链由 MarkdownPreview.test.tsx 覆盖。
+vi.mock("../features/markdown/MarkdownPreviewLazy", () => ({
+  MarkdownPreviewLazy: ({ content }: { content: string }) => (
+    <div className="markdown-preview-mock">{content}</div>
+  ),
+}));
 
 describe("WysiwygEditor", () => {
   test("renders mode switch buttons", () => {

@@ -1,4 +1,4 @@
-import { useState, useCallback, useEffect, useRef } from "react";
+import { memo, useState, useCallback, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
 import { useTranslation } from "react-i18next";
 import mermaid from "mermaid";
@@ -9,6 +9,24 @@ let mermaidInitialized = false;
 const MERMAID_FONT_STACK =
   '"HarmonyOS Sans SC", "Microsoft YaHei", "PingFang SC", "Hiragino Sans GB", "Segoe UI", Arial';
 const MERMAID_MONO_FONT_STACK = '"Consolas", "Courier New", "HarmonyOS Sans SC"';
+
+// 按图表内容缓存渲染结果：同一文档内多处出现、模式切换、tab 切换
+// 时避免重复执行昂贵的 mermaid.render()。
+const mermaidSvgCache = new Map<string, Promise<string>>();
+
+function renderMermaidSvg(chart: string): Promise<string> {
+  let promise = mermaidSvgCache.get(chart);
+  if (!promise) {
+    const id = `mermaid-${Math.random().toString(36).slice(2, 8)}`;
+    promise = mermaid.render(id, chart).then(({ svg }) => svg);
+    mermaidSvgCache.set(chart, promise);
+    // 渲染失败时移除缓存，下次重试
+    promise.catch(() => {
+      mermaidSvgCache.delete(chart);
+    });
+  }
+  return promise;
+}
 
 /**
  * Mermaid may still emit HTML-style void elements inside SVG foreignObject
@@ -61,7 +79,15 @@ interface MermaidDiagramProps {
   fontSize?: number;
 }
 
-export function MermaidDiagram({ chart, fontSize = 14 }: MermaidDiagramProps) {
+/** 按 chart 内容（值比较）memo：文档其他部分重渲染时已渲染的图跳过。 */
+function mermaidPropsEqual(prev: MermaidDiagramProps, next: MermaidDiagramProps): boolean {
+  return prev.chart === next.chart && prev.fontSize === next.fontSize;
+}
+
+export const MermaidDiagram = memo(function MermaidDiagram({
+  chart,
+  fontSize = 14,
+}: MermaidDiagramProps) {
   const { t } = useTranslation();
   const [svg, setSvg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -77,11 +103,9 @@ export function MermaidDiagram({ chart, fontSize = 14 }: MermaidDiagramProps) {
   useEffect(() => {
     ensureMermaidInit(fontSize);
     let cancelled = false;
-    const id = `mermaid-${Math.random().toString(36).slice(2, 8)}`;
 
-    mermaid
-      .render(id, chart)
-      .then(({ svg: result }) => {
+    renderMermaidSvg(chart)
+      .then((result) => {
         if (!cancelled) {
           setSvg(result);
           svgRef.current = result;
@@ -100,7 +124,7 @@ export function MermaidDiagram({ chart, fontSize = 14 }: MermaidDiagramProps) {
     return () => {
       cancelled = true;
     };
-  }, [chart]);
+  }, [chart, fontSize]);
 
   const handleZoomOpen = useCallback(() => {
     setZoomOpen(true);
@@ -322,4 +346,4 @@ export function MermaidDiagram({ chart, fontSize = 14 }: MermaidDiagramProps) {
         )}
     </>
   );
-}
+}, mermaidPropsEqual);

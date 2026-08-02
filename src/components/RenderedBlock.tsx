@@ -1,7 +1,7 @@
-import { useEffect, useRef } from "react";
+import { memo, useEffect, useRef } from "react";
 import { MarkdownEditor } from "./MarkdownEditor";
 import type { MarkdownEditorHandle } from "./MarkdownEditor";
-import { MarkdownPreview } from "../features/markdown/MarkdownPreview";
+import { MarkdownPreviewLazy as MarkdownPreview } from "../features/markdown/MarkdownPreviewLazy";
 import type { MarkdownBlock } from "../features/markdown/markdownBlocks";
 
 export interface RenderedBlockProps {
@@ -15,7 +15,21 @@ export interface RenderedBlockProps {
   onExternalLink?: (href: string) => void;
 }
 
-export function RenderedBlock({
+/**
+ * 块列表项 memo：每次按键整篇重新解析时，块对象引用都会变化（值相等），
+ * 自定义比较器按值比较，未编辑的块跳过 re-render 与 markdown 重解析。
+ */
+function blocksEqual(prev: RenderedBlockProps, next: RenderedBlockProps): boolean {
+  return (
+    prev.block.source === next.block.source &&
+    prev.block.type === next.block.type &&
+    prev.isEditing === next.isEditing &&
+    prev.fontSize === next.fontSize &&
+    prev.onExternalLink === next.onExternalLink
+  );
+}
+
+export const RenderedBlock = memo(function RenderedBlock({
   block,
   isEditing,
   onFocus,
@@ -67,4 +81,4 @@ export function RenderedBlock({
       <MarkdownPreview content={block.source} fontSize={fontSize} onExternalLink={onExternalLink} />
     </div>
   );
-}
+}, blocksEqual);
