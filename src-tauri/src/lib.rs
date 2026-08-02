@@ -630,11 +630,21 @@ async fn browser_activate(
 }
 
 #[tauri::command]
+async fn browser_new_tab(app: AppHandle) -> Result<services::browser::BrowserState, AppError> {
+    services::browser::new_tab(app).await
+}
+
+#[tauri::command]
 async fn browser_close(
     app: AppHandle,
     tab_id: String,
 ) -> Result<services::browser::BrowserState, AppError> {
     services::browser::close(app, tab_id).await
+}
+
+#[tauri::command]
+async fn browser_close_all(app: AppHandle) -> Result<services::browser::BrowserState, AppError> {
+    services::browser::close_all(app).await
 }
 
 #[tauri::command]
@@ -685,14 +695,6 @@ async fn browser_set_zoom(
     zoom: f64,
 ) -> Result<services::browser::BrowserState, AppError> {
     services::browser::set_zoom(app, tab_id, zoom).await
-}
-
-#[tauri::command]
-async fn browser_toggle_float(
-    app: AppHandle,
-    tab_id: String,
-) -> Result<services::browser::BrowserState, AppError> {
-    services::browser::toggle_float(app, tab_id).await
 }
 
 #[tauri::command]
@@ -1171,14 +1173,15 @@ pub fn run() {
             browser_get_state,
             browser_open,
             browser_activate,
+            browser_new_tab,
             browser_close,
+            browser_close_all,
             browser_navigate,
             browser_back,
             browser_forward,
             browser_reload,
             browser_stop,
             browser_set_zoom,
-            browser_toggle_float,
             browser_set_width,
             browser_set_visible,
             updater::commands::update_status,

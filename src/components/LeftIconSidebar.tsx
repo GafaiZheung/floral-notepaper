@@ -4,11 +4,17 @@ export type SidebarPanel = "directory" | "outline" | "git" | "browser";
 
 interface LeftIconSidebarProps {
   activePanel: SidebarPanel;
+  browserActive?: boolean;
   onSelectPanel: (panel: SidebarPanel) => void;
   onSettings: () => void;
 }
 
-export function LeftIconSidebar({ activePanel, onSelectPanel, onSettings }: LeftIconSidebarProps) {
+export function LeftIconSidebar({
+  activePanel,
+  browserActive = false,
+  onSelectPanel,
+  onSettings,
+}: LeftIconSidebarProps) {
   const { t } = useTranslation();
 
   return (
@@ -98,7 +104,7 @@ export function LeftIconSidebar({ activePanel, onSelectPanel, onSettings }: Left
       <button
         onClick={() => onSelectPanel("browser")}
         className={`w-9 h-9 flex items-center justify-center rounded-lg mb-1 transition-all cursor-pointer ${
-          activePanel === "browser"
+          browserActive
             ? "text-bamboo bg-bamboo-mist/60 shadow-sm"
             : "text-ink-ghost hover:text-ink-faint hover:bg-paper-warm"
         }`}

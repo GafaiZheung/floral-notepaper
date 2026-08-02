@@ -1,11 +1,10 @@
-/** 浏览器侧边栏状态类型（与 Rust 侧 services/browser.rs 的 serde camelCase 对齐）。 */
+/** 主窗口右侧浏览器延伸状态（与 Rust 侧 serde camelCase 对齐）。 */
 
 export interface BrowserTab {
   tabId: string;
   url: string;
   title: string;
   zoom: number;
-  floating: boolean;
   active: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
@@ -22,6 +21,6 @@ export interface BrowserState {
 export const DEFAULT_BROWSER_STATE: BrowserState = {
   tabs: [],
   activeTabId: null,
-  dockWidth: 420,
+  dockWidth: 480,
   visible: false,
 };

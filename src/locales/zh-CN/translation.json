@@ -245,6 +245,8 @@
     "autostart": "开机自启",
     "closeTitle": "关闭设置",
     "closeToTray": "关闭到托盘",
+    "keepRunningAfterClose": "关闭窗口后保持后台运行",
+    "keepRunningAfterCloseHint": "关闭主窗口后仍可从菜单栏图标重新打开",
     "category": {
       "general": "通用",
       "editor": "编辑器",
@@ -619,12 +621,10 @@
     "menu": {
       "closeAll": "关闭全部",
       "copyUrl": "复制网址",
-      "floating": "浮窗显示",
       "more": "更多",
       "openInSystem": "在系统浏览器打开",
       "retract": "收回",
-      "saveAsNote": "存为笔记",
-      "unfloat": "停靠回面板"
+      "saveAsNote": "存为笔记"
     },
     "empty": {
       "hint": "输入网址或关键词开始浏览",

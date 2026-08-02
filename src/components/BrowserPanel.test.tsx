@@ -23,7 +23,6 @@ const baseState: BrowserState = {
       url: "https://example.com/a",
       title: "页面 A",
       zoom: 1.0,
-      floating: false,
       active: true,
       canGoBack: false,
       canGoForward: false,
@@ -34,7 +33,6 @@ const baseState: BrowserState = {
       url: "https://example.org/b",
       title: "Page B",
       zoom: 1.1,
-      floating: true,
       active: false,
       canGoBack: true,
       canGoForward: true,
@@ -59,9 +57,9 @@ describe("BrowserPanel", () => {
   test("renders toolbar back/forward disabled states from history flags", () => {
     const markup = renderToStaticMarkup(<BrowserPanel state={baseState} />);
 
-    // t1：canGoBack=false → 后退按钮禁用；t2 的浮动标记 ◎ 出现在标签上
+    // t1：canGoBack=false → 后退按钮禁用。
     expect(markup).toContain('disabled=""');
-    expect(markup).toContain("◎");
+    expect(markup).not.toContain("◎");
   });
 
   test("shows empty state when no tabs exist", () => {
@@ -87,5 +85,12 @@ describe("BrowserPanel", () => {
     const markup = renderToStaticMarkup(<BrowserPanel state={baseState} />);
 
     expect(markup).toContain('title="更多"');
+  });
+
+  test("renders a complete main-window extension frame", () => {
+    const markup = renderToStaticMarkup(<BrowserPanel state={baseState} />);
+
+    expect(markup).toContain('data-testid="browser-extension"');
+    expect(markup).toContain('aria-label="收回"');
   });
 });

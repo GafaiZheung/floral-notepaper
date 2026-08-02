@@ -13,8 +13,16 @@ export function browserActivate(tabId: string): Promise<BrowserState> {
   return invoke("browser_activate", { tabId });
 }
 
+export function browserNewTab(): Promise<BrowserState> {
+  return invoke("browser_new_tab");
+}
+
 export function browserClose(tabId: string): Promise<BrowserState> {
   return invoke("browser_close", { tabId });
+}
+
+export function browserCloseAll(): Promise<BrowserState> {
+  return invoke("browser_close_all");
 }
 
 export function browserNavigate(tabId: string, url: string): Promise<BrowserState> {
@@ -39,10 +47,6 @@ export function browserStop(tabId: string): Promise<BrowserState> {
 
 export function browserSetZoom(tabId: string, zoom: number): Promise<BrowserState> {
   return invoke("browser_set_zoom", { tabId, zoom });
-}
-
-export function browserToggleFloat(tabId: string): Promise<BrowserState> {
-  return invoke("browser_toggle_float", { tabId });
 }
 
 export function browserSetWidth(width: number): Promise<BrowserState> {

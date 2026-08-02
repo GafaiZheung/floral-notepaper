@@ -245,6 +245,8 @@
     "autostart": "Launch on Startup",
     "closeTitle": "Close Settings",
     "closeToTray": "Close to Tray",
+    "keepRunningAfterClose": "Keep running after closing windows",
+    "keepRunningAfterCloseHint": "Reopen the main window from the menu bar icon",
     "category": {
       "general": "General",
       "editor": "Editor",
@@ -619,12 +621,10 @@
     "menu": {
       "closeAll": "Close all",
       "copyUrl": "Copy URL",
-      "floating": "Floating window",
       "more": "More",
       "openInSystem": "Open in system browser",
       "retract": "Retract",
-      "saveAsNote": "Save as note",
-      "unfloat": "Dock back to panel"
+      "saveAsNote": "Save as note"
     },
     "empty": {
       "hint": "Enter a URL or keyword to start browsing",

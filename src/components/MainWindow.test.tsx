@@ -52,6 +52,8 @@ describe("MainWindow settings", () => {
     expect(markup).toContain("通用");
     expect(markup).toContain("编辑器");
     expect(markup).toContain("D:\\Notes\\花笺");
+    const isMacOS = /Mac/i.test(navigator.userAgent) || /Mac/i.test(navigator.platform);
+    expect(markup).toContain(isMacOS ? "关闭窗口后保持后台运行" : "关闭到托盘");
   });
 
   test("keeps draggable window chrome on the default arrow cursor", () => {
@@ -60,6 +62,12 @@ describe("MainWindow settings", () => {
     expect(markup).toContain("cursor-default");
     expect(markup).not.toContain("cursor-grab");
     expect(markup).not.toContain("cursor-grabbing");
+  });
+
+  test("does not mount the browser extension while it is closed", () => {
+    const markup = renderToStaticMarkup(<MainWindow />);
+
+    expect(markup).not.toContain('data-testid="browser-extension"');
   });
 
   test("renders shortcut registration failures in the title bar", () => {

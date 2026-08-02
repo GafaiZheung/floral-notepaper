@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { buildNotepadUrl, buildTileUrl, getInitialRoute, routeFromSearch } from "./windowRoutes";
+import {
+  buildNotepadUrl,
+  buildTileUrl,
+  getInitialRoute,
+  routeFromSearch,
+} from "./windowRoutes";
 
 describe("window routes", () => {
   it("parses supported routes and note ids", () => {
@@ -11,6 +16,7 @@ describe("window routes", () => {
       view: "tile",
       noteId: "note-1",
     });
+    expect(routeFromSearch("?view=browser&noteId=ignored")).toEqual({ view: "main" });
     expect(routeFromSearch("?view=unknown")).toEqual({ view: "main" });
   });
 

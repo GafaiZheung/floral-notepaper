@@ -420,6 +420,11 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 const MAIN_WINDOW_LABEL: &str = "main";
 const OPEN_ABOUT_PANEL_EVENT: &str = "open-about-panel";
 const MACOS_APP_ABOUT_ID: &str = "macos-about";
+const MACOS_CONTEXTUAL_CLOSE_ID: &str = "macos-contextual-close";
+const MACOS_CONTEXTUAL_CLOSE_WINDOW_ID: &str = "macos-contextual-close-window";
+const MACOS_BROWSER_FOCUS_ADDRESS_ID: &str = "macos-browser-focus-address";
+const MACOS_BROWSER_NEXT_TAB_ID: &str = "macos-browser-next-tab";
+const MACOS_BROWSER_PREVIOUS_TAB_ID: &str = "macos-browser-previous-tab";
 const TRAY_ID: &str = "main-tray";
 const TRAY_SHOW_MAIN_ID: &str = "show-main";
 const TRAY_QUICK_NOTE_ID: &str = "quick-note";
@@ -493,6 +498,10 @@ pub enum TrayMenuAction {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AppMenuAction {
     ShowAboutPanel,
+    ContextualClose,
+    BrowserFocusAddress,
+    BrowserNextTab,
+    BrowserPreviousTab,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -666,6 +675,7 @@ struct WindowOpenOptions {
 #[derive(Default)]
 struct RuntimeState {
     is_exiting: AtomicBool,
+    close_to_tray: AtomicBool,
     windows_hidden: AtomicBool,
     hidden_window_labels: Mutex<Vec<String>>,
     #[cfg(desktop)]
@@ -721,6 +731,14 @@ impl RuntimeState {
 
     fn is_exiting(&self) -> bool {
         self.is_exiting.load(Ordering::SeqCst)
+    }
+
+    fn set_close_to_tray(&self, enabled: bool) {
+        self.close_to_tray.store(enabled, Ordering::SeqCst);
+    }
+
+    fn close_to_tray_enabled(&self) -> bool {
+        self.close_to_tray.load(Ordering::SeqCst)
     }
 
     fn clear_hidden_windows(&self) {
@@ -804,6 +822,12 @@ pub fn tray_menu_action(id: &str) -> Option<TrayMenuAction> {
 fn app_menu_action(id: &str) -> Option<AppMenuAction> {
     match id {
         MACOS_APP_ABOUT_ID => Some(AppMenuAction::ShowAboutPanel),
+        MACOS_CONTEXTUAL_CLOSE_ID | MACOS_CONTEXTUAL_CLOSE_WINDOW_ID => {
+            Some(AppMenuAction::ContextualClose)
+        }
+        MACOS_BROWSER_FOCUS_ADDRESS_ID => Some(AppMenuAction::BrowserFocusAddress),
+        MACOS_BROWSER_NEXT_TAB_ID => Some(AppMenuAction::BrowserNextTab),
+        MACOS_BROWSER_PREVIOUS_TAB_ID => Some(AppMenuAction::BrowserPreviousTab),
         _ => None,
     }
 }
@@ -904,13 +928,19 @@ fn build_app_menu(app: &AppHandle, config: &AppConfig) -> Result<Menu<Wry>, Box<
     let hide_others =
         PredefinedMenuItem::hide_others(app, Some(locales::macos_menu_hide_others_label(locale)))?;
     let quit = PredefinedMenuItem::quit(app, Some(&locales::macos_menu_quit_app_label(locale)))?;
-    let file_close_window = PredefinedMenuItem::close_window(
+    let file_close_window = MenuItem::with_id(
         app,
-        Some(locales::macos_menu_close_window_label(locale)),
+        MACOS_CONTEXTUAL_CLOSE_ID,
+        locales::macos_menu_close_window_label(locale),
+        true,
+        Some("CmdOrCtrl+W"),
     )?;
-    let window_close_window = PredefinedMenuItem::close_window(
+    let window_close_window = MenuItem::with_id(
         app,
-        Some(locales::macos_menu_close_window_label(locale)),
+        MACOS_CONTEXTUAL_CLOSE_WINDOW_ID,
+        locales::macos_menu_close_window_label(locale),
+        true,
+        None::<&str>,
     )?;
     let undo = PredefinedMenuItem::undo(app, Some(locales::macos_menu_undo_label(locale)))?;
     let redo = PredefinedMenuItem::redo(app, Some(locales::macos_menu_redo_label(locale)))?;
@@ -921,6 +951,27 @@ fn build_app_menu(app: &AppHandle, config: &AppConfig) -> Result<Menu<Wry>, Box<
         PredefinedMenuItem::select_all(app, Some(locales::macos_menu_select_all_label(locale)))?;
     let fullscreen =
         PredefinedMenuItem::fullscreen(app, Some(locales::macos_menu_fullscreen_label(locale)))?;
+    let browser_focus_address = MenuItem::with_id(
+        app,
+        MACOS_BROWSER_FOCUS_ADDRESS_ID,
+        locales::browser_focus_address_label(locale),
+        true,
+        Some("CmdOrCtrl+L"),
+    )?;
+    let browser_next_tab = MenuItem::with_id(
+        app,
+        MACOS_BROWSER_NEXT_TAB_ID,
+        locales::browser_next_tab_label(locale),
+        true,
+        Some("Ctrl+Tab"),
+    )?;
+    let browser_previous_tab = MenuItem::with_id(
+        app,
+        MACOS_BROWSER_PREVIOUS_TAB_ID,
+        locales::browser_previous_tab_label(locale),
+        true,
+        Some("Ctrl+Shift+Tab"),
+    )?;
     let minimize =
         PredefinedMenuItem::minimize(app, Some(locales::macos_menu_minimize_label(locale)))?;
     let zoom = PredefinedMenuItem::maximize(app, Some(locales::macos_menu_zoom_label(locale)))?;
@@ -957,7 +1008,13 @@ fn build_app_menu(app: &AppHandle, config: &AppConfig) -> Result<Menu<Wry>, Box<
         app,
         locales::macos_menu_view_label(locale),
         true,
-        &[&fullscreen],
+        &[
+            &fullscreen,
+            &PredefinedMenuItem::separator(app)?,
+            &browser_focus_address,
+            &browser_next_tab,
+            &browser_previous_tab,
+        ],
     )?;
     let window_menu = Submenu::with_items(
         app,
@@ -1156,6 +1213,7 @@ fn toggle_app_visibility(app: &AppHandle) {
     };
 
     if let Some(labels) = state.take_hidden_window_labels() {
+        set_macos_main_window_policy(app);
         let mut focus_target = None;
         for label in &labels {
             if let Some(window) = app.get_webview_window(label) {
@@ -1172,6 +1230,8 @@ fn toggle_app_visibility(app: &AppHandle) {
                 let _ = window.set_focus();
             }
         }
+        crate::services::browser::sync_dock(app);
+        crate::services::browser::sync_window_visibility(app);
         return;
     }
 
@@ -1182,6 +1242,7 @@ fn toggle_app_visibility(app: &AppHandle) {
             let _ = window.hide();
         }
     }
+    crate::services::browser::hide_with_main(app);
 
     if labels.is_empty() {
         if let Err(error) = show_main_window(app) {
@@ -1191,6 +1252,7 @@ fn toggle_app_visibility(app: &AppHandle) {
     }
 
     state.hide_windows(labels);
+    sync_macos_dock_icon(app);
 }
 
 pub fn apply_runtime_config(
@@ -1199,6 +1261,10 @@ pub fn apply_runtime_config(
     next: &AppConfig,
 ) -> Result<(), Box<dyn Error>> {
     let changes = runtime_config_changes(previous, next);
+
+    if let Some(state) = app.try_state::<RuntimeState>() {
+        state.set_close_to_tray(next.close_to_tray);
+    }
 
     if changes.global_shortcut_changed || changes.toggle_visibility_shortcut_changed {
         apply_global_shortcut_config(app, next)?;
@@ -1258,7 +1324,10 @@ pub fn take_startup_file() -> Option<String> {
 }
 
 pub fn setup_desktop(app: &mut App) -> Result<(), Box<dyn Error>> {
-    app.manage(RuntimeState::default());
+    let initial_config = load_config()?;
+    let runtime_state = RuntimeState::default();
+    runtime_state.set_close_to_tray(initial_config.close_to_tray);
+    app.manage(runtime_state);
     app.manage(NotepadPool::default());
     app.manage(crate::services::browser::BrowserRegistry::default());
     app.on_menu_event(|app, event| {
@@ -1297,9 +1366,6 @@ pub fn handle_window_event(window: &Window, event: &WindowEvent) {
                 .app_handle()
                 .emit("tile-window-closed", note_id.to_string());
         }
-        if window.label().starts_with("browser-") {
-            crate::services::browser::handle_window_destroyed(window.app_handle(), window.label());
-        }
         return;
     }
 
@@ -1335,12 +1401,14 @@ pub fn handle_window_event(window: &Window, event: &WindowEvent) {
         return;
     };
 
-    let close_to_tray = close_to_tray_enabled();
+    let close_to_tray = close_to_tray_enabled(window.app_handle());
 
     match main_window_close_action(app_is_exiting(window.app_handle()), close_to_tray) {
         MainWindowCloseAction::AllowClose => {}
         MainWindowCloseAction::HideToTray => {
             api.prevent_close();
+            // 浏览器是主窗口的伴随窗口：后台运行时同步隐藏，但保留标签和可见意图。
+            crate::services::browser::hide_with_main(window.app_handle());
             #[cfg(target_os = "macos")]
             if window.is_fullscreen().unwrap_or(false) {
                 hide_fullscreen_window(window);
@@ -1371,10 +1439,12 @@ fn hide_fullscreen_window(window: &Window) {
 
     let Ok(handle) = window.window_handle() else {
         let _ = window.hide();
+        sync_macos_dock_icon(window.app_handle());
         return;
     };
     let RawWindowHandle::AppKit(app_kit) = handle.as_raw() else {
         let _ = window.hide();
+        sync_macos_dock_icon(window.app_handle());
         return;
     };
 
@@ -1384,6 +1454,7 @@ fn hide_fullscreen_window(window: &Window) {
             .expect("failed to retain NSView");
     let Some(ns_window) = ns_view.window() else {
         let _ = window.hide();
+        sync_macos_dock_icon(window.app_handle());
         return;
     };
 
@@ -1397,6 +1468,7 @@ fn hide_fullscreen_window(window: &Window) {
             if let Some(w) = retained.get_webview_window(&label) {
                 let _ = w.hide();
             }
+            sync_macos_dock_icon(&retained);
         }
         if let Some(obs) = observer_ref.get() {
             unsafe {
@@ -1509,6 +1581,22 @@ fn handle_tray_menu_event(app: &AppHandle, id: &str) -> Result<(), Box<dyn Error
 fn handle_app_menu_event(app: &AppHandle, id: &str) -> Result<(), Box<dyn Error>> {
     match app_menu_action(id) {
         Some(AppMenuAction::ShowAboutPanel) => open_about_panel(app)?,
+        Some(AppMenuAction::ContextualClose) => {
+            if !crate::services::browser::close_from_native_shortcut(app) {
+                if let Some(main) = app.get_window(MAIN_WINDOW_LABEL) {
+                    main.close()?;
+                }
+            }
+        }
+        Some(AppMenuAction::BrowserFocusAddress) => {
+            crate::services::browser::focus_address_from_native_shortcut(app);
+        }
+        Some(AppMenuAction::BrowserNextTab) => {
+            crate::services::browser::cycle_from_native_shortcut(app, false);
+        }
+        Some(AppMenuAction::BrowserPreviousTab) => {
+            crate::services::browser::cycle_from_native_shortcut(app, true);
+        }
         None => {}
     }
     Ok(())
@@ -1531,11 +1619,14 @@ fn open_about_panel(app: &AppHandle) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn toggle_close_to_tray(_app: &AppHandle) -> Result<AppConfig, Box<dyn Error>> {
+fn toggle_close_to_tray(app: &AppHandle) -> Result<AppConfig, Box<dyn Error>> {
     let store = default_store()?;
     let mut config = store.load_config()?;
     config.close_to_tray = !config.close_to_tray;
     store.save_config(config.clone())?;
+    if let Some(state) = app.try_state::<RuntimeState>() {
+        state.set_close_to_tray(config.close_to_tray);
+    }
     Ok(config)
 }
 
@@ -1543,13 +1634,16 @@ pub fn show_main_window(app: &AppHandle) -> Result<(), AppError> {
     clear_hidden_window_state(app);
     let locale = configured_locale();
 
+    // macOS 必须先恢复 Regular activation policy，再显示/聚焦窗口，
+    // 否则从仅菜单栏状态恢复时窗口可能显示却无法成为前台应用。
+    set_macos_main_window_policy(app);
+
     if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
         window.set_title(locales::main_window_title(locale))?;
         window.unminimize()?;
         window.show()?;
         window.set_focus()?;
-        // 主窗口显示：恢复 Dock 图标（macOS）。
-        sync_macos_dock_icon(app);
+        crate::services::browser::restore_with_main(app);
         return Ok(());
     }
 
@@ -1578,8 +1672,15 @@ pub fn show_main_window(app: &AppHandle) -> Result<(), AppError> {
         window.show()?;
         window.set_focus()?;
     }
-    sync_macos_dock_icon(app);
+    crate::services::browser::restore_with_main(app);
     Ok(())
+}
+
+fn set_macos_main_window_policy(app: &AppHandle) {
+    #[cfg(target_os = "macos")]
+    if let Err(error) = app.set_activation_policy(tauri::ActivationPolicy::Regular) {
+        eprintln!("failed to restore regular activation policy: {error}");
+    }
 }
 
 /// macOS 上按主窗口可见性同步 activation policy：
@@ -2083,9 +2184,9 @@ fn load_config() -> Result<AppConfig, AppError> {
     default_store()?.load_config()
 }
 
-fn close_to_tray_enabled() -> bool {
-    load_config()
-        .map(|config| config.close_to_tray)
+fn close_to_tray_enabled(app: &AppHandle) -> bool {
+    app.try_state::<RuntimeState>()
+        .map(|state| state.close_to_tray_enabled())
         .unwrap_or(true)
 }
 
@@ -3082,9 +3183,10 @@ mod tests {
         assert!(windows
             .iter()
             .any(|window| window.as_str() == Some("tile-*")));
-        assert!(windows
+        assert!(!windows
             .iter()
             .any(|window| window.as_str() == Some("browser-*")));
+        assert!(capability.get("webviews").is_none());
         assert!(permissions
             .iter()
             .any(|permission| permission.as_str() == Some("core:window:allow-set-focus")));

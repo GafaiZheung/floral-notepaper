@@ -1,5 +1,6 @@
 import { forwardRef, useCallback, useEffect, useImperativeHandle, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { listen } from "@tauri-apps/api/event";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { resolveAddressInput } from "../features/browser/address";
@@ -7,18 +8,22 @@ import {
   browserActivate,
   browserBack,
   browserClose,
+  browserCloseAll,
   browserForward,
   browserNavigate,
+  browserNewTab,
   browserOpen,
   browserReload,
   browserSetZoom,
   browserStop,
-  browserToggleFloat,
   browserSetVisible,
 } from "../features/browser/api";
 import type { BrowserState, BrowserTab } from "../features/browser/types";
 import { createNote } from "../features/notes/api";
 import { showToast } from "./Toast";
+import { startCurrentWindowDrag, startCurrentWindowResize } from "../features/windows/controls";
+
+const BROWSER_FOCUS_ADDRESS_EVENT = "browser-focus-address";
 
 export interface BrowserPanelHandle {
   /** 聚焦地址栏（供 Ctrl+L 快捷键调用）。 */
@@ -27,7 +32,7 @@ export interface BrowserPanelHandle {
 
 interface BrowserPanelProps {
   state: BrowserState;
-  /** 收回浏览区（前端负责收起列）。 */
+  /** 收回浏览器窗口后的可选通知。 */
   onRetract?: () => void;
 }
 
@@ -40,7 +45,7 @@ function hostnameFromUrl(url: string): string {
 }
 
 /**
- * 微信式侧边栏浏览器面板：标签栏 + 工具栏 + "···"菜单 + 空页态。
+ * 微信式主窗口右侧延伸：标签栏 + 工具栏 + "···"菜单 + 空页态。
  * 数据源为 Rust 侧 browser-state-changed 事件负载（受控组件）。
  */
 export const BrowserPanel = forwardRef<BrowserPanelHandle, BrowserPanelProps>(function BrowserPanel(
@@ -54,6 +59,8 @@ export const BrowserPanel = forwardRef<BrowserPanelHandle, BrowserPanelProps>(fu
   const [draftMode, setDraftMode] = useState(false);
   const addressRef = useRef<HTMLInputElement>(null);
   const menuRef = useRef<HTMLDivElement>(null);
+  const stateRef = useRef(state);
+  stateRef.current = state;
 
   useImperativeHandle(
     ref,
@@ -69,6 +76,7 @@ export const BrowserPanel = forwardRef<BrowserPanelHandle, BrowserPanelProps>(fu
   // 活跃标签变化时同步地址栏内容（用户输入期间不覆盖）。
   useEffect(() => {
     setAddressValue(activeTab?.url ?? "");
+    if (activeTab) setDraftMode(false);
   }, [activeTab?.tabId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 点击面板外部关闭 "···" 菜单。
@@ -82,6 +90,59 @@ export const BrowserPanel = forwardRef<BrowserPanelHandle, BrowserPanelProps>(fu
     document.addEventListener("mousedown", closeOnOutside);
     return () => document.removeEventListener("mousedown", closeOnOutside);
   }, [menuOpen]);
+
+  // 网页子 WebView 的 Ctrl/Cmd+L 通过 Rust 定向回到 main WebView。
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    void listen(BROWSER_FOCUS_ADDRESS_EVENT, () => {
+      requestAnimationFrame(() => {
+        addressRef.current?.focus();
+        addressRef.current?.select();
+      });
+    }).then((cleanup) => {
+      unlisten = cleanup;
+    });
+    return () => unlisten?.();
+  }, []);
+
+  // 工具栏获得焦点时的浏览器快捷键；网页获得焦点时由注入脚本处理。
+  useEffect(() => {
+    const handleShortcut = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey)) return;
+      const key = event.key.toLowerCase();
+      if (key === "l") {
+        event.preventDefault();
+        addressRef.current?.focus();
+        addressRef.current?.select();
+        return;
+      }
+      if (key === "w" && !event.shiftKey) {
+        event.preventDefault();
+        const active = stateRef.current.activeTabId;
+        if (active) void browserClose(active);
+        else {
+          const fallback = stateRef.current.tabs[stateRef.current.tabs.length - 1];
+          if (fallback) void browserActivate(fallback.tabId);
+          else void browserSetVisible(false);
+        }
+        return;
+      }
+      if (event.key !== "Tab") return;
+      event.preventDefault();
+      const tabs = stateRef.current.tabs;
+      if (tabs.length === 0) return;
+      const activeIndex = Math.max(
+        tabs.findIndex((tab) => tab.active),
+        0,
+      );
+      const nextIndex = event.shiftKey
+        ? (activeIndex - 1 + tabs.length) % tabs.length
+        : (activeIndex + 1) % tabs.length;
+      void browserActivate(tabs[nextIndex].tabId);
+    };
+    document.addEventListener("keydown", handleShortcut);
+    return () => document.removeEventListener("keydown", handleShortcut);
+  }, []);
 
   const submitAddress = useCallback(() => {
     const resolved = resolveAddressInput(addressValue);
@@ -101,6 +162,7 @@ export const BrowserPanel = forwardRef<BrowserPanelHandle, BrowserPanelProps>(fu
         submitAddress();
       } else if (event.key === "Escape") {
         setDraftMode(false);
+        setAddressValue(activeTab?.url ?? "");
         addressRef.current?.blur();
       }
     },
@@ -109,7 +171,13 @@ export const BrowserPanel = forwardRef<BrowserPanelHandle, BrowserPanelProps>(fu
 
   const handleOpenNewTab = useCallback(() => {
     setDraftMode(true);
-    requestAnimationFrame(() => addressRef.current?.focus());
+    setAddressValue("");
+    void browserNewTab().finally(() => {
+      requestAnimationFrame(() => {
+        addressRef.current?.focus();
+        addressRef.current?.select();
+      });
+    });
   }, []);
 
   const handleCloseTab = useCallback((tab: BrowserTab) => {
@@ -117,8 +185,16 @@ export const BrowserPanel = forwardRef<BrowserPanelHandle, BrowserPanelProps>(fu
   }, []);
 
   const handleActivateTab = useCallback((tab: BrowserTab) => {
+    setDraftMode(false);
     void browserActivate(tab.tabId);
   }, []);
+
+  const handleCloseDraftTab = useCallback(() => {
+    setDraftMode(false);
+    const fallback = state.tabs[state.tabs.length - 1];
+    if (fallback) void browserActivate(fallback.tabId);
+    else void browserSetVisible(false);
+  }, [state.tabs]);
 
   const handleBack = useCallback(() => {
     if (activeTab?.canGoBack) void browserBack(activeTab.tabId);
@@ -144,10 +220,6 @@ export const BrowserPanel = forwardRef<BrowserPanelHandle, BrowserPanelProps>(fu
     },
     [activeTab],
   );
-
-  const handleToggleFloat = useCallback(() => {
-    if (activeTab) void browserToggleFloat(activeTab.tabId);
-  }, [activeTab]);
 
   const handleOpenInSystem = useCallback(() => {
     if (activeTab) void openUrl(activeTab.url);
@@ -186,20 +258,48 @@ export const BrowserPanel = forwardRef<BrowserPanelHandle, BrowserPanelProps>(fu
 
   const handleCloseAll = useCallback(() => {
     setMenuOpen(false);
-    for (const tab of state.tabs) {
-      void browserClose(tab.tabId);
-    }
-    onRetract?.();
-  }, [state.tabs, onRetract]);
+    void browserCloseAll();
+  }, []);
 
-  const showEmptyState = draftMode || state.tabs.length === 0;
+  const showEmptyState = draftMode || !activeTab;
 
   return (
-    <div className="flex flex-col flex-1 min-h-0 bg-paper/40">
-      {/* 标签栏 */}
-      {state.tabs.length > 0 && (
-        <div className="flex items-center gap-0.5 px-1.5 pt-1.5 pb-1 border-b border-paper-deep/30 shrink-0 select-none">
+    <div
+      className="browser-extension relative flex h-full w-full min-h-0 flex-col overflow-hidden rounded-r-[var(--app-window-radius)] border-y border-r border-l border-paper-deep/45 bg-paper"
+      data-testid="browser-extension"
+    >
+      {/* 与主窗口标题栏齐平的标签栏：整个区域拖动时移动窗口组。 */}
+      <div
+        className="flex h-11 shrink-0 select-none items-center gap-0.5 border-b border-paper-deep/30 bg-cloud/95 px-1.5"
+        onMouseDown={(event) => {
+          if (event.button !== 0 || (event.target as HTMLElement).closest("button, [role='tab']")) {
+            return;
+          }
+          void startCurrentWindowDrag();
+        }}
+      >
           <div className="flex-1 flex items-center gap-0.5 min-w-0 overflow-x-auto scrollbar-hidden">
+            {!activeTab && (
+              <div
+                role="tab"
+                aria-selected="true"
+                className="group flex h-7 min-w-0 max-w-[140px] shrink-0 items-center gap-1 rounded-lg border border-bamboo/25 bg-paper-warm/80 px-2 text-[11px] text-ink-soft"
+              >
+                <span className="truncate">
+                  {t("browser.tab.new", { defaultValue: "新标签" })}
+                </span>
+                <button
+                  type="button"
+                  onClick={handleCloseDraftTab}
+                  className="flex h-4 w-4 shrink-0 items-center justify-center rounded text-ink-ghost transition-colors hover:bg-danger-bg hover:text-red-400 cursor-pointer"
+                  title={t("browser.tab.close", { defaultValue: "关闭标签" })}
+                >
+                  <svg width="9" height="9" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+                    <path d="M18 6L6 18M6 6l12 12" strokeWidth="2.5" strokeLinecap="round" />
+                  </svg>
+                </button>
+              </div>
+            )}
             {state.tabs.map((tab) => (
               <div
                 key={tab.tabId}
@@ -213,11 +313,7 @@ export const BrowserPanel = forwardRef<BrowserPanelHandle, BrowserPanelProps>(fu
                 }`}
                 title={tab.title || tab.url}
               >
-                <span className={`truncate ${tab.floating ? "italic" : ""}`}>
-                  {tab.floating
-                    ? `◎ ${tab.title || hostnameFromUrl(tab.url)}`
-                    : tab.title || hostnameFromUrl(tab.url)}
-                </span>
+                <span className="truncate">{tab.title || hostnameFromUrl(tab.url)}</span>
                 <button
                   onClick={(event) => {
                     event.stopPropagation();
@@ -275,18 +371,6 @@ export const BrowserPanel = forwardRef<BrowserPanelHandle, BrowserPanelProps>(fu
                 <button
                   onClick={() => {
                     setMenuOpen(false);
-                    handleToggleFloat();
-                  }}
-                  disabled={!activeTab}
-                  className="w-full flex items-center gap-2 px-3 py-1.5 text-[12px] font-body text-ink-soft hover:bg-bamboo-mist/60 hover:text-bamboo transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                >
-                  {t(activeTab?.floating ? "browser.menu.unfloat" : "browser.menu.floating", {
-                    defaultValue: activeTab?.floating ? "停靠回面板" : "浮窗显示",
-                  })}
-                </button>
-                <button
-                  onClick={() => {
-                    setMenuOpen(false);
                     handleOpenInSystem();
                   }}
                   disabled={!activeTab}
@@ -331,15 +415,24 @@ export const BrowserPanel = forwardRef<BrowserPanelHandle, BrowserPanelProps>(fu
               </div>
             )}
           </div>
-        </div>
-      )}
+          <button
+            type="button"
+            onClick={handleRetract}
+            className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-ink-ghost transition-colors hover:bg-danger-bg hover:text-red-500 cursor-pointer"
+            title={t("browser.menu.retract", { defaultValue: "收回" })}
+            aria-label={t("browser.menu.retract", { defaultValue: "收回" })}
+          >
+            <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor">
+              <path d="M2 2l8 8M10 2l-8 8" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+          </button>
+      </div>
 
       {/* 工具栏 */}
-      {activeTab && (
-        <div className="flex items-center gap-1 px-2 py-1.5 border-b border-paper-deep/30 shrink-0 select-none">
+      <div className="h-10 flex items-center gap-1 px-2 border-b border-paper-deep/30 shrink-0 select-none bg-cloud/75">
           <button
             onClick={handleBack}
-            disabled={!activeTab.canGoBack}
+            disabled={!activeTab?.canGoBack}
             className="w-7 h-7 flex items-center justify-center rounded-lg text-ink-ghost hover:text-ink-faint hover:bg-paper-warm transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
             title={t("browser.toolbar.back", { defaultValue: "后退" })}
           >
@@ -359,7 +452,7 @@ export const BrowserPanel = forwardRef<BrowserPanelHandle, BrowserPanelProps>(fu
           </button>
           <button
             onClick={handleForward}
-            disabled={!activeTab.canGoForward}
+            disabled={!activeTab?.canGoForward}
             className="w-7 h-7 flex items-center justify-center rounded-lg text-ink-ghost hover:text-ink-faint hover:bg-paper-warm transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
             title={t("browser.toolbar.forward", { defaultValue: "前进" })}
           >
@@ -379,14 +472,15 @@ export const BrowserPanel = forwardRef<BrowserPanelHandle, BrowserPanelProps>(fu
           </button>
           <button
             onClick={handleReloadStop}
-            className="w-7 h-7 flex items-center justify-center rounded-lg text-ink-ghost hover:text-ink-faint hover:bg-paper-warm transition-all cursor-pointer"
+            disabled={!activeTab}
+            className="w-7 h-7 flex items-center justify-center rounded-lg text-ink-ghost hover:text-ink-faint hover:bg-paper-warm transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
             title={
-              activeTab.loading
+              activeTab?.loading
                 ? t("browser.toolbar.stop", { defaultValue: "停止" })
                 : t("browser.toolbar.reload", { defaultValue: "刷新" })
             }
           >
-            {activeTab.loading ? (
+            {activeTab?.loading ? (
               <svg
                 width="13"
                 height="13"
@@ -418,6 +512,7 @@ export const BrowserPanel = forwardRef<BrowserPanelHandle, BrowserPanelProps>(fu
           </button>
           <input
             ref={addressRef}
+            data-testid="browser-address"
             type="text"
             value={addressValue}
             onChange={(event) => setAddressValue(event.target.value)}
@@ -427,25 +522,28 @@ export const BrowserPanel = forwardRef<BrowserPanelHandle, BrowserPanelProps>(fu
             })}
             className="flex-1 min-w-0 h-7 px-2.5 rounded-lg text-[12px] font-mono text-ink placeholder:text-ink-ghost/60 bg-paper-warm/80 border border-paper-deep/40 focus:border-bamboo/30 focus:bg-cloud transition-all outline-none"
           />
-          <button
-            onClick={() => handleZoom(-0.1)}
-            className="w-7 h-7 flex items-center justify-center rounded-lg text-[14px] text-ink-ghost hover:text-ink-faint hover:bg-paper-warm transition-all cursor-pointer"
-            title={t("browser.toolbar.zoomOut", { defaultValue: "缩小字号" })}
-          >
-            A−
-          </button>
-          <span className="w-8 text-center text-[10px] font-mono tabular-nums text-ink-ghost select-none">
-            {Math.round(activeTab.zoom * 100)}%
-          </span>
-          <button
-            onClick={() => handleZoom(0.1)}
-            className="w-7 h-7 flex items-center justify-center rounded-lg text-[14px] text-ink-ghost hover:text-ink-faint hover:bg-paper-warm transition-all cursor-pointer"
-            title={t("browser.toolbar.zoomIn", { defaultValue: "放大字号" })}
-          >
-            A+
-          </button>
-        </div>
-      )}
+          <div className="browser-toolbar-zoom flex shrink-0 items-center gap-1">
+            <button
+              onClick={() => handleZoom(-0.1)}
+              disabled={!activeTab}
+              className="w-7 h-7 flex items-center justify-center rounded-lg text-[14px] text-ink-ghost hover:text-ink-faint hover:bg-paper-warm transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+              title={t("browser.toolbar.zoomOut", { defaultValue: "缩小字号" })}
+            >
+              A−
+            </button>
+            <span className="w-8 text-center text-[10px] font-mono tabular-nums text-ink-ghost select-none">
+              {Math.round((activeTab?.zoom ?? 1) * 100)}%
+            </span>
+            <button
+              onClick={() => handleZoom(0.1)}
+              disabled={!activeTab}
+              className="w-7 h-7 flex items-center justify-center rounded-lg text-[14px] text-ink-ghost hover:text-ink-faint hover:bg-paper-warm transition-all cursor-pointer disabled:opacity-30 disabled:cursor-not-allowed"
+              title={t("browser.toolbar.zoomIn", { defaultValue: "放大字号" })}
+            >
+              A+
+            </button>
+          </div>
+      </div>
 
       {/* 内容区 */}
       <div className="flex-1 min-h-0">
@@ -476,25 +574,19 @@ export const BrowserPanel = forwardRef<BrowserPanelHandle, BrowserPanelProps>(fu
                 {t("browser.empty.hint", { defaultValue: "输入网址或关键词开始浏览" })}
               </div>
             </div>
-            <input
-              type="text"
-              value={addressValue}
-              onChange={(event) => setAddressValue(event.target.value)}
-              onKeyDown={handleAddressKeyDown}
-              placeholder={t("browser.toolbar.addressPlaceholder", {
-                defaultValue: "输入网址或搜索…",
-              })}
-              className="w-full max-w-[280px] h-9 px-3 rounded-xl text-[12px] font-mono text-ink placeholder:text-ink-ghost/60 bg-paper-warm/80 border border-paper-deep/40 focus:border-bamboo/30 focus:bg-cloud transition-all outline-none"
-            />
-          </div>
-        ) : activeTab ? (
-          <div className="h-full flex items-center justify-center text-[12px] text-ink-ghost">
-            {t("browser.content.hint", {
-              defaultValue: "网页内容在右侧停靠窗口中显示",
-            })}
           </div>
         ) : null}
       </div>
+
+      {/* 网页子 WebView 右侧预留 6px；这里接管原生 East 缩放。 */}
+      <div
+        className="absolute z-[80] top-0 right-0 bottom-0 w-1.5 cursor-ew-resize hover:bg-bamboo/15 transition-colors"
+        onMouseDown={(event) => {
+          event.preventDefault();
+          void startCurrentWindowResize("East");
+        }}
+        aria-hidden="true"
+      />
     </div>
   );
 });

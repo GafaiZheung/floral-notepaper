@@ -244,6 +244,8 @@
     "autostart": "開機自啟",
     "closeTitle": "關閉設定",
     "closeToTray": "關閉至系統匣",
+    "keepRunningAfterClose": "關閉視窗後保持背景執行",
+    "keepRunningAfterCloseHint": "關閉主視窗後仍可從選單列圖示重新開啟",
     "defaultView": {
       "label": "預設檢視",
       "wysiwyg": "閱讀編輯",
@@ -561,12 +563,10 @@
     "menu": {
       "closeAll": "關閉全部",
       "copyUrl": "複製網址",
-      "floating": "浮窗顯示",
       "more": "更多",
       "openInSystem": "在系統瀏覽器開啟",
       "retract": "收回",
-      "saveAsNote": "存為筆記",
-      "unfloat": "停靠回面板"
+      "saveAsNote": "存為筆記"
     },
     "empty": {
       "hint": "輸入網址或關鍵詞開始瀏覽",

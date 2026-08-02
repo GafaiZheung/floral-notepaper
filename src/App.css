@@ -134,6 +134,16 @@ body {
   background: transparent;
 }
 
+.browser-extension {
+  container-type: inline-size;
+}
+
+@container (max-width: 380px) {
+  .browser-toolbar-zoom {
+    display: none;
+  }
+}
+
 .app-main-frame {
   border-radius: var(--app-window-radius);
 }

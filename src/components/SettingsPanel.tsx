@@ -35,6 +35,7 @@ interface SettingsPanelProps {
 
 export function SettingsPanel({ config, onChange, onMigrateDataDir, onClose }: SettingsPanelProps) {
   const { t } = useTranslation();
+  const isMacOS = /Mac/i.test(navigator.userAgent) || /Mac/i.test(navigator.platform);
   const setConfigValue = <Key extends keyof AppConfig>(key: Key, value: AppConfig[Key]) => {
     onChange({ ...config, [key]: value });
   };
@@ -162,10 +163,23 @@ export function SettingsPanel({ config, onChange, onMigrateDataDir, onClose }: S
 
         <section className="space-y-2">
           <ToggleRow
-            label={t("settings.closeToTray", { defaultValue: "关闭到托盘" })}
+            label={
+              isMacOS
+                ? t("settings.keepRunningAfterClose", {
+                    defaultValue: "关闭窗口后保持后台运行",
+                  })
+                : t("settings.closeToTray", { defaultValue: "关闭到托盘" })
+            }
             checked={config.closeToTray}
             onChange={(checked) => setConfigValue("closeToTray", checked)}
           />
+          {isMacOS && (
+            <p className="px-2.5 text-[10px] leading-relaxed text-ink-ghost">
+              {t("settings.keepRunningAfterCloseHint", {
+                defaultValue: "关闭主窗口后仍可从菜单栏图标重新打开",
+              })}
+            </p>
+          )}
           <ToggleRow
             label={t("settings.autostart", { defaultValue: "开机自启" })}
             checked={config.autostart}

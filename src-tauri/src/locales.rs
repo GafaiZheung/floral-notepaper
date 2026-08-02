@@ -65,6 +65,14 @@ pub fn tray_quick_note_label(locale: Locale) -> &'static str {
 }
 
 pub fn tray_toggle_close_to_tray_label(locale: Locale) -> &'static str {
+    #[cfg(target_os = "macos")]
+    return match locale {
+        Locale::ZhCn => "关闭窗口后保持后台运行",
+        Locale::EnUs => "Keep Running After Closing Windows",
+        Locale::ZhHk => "關閉視窗後保持背景執行",
+    };
+
+    #[cfg(not(target_os = "macos"))]
     match locale {
         Locale::ZhCn => "关闭到托盘",
         Locale::EnUs => "Close to Tray",
@@ -77,6 +85,30 @@ pub fn tray_toggle_autostart_label(locale: Locale) -> &'static str {
         Locale::ZhCn => "开机自启动",
         Locale::EnUs => "Launch on Startup",
         Locale::ZhHk => "開機自啟",
+    }
+}
+
+pub fn browser_focus_address_label(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhCn => "聚焦浏览器地址栏",
+        Locale::EnUs => "Focus Browser Address Bar",
+        Locale::ZhHk => "聚焦瀏覽器位址列",
+    }
+}
+
+pub fn browser_next_tab_label(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhCn => "下一个浏览器标签",
+        Locale::EnUs => "Next Browser Tab",
+        Locale::ZhHk => "下一個瀏覽器分頁",
+    }
+}
+
+pub fn browser_previous_tab_label(locale: Locale) -> &'static str {
+    match locale {
+        Locale::ZhCn => "上一个浏览器标签",
+        Locale::EnUs => "Previous Browser Tab",
+        Locale::ZhHk => "上一個瀏覽器分頁",
     }
 }
 
@@ -275,6 +307,12 @@ mod tests {
         assert_eq!(tray_tooltip(Locale::EnUs), "Floral Notepaper");
         assert_eq!(tray_show_main_label(Locale::EnUs), "Open Main Window");
         assert_eq!(tray_quick_note_label(Locale::ZhHk), "快速便箋");
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            tray_toggle_close_to_tray_label(Locale::EnUs),
+            "Keep Running After Closing Windows"
+        );
+        #[cfg(not(target_os = "macos"))]
         assert_eq!(
             tray_toggle_close_to_tray_label(Locale::EnUs),
             "Close to Tray"
